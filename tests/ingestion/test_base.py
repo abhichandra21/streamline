@@ -52,3 +52,30 @@ def test_parse_duration():
 
 def test_parse_duration_zero():
     assert parse_duration("00:00:00") == timedelta(0)
+
+
+def test_prime_stub_raises():
+    from recommender.ingestion.prime import parse
+    try:
+        parse("any_path.csv")
+        assert False, "Should have raised NotImplementedError"
+    except NotImplementedError as e:
+        assert "prime" in str(e).lower() or "Prime" in str(e)
+
+
+def test_disney_stub_raises():
+    from recommender.ingestion.disney import parse
+    try:
+        parse("any_path.csv")
+        assert False, "Should have raised NotImplementedError"
+    except NotImplementedError as e:
+        assert "disney" in str(e).lower() or "Disney" in str(e)
+
+
+def test_hbo_stub_raises():
+    from recommender.ingestion.hbo import parse
+    try:
+        parse("any_path.csv")
+        assert False, "Should have raised NotImplementedError"
+    except NotImplementedError as e:
+        assert "hbo" in str(e).lower() or "HBO" in str(e)
