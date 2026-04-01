@@ -209,12 +209,13 @@ git commit -m "feat: add Recommendation model and config paths for LLM pipeline"
 Create `tests/test_watch_index.py`:
 ```python
 import json
-import os
 from datetime import datetime, timedelta
 
 import pytest
 
 from recommender.ingestion.base import WatchEvent
+from recommender.tmdb_client import TmdbMetadata
+from recommender.watch_index import WatchIndex
 from recommender import watch_index as wi
 
 
@@ -231,23 +232,31 @@ def make_event(title, series_name=None, content_type="movie"):
     )
 
 
+def make_meta(tmdb_id, title, content_type="movie"):
+    return TmdbMetadata(
+        tmdb_id=tmdb_id, content_type=content_type, title=title,
+        genres=[], keywords=[], cast=[],
+        original_language="en", vote_average=0.0, vote_count=0,
+    )
+
+
 def test_build_includes_movie_titles():
     events = [make_event("Dilwale Dulhania Le Jayenge (English Subtitled)")]
-    index = wi.build(events)
-    assert "dilwale dulhania le jayenge" in index
+    index = wi.build(events, {})
+    assert "dilwale dulhania le jayenge" in index.normalized_titles
 
 
 def test_build_strips_parentheticals():
     events = [make_event("Oppenheimer (4K UHD)")]
-    index = wi.build(events)
-    assert "oppenheimer" in index
-    assert "oppenheimer (4k uhd)" not in index
+    index = wi.build(events, {})
+    assert "oppenheimer" in index.normalized_titles
+    assert "oppenheimer (4k uhd)" not in index.normalized_titles
 
 
 def test_build_includes_tv_series_names():
     events = [make_event("Episode 1-Downton Abbey - Season 3", series_name="Downton Abbey", content_type="tv")]
-    index = wi.build(events)
-    assert "downton abbey" in index
+    index = wi.build(events, {})
+    assert "downton abbey" in index.normalized_titles
 
 
 def test_build_deduplicates():
@@ -256,32 +265,44 @@ def test_build_deduplicates():
         make_event("Chef"),
         make_event("Chef (Hindi)"),
     ]
-    index = wi.build(events)
-    assert len([t for t in index if "chef" in t]) == 1
+    index = wi.build(events, {})
+    assert len([t for t in index.normalized_titles if "chef" in t]) == 1
 
 
-def test_is_watched_exact():
-    index = {"downton abbey", "fleabag", "oppenheimer"}
-    assert wi.is_watched("Downton Abbey", index) is True
-    assert wi.is_watched("fleabag", index) is True
+def test_build_stores_tmdb_id():
+    events = [make_event("Fleabag", series_name="Fleabag", content_type="tv")]
+    meta = make_meta(tmdb_id=67452, title="Fleabag", content_type="tv")
+    index = wi.build(events, {"Fleabag": meta})
+    assert 67452 in index.tmdb_ids
 
 
-def test_is_watched_strips_parentheticals():
-    index = {"oppenheimer"}
-    assert wi.is_watched("Oppenheimer (4K UHD)", index) is True
+def test_is_watched_by_tmdb_id():
+    meta = make_meta(tmdb_id=12345, title="Fleabag", content_type="tv")
+    index = WatchIndex(tmdb_ids={12345}, normalized_titles=set(), entries=[])
+    assert index.is_watched(meta) is True
+
+
+def test_is_watched_by_title_fallback():
+    meta = make_meta(tmdb_id=0, title="Downton Abbey", content_type="tv")
+    index = WatchIndex(tmdb_ids=set(), normalized_titles={"downton abbey"}, entries=[])
+    assert index.is_watched(meta) is True
 
 
 def test_is_watched_false_for_unknown():
-    index = {"downton abbey"}
-    assert wi.is_watched("Broadchurch", index) is False
+    meta = make_meta(tmdb_id=99999, title="Broadchurch", content_type="tv")
+    index = WatchIndex(tmdb_ids={12345}, normalized_titles={"fleabag"}, entries=[])
+    assert index.is_watched(meta) is False
 
 
 def test_save_and_load_roundtrip(tmp_path):
     path = str(tmp_path / "index.json")
-    index = {"downton abbey", "fleabag", "oppenheimer"}
+    events = [make_event("Fleabag", series_name="Fleabag", content_type="tv")]
+    meta = make_meta(tmdb_id=67452, title="Fleabag", content_type="tv")
+    index = wi.build(events, {"Fleabag": meta})
     wi.save(index, path)
     loaded = wi.load(path)
-    assert loaded == index
+    assert 67452 in loaded.tmdb_ids
+    assert "fleabag" in loaded.normalized_titles
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -297,9 +318,11 @@ Expected: FAIL with `ModuleNotFoundError`
 ```python
 import json
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .ingestion.base import WatchEvent
+from .tmdb_client import TmdbMetadata
 
 
 def _normalize(title: str) -> str:
@@ -309,28 +332,57 @@ def _normalize(title: str) -> str:
     return title.strip()
 
 
-def build(events: list[WatchEvent]) -> set[str]:
-    """Build normalized exclusion index from all watch events."""
-    index = set()
+@dataclass
+class WatchIndex:
+    tmdb_ids: set[int]
+    normalized_titles: set[str]
+    entries: list[dict]
+
+    def is_watched(self, candidate: TmdbMetadata) -> bool:
+        """Check by TMDB ID first; fall back to normalized title match."""
+        if candidate.tmdb_id and candidate.tmdb_id in self.tmdb_ids:
+            return True
+        return _normalize(candidate.title) in self.normalized_titles
+
+
+def build(events: list[WatchEvent], metadata: dict[str, TmdbMetadata]) -> WatchIndex:
+    """Build exclusion index from watch events. metadata provides TMDB IDs."""
+    tmdb_ids: set[int] = set()
+    normalized_titles: set[str] = set()
+    entries: list[dict] = []
+    seen_keys: set[str] = set()
+
     for e in events:
-        index.add(_normalize(e.title))
+        key = e.series_name if e.content_type == 'tv' else e.title
+        normalized_titles.add(_normalize(e.title))
         if e.content_type == 'tv':
-            index.add(_normalize(e.series_name))
-    return index
+            normalized_titles.add(_normalize(e.series_name))
+        if key not in seen_keys:
+            seen_keys.add(key)
+            meta = metadata.get(key)
+            tmdb_id = meta.tmdb_id if meta else 0
+            if tmdb_id:
+                tmdb_ids.add(tmdb_id)
+            entries.append({
+                "tmdb_id": tmdb_id,
+                "title": key,
+                "content_type": e.content_type,
+            })
+
+    return WatchIndex(tmdb_ids=tmdb_ids, normalized_titles=normalized_titles, entries=entries)
 
 
-def is_watched(title: str, index: set[str]) -> bool:
-    return _normalize(title) in index
-
-
-def save(index: set[str], path: str) -> None:
+def save(index: WatchIndex, path: str) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(sorted(index)))
+    p.write_text(json.dumps(index.entries))
 
 
-def load(path: str) -> set[str]:
-    return set(json.loads(Path(path).read_text()))
+def load(path: str) -> WatchIndex:
+    entries = json.loads(Path(path).read_text())
+    tmdb_ids = {e["tmdb_id"] for e in entries if e.get("tmdb_id")}
+    normalized_titles = {_normalize(e["title"]) for e in entries}
+    return WatchIndex(tmdb_ids=tmdb_ids, normalized_titles=normalized_titles, entries=entries)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -339,7 +391,7 @@ def load(path: str) -> set[str]:
 python -m pytest tests/test_watch_index.py -v
 ```
 
-Expected: 8 tests PASS.
+Expected: 10 tests PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -913,6 +965,7 @@ BRITISH_CRIME_INTENT = {
     "unwatched_only": True,
     "special_intent": None,
     "content_type": "tv",
+    "top_n": 1,
 }
 
 
@@ -954,7 +1007,7 @@ def test_parse_intent_handles_markdown_wrapped_json():
 def test_parse_intent_abandoned_special():
     abandoned_intent = {**BRITISH_CRIME_INTENT, "special_intent": "abandoned",
                         "genres": [], "origin_countries": [],
-                        "similar_to": ["Tandav"], "content_type": "tv"}
+                        "similar_to": ["Tandav"], "content_type": "tv", "top_n": 1}
     client = make_intent_client(abandoned_intent)
     intent = parse_intent("I started Tandav and stopped", client)
     assert intent.special_intent == "abandoned"
@@ -968,6 +1021,7 @@ def test_parse_intent_bollywood():
         "similar_to": [], "max_runtime_minutes": None,
         "year_from": 1990, "year_to": 1999,
         "unwatched_only": True, "special_intent": None, "content_type": "movie",
+        "top_n": 1,
     }
     client = make_intent_client(bollywood_intent)
     intent = parse_intent("feel-good Bollywood romance from the 90s", client)
@@ -1011,12 +1065,13 @@ class QueryIntent:
     unwatched_only: bool
     special_intent: str | None  # "abandoned", "watchlist", "family", or None
     content_type: str           # "tv", "movie", or "both"
+    top_n: int                  # 1 for single recommendation, >1 for "a few" queries
 
 
 @dataclass
 class RecommendContext:
     taste_profile: str
-    watch_index: set[str]
+    watch_index: "WatchIndex"
     events: list[WatchEvent]
     tmdb_client: TmdbClient
     anthropic_client: anthropic.Anthropic
@@ -1051,7 +1106,9 @@ def parse_intent(query: str, client: anthropic.Anthropic) -> QueryIntent:
                 '- year_to: integer or null\n'
                 '- unwatched_only: boolean (default true)\n'
                 '- special_intent: one of "abandoned", "watchlist", "family" or null\n'
-                '- content_type: "tv", "movie", or "both"\n\n'
+                '- content_type: "tv", "movie", or "both"\n'
+                '- top_n: integer — 1 for single recommendation (default), 3-5 if query implies '
+                '"a few" or "some options" or "what should I watch"\n\n'
                 f'Query: "{query}"'
             ),
         }],
@@ -1091,6 +1148,7 @@ from datetime import timedelta
 from datetime import datetime
 
 from recommender.tmdb_client import TmdbMetadata
+from recommender.watch_index import WatchIndex
 from recommender.query_engine import RecommendContext, ask, rank_candidates
 
 
@@ -1165,6 +1223,7 @@ def test_ask_excludes_watched_titles():
         "mood_descriptors": [], "similar_to": [], "max_runtime_minutes": None,
         "year_from": None, "year_to": None,
         "unwatched_only": True, "special_intent": None, "content_type": "tv",
+        "top_n": 1,
     })
     ranked_json = json.dumps([
         {"title": "Hinterland", "explanation": "Great fit.", "score": 0.88}
@@ -1179,7 +1238,7 @@ def test_ask_excludes_watched_titles():
 
     ctx = RecommendContext(
         taste_profile="taste profile text",
-        watch_index={"broadchurch"},  # already watched
+        watch_index=WatchIndex(tmdb_ids={1}, normalized_titles={"broadchurch"}, entries=[]),
         events=[],
         tmdb_client=mock_tmdb,
         anthropic_client=mock_anthropic,
@@ -1211,8 +1270,8 @@ from unittest.mock import patch  # remove this — it's in tests only
 
 Add these functions to `recommender/query_engine.py`:
 ```python
-from . import watch_index as wi
 from .enricher import enrich, enrich_batch
+from .watch_index import WatchIndex
 
 
 def rank_candidates(
@@ -1221,7 +1280,7 @@ def rank_candidates(
     candidates: list[TmdbMetadata],
     enrichments: dict[str, str],
     client: anthropic.Anthropic,
-    top_n: int = 5,
+    top_n: int = 1,
 ) -> list[Recommendation]:
     """Rank candidates against taste profile using Claude Sonnet."""
     meta_by_title = {c.title: c for c in candidates}
@@ -1309,11 +1368,7 @@ def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) ->
     )]
 
 
-def ask(
-    query: str,
-    ctx: RecommendContext,
-    top_n: int = 5,
-) -> list[Recommendation]:
+def ask(query: str, ctx: RecommendContext) -> list[Recommendation]:
     """Answer a natural language recommendation query end-to-end."""
     intent = parse_intent(query, ctx.anthropic_client)
 
@@ -1333,13 +1388,13 @@ def ask(
             size=30,
         ))
 
-    candidates = [c for c in candidates if not wi.is_watched(c.title, ctx.watch_index)]
+    candidates = [c for c in candidates if not ctx.watch_index.is_watched(c)]
 
     if len(candidates) < 10:
         for title in _generate_suggestions(query, ctx.taste_profile, ctx.anthropic_client):
             ct = intent.content_type if intent.content_type != 'both' else 'movie'
             meta = ctx.tmdb_client.get_metadata(title, ct)
-            if meta and not wi.is_watched(meta.title, ctx.watch_index):
+            if meta and not ctx.watch_index.is_watched(meta):
                 candidates.append(meta)
 
     if not candidates:
@@ -1348,7 +1403,7 @@ def ask(
     meta_dict = {c.title: c for c in candidates}
     enrichments = enrich_batch(meta_dict, ctx.cache_dir, ctx.anthropic_client)
 
-    return rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.anthropic_client, top_n)
+    return rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.anthropic_client, intent.top_n)
 
 
 def _generate_suggestions(
@@ -1434,11 +1489,6 @@ def run_setup(refresh_profile: bool = False) -> None:
             print(f"  {platform}: {len(platform_events)} events")
     print(f"  Total: {len(events)} events")
 
-    print("\nBuilding watch index...")
-    index = wi.build(events)
-    wi.save(index, config.WATCH_INDEX_PATH)
-    print(f"  {len(index)} unique titles indexed → {config.WATCH_INDEX_PATH}")
-
     print("\nFetching TMDB metadata...")
     tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
     scores = compute_scores(events, {}, config.RECENCY_HALF_LIFE_DAYS)
@@ -1456,6 +1506,11 @@ def run_setup(refresh_profile: bool = False) -> None:
         if (i + 1) % 50 == 0:
             print(f"  {i+1}/{len(title_type)} titles processed...")
     print(f"  {len(metadata)} titles with TMDB metadata")
+
+    print("\nBuilding watch index...")
+    index = wi.build(events, metadata)
+    wi.save(index, config.WATCH_INDEX_PATH)
+    print(f"  {len(index.entries)} unique titles indexed → {config.WATCH_INDEX_PATH}")
 
     print(f"\nEnriching {len(metadata)} titles with Claude Haiku...")
     claude = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
@@ -1570,8 +1625,9 @@ def test_load_context_exits_if_no_watch_index(tmp_path, monkeypatch):
 
 def test_load_context_exits_if_no_taste_profile(tmp_path, monkeypatch):
     import config
+    import json
     index_path = tmp_path / 'watch_index.json'
-    index_path.write_text('["downton abbey"]')
+    index_path.write_text(json.dumps([{"tmdb_id": 0, "title": "downton abbey", "content_type": "tv"}]))
     monkeypatch.setattr(config, 'WATCH_INDEX_PATH', str(index_path))
     monkeypatch.setattr(config, 'TASTE_PROFILE_PATH', str(tmp_path / 'missing.txt'))
     with pytest.raises(SystemExit):
