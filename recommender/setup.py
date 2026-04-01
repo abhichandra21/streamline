@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import anthropic
+from rich.console import Console
 
 log = logging.getLogger("recommender.setup")
 
@@ -18,28 +19,30 @@ from recommender.enricher import enrich_batch
 from recommender.taste_profile_builder import build as build_taste_profile
 from recommender import watch_index as wi
 
+console = Console(stderr=True)
+
 
 def run_setup(refresh_profile: bool = False, refresh_data: bool = False) -> None:
     if not config.ANTHROPIC_API_KEY:
-        print("Error: ANTHROPIC_API_KEY not set. Export it and re-run.", file=sys.stderr)
+        console.print("[red]Error: ANTHROPIC_API_KEY not set. Export it and re-run.[/red]")
         sys.exit(1)
     if not config.TMDB_API_KEY:
-        print("Error: TMDB_API_KEY not set. Export it and re-run.", file=sys.stderr)
+        console.print("[red]Error: TMDB_API_KEY not set. Export it and re-run.[/red]")
         sys.exit(1)
 
-    print("Loading watch history...")
+    console.print("Loading watch history...")
     events = []
     for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime)]:
         path = config.PLATFORM_PATHS.get(platform)
         if path:
             platform_events = parser(path)
             events.extend(platform_events)
-            print(f"  {platform}: {len(platform_events)} events")
+            console.print(f"  {platform}: {len(platform_events)} events")
     if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
         manual_events = parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH)
         events.extend(manual_events)
-        print(f"  manual: {len(manual_events)} events")
-    print(f"  Total: {len(events)} events")
+        console.print(f"  manual: {len(manual_events)} events")
+    console.print(f"  Total: {len(events)} events")
 
     claude = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
@@ -48,10 +51,10 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False) -> None
 
     index_path = Path(config.WATCH_INDEX_PATH)
     if not refresh_data and index_path.exists():
-        print(f"\nWatch index exists, skipping data fetch (use --refresh-data to rebuild).")
+        console.print("\nWatch index exists, skipping data fetch (use --refresh-data to rebuild).")
         enrichments = json.loads(enrichments_index_path.read_text()) if enrichments_index_path.exists() else {}
     else:
-        print("\nFetching TMDB metadata...")
+        console.print("\nFetching TMDB metadata...")
         tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
 
         title_type: dict[str, str] = {}
@@ -60,36 +63,37 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False) -> None
             title_type[key] = e.content_type
 
         metadata = {}
-        for i, (title, ct) in enumerate(title_type.items()):
-            meta = tmdb.get_metadata(title, ct)
-            if meta:
-                metadata[title] = meta
-            if (i + 1) % 50 == 0:
-                print(f"  {i+1}/{len(title_type)} titles processed...")
-        print(f"  {len(metadata)} titles with TMDB metadata")
+        with console.status("[bold magenta]Fetching TMDB metadata...[/bold magenta]", spinner="dots"):
+            for i, (title, ct) in enumerate(title_type.items()):
+                meta = tmdb.get_metadata(title, ct)
+                if meta:
+                    metadata[title] = meta
+                if (i + 1) % 50 == 0:
+                    console.print(f"  {i+1}/{len(title_type)} titles processed...")
+        console.print(f"  {len(metadata)} titles with TMDB metadata")
 
-        print("\nBuilding watch index...")
+        console.print("\nBuilding watch index...")
         index = wi.build(events, metadata)
         wi.save(index, config.WATCH_INDEX_PATH)
-        print(f"  {len(index.entries)} unique titles indexed → {config.WATCH_INDEX_PATH}")
+        console.print(f"  {len(index.entries)} unique titles indexed → {config.WATCH_INDEX_PATH}")
 
-        print(f"\nEnriching {len(metadata)} titles with Claude Haiku...")
-        enrichments = enrich_batch(metadata, config.ENRICHMENT_CACHE_DIR, claude)
+        with console.status(f"[bold magenta]Enriching {len(metadata)} titles with Claude Haiku...[/bold magenta]", spinner="dots"):
+            enrichments = enrich_batch(metadata, config.ENRICHMENT_CACHE_DIR, claude)
         enrichments_index_path.write_text(json.dumps(enrichments))
-        print(f"  {len(enrichments)} descriptions cached → {config.ENRICHMENT_CACHE_DIR}")
+        console.print(f"  {len(enrichments)} descriptions cached → {config.ENRICHMENT_CACHE_DIR}")
 
     profile_path = Path(config.TASTE_PROFILE_PATH)
     if refresh_profile or not profile_path.exists():
-        print("\nBuilding taste profile with Claude Sonnet...")
-        scores = compute_scores(events, metadata, config.RECENCY_HALF_LIFE_DAYS)
-        profile = build_taste_profile(events, scores, enrichments, claude)
+        with console.status("[bold magenta]Building taste profile with Claude Sonnet...[/bold magenta]", spinner="dots"):
+            scores = compute_scores(events, metadata, config.RECENCY_HALF_LIFE_DAYS)
+            profile = build_taste_profile(events, scores, enrichments, claude)
         profile_path.parent.mkdir(parents=True, exist_ok=True)
         profile_path.write_text(profile)
-        print(f"  Taste profile saved → {config.TASTE_PROFILE_PATH}")
+        console.print(f"  Taste profile saved → {config.TASTE_PROFILE_PATH}")
     else:
-        print(f"\nTaste profile exists, skipping (use --refresh-profile to rebuild).")
+        console.print("\nTaste profile exists, skipping (use --refresh-profile to rebuild).")
 
-    print("\nSetup complete!")
+    console.print("\n[green]Setup complete![/green]")
 
 
 if __name__ == "__main__":

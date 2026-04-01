@@ -3,6 +3,8 @@ import sys
 from pathlib import Path
 
 import anthropic
+from rich.console import Console
+from rich.panel import Panel
 
 import config
 from recommender.ingestion.netflix import parse as parse_netflix
@@ -14,6 +16,9 @@ from recommender.query_engine import RecommendContext, ask
 from recommender import watch_index as wi
 
 log = logging.getLogger("recommender")
+
+console_err = Console(stderr=True)   # spinners, progress, warnings
+console_out = Console()              # recommendation results
 
 
 def load_context() -> RecommendContext:
@@ -27,12 +32,12 @@ def load_context() -> RecommendContext:
 
     index_path = Path(config.WATCH_INDEX_PATH)
     if not index_path.exists():
-        print("Watch index not found. Run: python -m recommender.setup", file=sys.stderr)
+        console_err.print("[red]Watch index not found. Run: python -m recommender.setup[/red]")
         sys.exit(1)
 
     profile_path = Path(config.TASTE_PROFILE_PATH)
     if not profile_path.exists():
-        print("Taste profile not found. Run: python -m recommender.setup", file=sys.stderr)
+        console_err.print("[red]Taste profile not found. Run: python -m recommender.setup[/red]")
         sys.exit(1)
 
     return RecommendContext(
@@ -47,13 +52,19 @@ def load_context() -> RecommendContext:
 
 def print_recommendations(results: list[Recommendation], query: str) -> None:
     if not results:
-        print("No recommendations found.")
+        console_out.print("[yellow]No recommendations found.[/yellow]")
         return
-    print(f'\nResults for: "{query}"\n')
+    console_out.print(f'\n[bold]Results for:[/bold] "{query}"\n')
     for i, rec in enumerate(results, 1):
-        print(f"{i}. {rec.title}  ★ {rec.vote_average:.1f}  [{', '.join(rec.genres[:3])}]")
-        print(f"   {rec.explanation}")
-        print()
+        genres_str = ", ".join(rec.genres[:3])
+        title_line = f"{rec.title}  ★ {rec.vote_average:.1f}  [{genres_str}]"
+        panel = Panel(
+            rec.explanation,
+            title=f"[bold]{i}. {title_line}[/bold]",
+            border_style="green",
+            padding=(0, 2),
+        )
+        console_out.print(panel)
 
 
 def main() -> None:
@@ -73,10 +84,10 @@ def main() -> None:
     logging.getLogger("recommender").setLevel(level)
 
     if not config.ANTHROPIC_API_KEY:
-        print("Error: ANTHROPIC_API_KEY not set.", file=sys.stderr)
+        console_err.print("[red]Error: ANTHROPIC_API_KEY not set.[/red]")
         sys.exit(1)
     if not config.TMDB_API_KEY:
-        print("Error: TMDB_API_KEY not set.", file=sys.stderr)
+        console_err.print("[red]Error: TMDB_API_KEY not set.[/red]")
         sys.exit(1)
 
     ctx = load_context()
@@ -85,12 +96,13 @@ def main() -> None:
 
     if args.query:
         query = " ".join(args.query)
-        results = ask(query, ctx, top_n_override=args.n)
+        with console_err.status("[bold magenta]Thinking...[/bold magenta]", spinner="dots"):
+            results = ask(query, ctx, top_n_override=args.n)
         print_recommendations(results, query)
         return
 
-    print("Streaming Recommender — ask me anything about what to watch.")
-    print('Type "exit" to quit.\n')
+    console_out.print("Streaming Recommender — ask me anything about what to watch.")
+    console_out.print('Type [bold]exit[/bold] to quit.\n')
     while True:
         try:
             query = input("> ").strip()
@@ -98,7 +110,8 @@ def main() -> None:
             break
         if not query or query.lower() == "exit":
             break
-        results = ask(query, ctx, top_n_override=args.n)
+        with console_err.status("[bold magenta]Thinking...[/bold magenta]", spinner="dots"):
+            results = ask(query, ctx, top_n_override=args.n)
         print_recommendations(results, query)
 
 
