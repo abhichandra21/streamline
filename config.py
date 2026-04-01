@@ -1,6 +1,6 @@
 import os
 
-TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "55a3ba0fd07d2cd884871536b48dd04f")
+TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 
 PLATFORM_PATHS = {
     "netflix": os.path.join(os.path.dirname(__file__), "data/netflix/2468198246996321264/CONTENT_INTERACTION/ViewingActivity.csv"),

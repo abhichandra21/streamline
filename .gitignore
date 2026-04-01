@@ -3,5 +3,6 @@ recommender/cache/
 __pycache__/
 *.pyc
 .env
+.envrc
 .superpowers/
 .worktrees/
