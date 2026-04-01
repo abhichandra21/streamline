@@ -276,7 +276,6 @@ def ask(query: str, ctx: RecommendContext) -> list[Recommendation]:
                 candidates.append(meta)
                 seen_ids.add(meta.tmdb_id)
                 suggestion_count += 1
-                break
     log.debug("Claude suggestions added %d new candidates", suggestion_count)
 
     if log.isEnabledFor(logging.DEBUG) and candidates:
