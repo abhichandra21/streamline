@@ -4,9 +4,11 @@ from dataclasses import dataclass
 
 import anthropic
 
+from .enricher import enrich, enrich_batch
 from .ingestion.base import WatchEvent
 from .models import Recommendation
 from .tmdb_client import TmdbClient, TmdbMetadata
+from .watch_index import WatchIndex
 
 
 @dataclass
@@ -72,3 +74,158 @@ def parse_intent(query: str, client: anthropic.Anthropic) -> QueryIntent:
     )
     data = _parse_json_response(message.content[0].text)
     return QueryIntent(**data)
+
+
+def rank_candidates(
+    query: str,
+    taste_profile: str,
+    candidates: list[TmdbMetadata],
+    enrichments: dict[str, str],
+    client: anthropic.Anthropic,
+    top_n: int = 1,
+) -> list[Recommendation]:
+    """Rank candidates against taste profile using Claude Sonnet."""
+    meta_by_title = {c.title: c for c in candidates}
+
+    cands_str = '\n'.join(
+        f"{i+1}. {c.title} (rating: {c.vote_average:.1f}): {enrichments.get(c.title, ' '.join(c.genres))}"
+        for i, c in enumerate(candidates)
+    )
+
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1000,
+        messages=[{
+            "role": "user",
+            "content": (
+                f'Given this taste profile and query, rank the candidates and explain why each fits.\n\n'
+                f'TASTE PROFILE:\n{taste_profile}\n\n'
+                f'QUERY: "{query}"\n\n'
+                f'CANDIDATES:\n{cands_str}\n\n'
+                f'Return ONLY valid JSON: a list of objects with fields:\n'
+                f'- title: string (exact title from candidates)\n'
+                f'- explanation: string (1-2 sentences why this fits this specific user)\n'
+                f'- score: float 0-1\n\n'
+                f'Return the top {top_n} ranked candidates.'
+            ),
+        }],
+    )
+
+    ranked = _parse_json_response(message.content[0].text)
+    results = []
+    for item in ranked:
+        title = item['title']
+        if title not in meta_by_title:
+            continue
+        meta = meta_by_title[title]
+        results.append(Recommendation(
+            title=title,
+            content_type=meta.content_type,
+            score=item['score'],
+            vote_average=meta.vote_average,
+            genres=meta.genres,
+            explanation=item['explanation'],
+        ))
+    return results
+
+
+def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) -> list[Recommendation]:
+    """Handle 'I started X and stopped — worth finishing?' queries."""
+    target = intent.similar_to[0] if intent.similar_to else query
+
+    matching = [
+        e for e in ctx.events
+        if target.lower() in e.title.lower() or target.lower() in e.series_name.lower()
+    ]
+    if not matching:
+        return []
+
+    total_hours = sum(e.watched_duration.total_seconds() for e in matching) / 3600
+    ct = matching[0].content_type
+    lookup_title = matching[0].series_name if ct == 'tv' else matching[0].title
+    meta = ctx.tmdb_client.get_metadata(lookup_title, ct)
+    desc = enrich(meta, ctx.cache_dir, ctx.anthropic_client) if meta else target
+
+    message = ctx.anthropic_client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": (
+                f'A user has watched {total_hours:.1f} hours of "{target}".\n\n'
+                f'About "{target}": {desc}\n\n'
+                f'Their taste profile:\n{ctx.taste_profile}\n\n'
+                'Should they continue watching? Give a direct yes/no with 1-2 sentences of reasoning.'
+            ),
+        }],
+    )
+
+    return [Recommendation(
+        title=target,
+        content_type=ct,
+        score=1.0,
+        vote_average=meta.vote_average if meta else 0.0,
+        genres=meta.genres if meta else [],
+        explanation=message.content[0].text.strip(),
+    )]
+
+
+def ask(query: str, ctx: RecommendContext) -> list[Recommendation]:
+    """Answer a natural language recommendation query end-to-end."""
+    intent = parse_intent(query, ctx.anthropic_client)
+
+    if intent.special_intent == 'abandoned':
+        return _handle_abandoned(query, intent, ctx)
+
+    content_types = ['tv', 'movie'] if intent.content_type == 'both' else [intent.content_type]
+    candidates: list[TmdbMetadata] = []
+    for ct in content_types:
+        candidates.extend(ctx.tmdb_client.search_by_filters(
+            content_type=ct,
+            genres=intent.genres,
+            origin_countries=intent.origin_countries,
+            languages=intent.languages,
+            year_from=intent.year_from,
+            year_to=intent.year_to,
+            size=30,
+        ))
+
+    candidates = [c for c in candidates if not ctx.watch_index.is_watched(c)]
+
+    if len(candidates) == 0:
+        for title in _generate_suggestions(query, ctx.taste_profile, ctx.anthropic_client):
+            ct = intent.content_type if intent.content_type != 'both' else 'movie'
+            meta = ctx.tmdb_client.get_metadata(title, ct)
+            if meta and not ctx.watch_index.is_watched(meta):
+                candidates.append(meta)
+
+    if not candidates:
+        return []
+
+    meta_dict = {c.title: c for c in candidates}
+    enrichments = enrich_batch(meta_dict, ctx.cache_dir, ctx.anthropic_client)
+
+    return rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.anthropic_client, intent.top_n)
+
+
+def _generate_suggestions(
+    query: str,
+    taste_profile: str,
+    client: anthropic.Anthropic,
+) -> list[str]:
+    """Ask Claude to suggest specific titles when TMDB returns too few candidates."""
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": (
+                f'A user is looking for: "{query}"\n\n'
+                f'Their taste profile:\n{taste_profile}\n\n'
+                'Suggest 20 specific titles that fit the query and taste profile. '
+                'Return ONLY a JSON array of title strings. Be precise with names.'
+            ),
+        }],
+    )
+    result = _parse_json_response(message.content[0].text)
+    return result if isinstance(result, list) else []

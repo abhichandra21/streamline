@@ -1,7 +1,7 @@
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-from recommender.query_engine import QueryIntent, parse_intent
+from recommender.query_engine import QueryIntent, parse_intent, RecommendContext, ask, rank_candidates
 
 
 def make_intent_client(intent_dict: dict):
@@ -87,3 +87,111 @@ def test_parse_intent_bollywood():
     assert "hi" in intent.languages
     assert intent.year_from == 1990
     assert intent.content_type == "movie"
+
+
+from datetime import timedelta
+from datetime import datetime
+
+from recommender.tmdb_client import TmdbMetadata
+from recommender.watch_index import WatchIndex
+
+
+def make_meta(title, tmdb_id=1, content_type="tv", genres=None, vote_avg=8.0):
+    return TmdbMetadata(
+        tmdb_id=tmdb_id, content_type=content_type, title=title,
+        genres=genres or ["Crime", "Drama"], keywords=[],
+        cast=[], creator_or_director=None,
+        original_language="en", vote_average=vote_avg, vote_count=500,
+    )
+
+
+def make_rank_client(ranked_list: list):
+    client = MagicMock()
+    msg = MagicMock()
+    msg.content = [MagicMock(text=json.dumps(ranked_list))]
+    client.messages.create.return_value = msg
+    return client
+
+
+def test_rank_candidates_returns_recommendations():
+    candidates = [make_meta("Broadchurch", tmdb_id=1), make_meta("Hinterland", tmdb_id=2)]
+    enrichments = {"Broadchurch": "Dark coastal crime.", "Hinterland": "Welsh noir."}
+    ranked = [
+        {"title": "Broadchurch", "explanation": "Fits your taste.", "score": 0.92},
+        {"title": "Hinterland", "explanation": "Similar tone.", "score": 0.85},
+    ]
+    client = make_rank_client(ranked)
+    results = rank_candidates("British crime drama", "taste profile", candidates, enrichments, client)
+    assert len(results) == 2
+    assert results[0].title == "Broadchurch"
+    assert results[0].score == 0.92
+    assert "Fits your taste" in results[0].explanation
+    assert results[0].content_type == "tv"
+    assert results[0].vote_average == 8.0
+
+
+def test_rank_candidates_uses_sonnet():
+    candidates = [make_meta("Broadchurch")]
+    enrichments = {"Broadchurch": "Desc."}
+    ranked = [{"title": "Broadchurch", "explanation": "Good.", "score": 0.9}]
+    client = make_rank_client(ranked)
+    rank_candidates("query", "profile", candidates, enrichments, client)
+    call_kwargs = client.messages.create.call_args[1]
+    assert call_kwargs["model"] == "claude-sonnet-4-6"
+
+
+def test_rank_candidates_skips_unknown_titles():
+    candidates = [make_meta("Broadchurch")]
+    enrichments = {"Broadchurch": "Desc."}
+    ranked = [
+        {"title": "Broadchurch", "explanation": "Good.", "score": 0.9},
+        {"title": "Phantom Title", "explanation": "Hallucinated.", "score": 0.95},
+    ]
+    client = make_rank_client(ranked)
+    results = rank_candidates("query", "profile", candidates, enrichments, client)
+    titles = [r.title for r in results]
+    assert "Phantom Title" not in titles
+    assert "Broadchurch" in titles
+
+
+def test_ask_excludes_watched_titles():
+    meta_watched = make_meta("Broadchurch", tmdb_id=1)
+    meta_new = make_meta("Hinterland", tmdb_id=2)
+
+    mock_tmdb = MagicMock()
+    mock_tmdb.search_by_filters.return_value = [meta_watched, meta_new]
+    mock_tmdb.get_metadata.return_value = None
+
+    intent_json = json.dumps({
+        "genres": ["crime"], "origin_countries": ["GB"], "languages": [],
+        "mood_descriptors": [], "similar_to": [], "max_runtime_minutes": None,
+        "year_from": None, "year_to": None,
+        "unwatched_only": True, "special_intent": None, "content_type": "tv",
+        "top_n": 1,
+    })
+    ranked_json = json.dumps([
+        {"title": "Hinterland", "explanation": "Great fit.", "score": 0.88}
+    ])
+
+    mock_anthropic = MagicMock()
+    intent_msg = MagicMock()
+    intent_msg.content = [MagicMock(text=intent_json)]
+    rank_msg = MagicMock()
+    rank_msg.content = [MagicMock(text=ranked_json)]
+    mock_anthropic.messages.create.side_effect = [intent_msg, rank_msg]
+
+    ctx = RecommendContext(
+        taste_profile="taste profile text",
+        watch_index=WatchIndex(tmdb_ids={1}, normalized_titles={"broadchurch"}, entries=[]),
+        events=[],
+        tmdb_client=mock_tmdb,
+        anthropic_client=mock_anthropic,
+        cache_dir="/tmp/test_cache",
+    )
+
+    with patch('recommender.query_engine.enrich_batch', return_value={"Hinterland": "Welsh noir."}):
+        results = ask("British crime drama", ctx)
+
+    titles = [r.title for r in results]
+    assert "Broadchurch" not in titles
+    assert "Hinterland" in titles
