@@ -21,4 +21,4 @@ def test_recommendation_fields():
 def test_recommendation_is_dataclass():
     from dataclasses import fields
     field_names = {f.name for f in fields(Recommendation)}
-    assert field_names == {"title", "content_type", "score", "vote_average", "genres", "explanation"}
+    assert field_names == {"title", "content_type", "score", "vote_average", "genres", "explanation", "streaming_providers"}

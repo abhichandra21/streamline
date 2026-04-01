@@ -20,6 +20,12 @@ CACHE_DIR = os.path.join(os.path.dirname(__file__), "recommender/cache/tmdb")
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
+WATCH_REGION = "US"
+# Your subscribed platforms. Empty list = annotate only, don't filter.
+# Names must match TMDB provider names (or the alias map in tmdb_client.py).
+STREAMING_PLATFORMS: list[str] = []
+PROVIDERS_CACHE_DIR = os.path.join(os.path.dirname(__file__), "recommender/cache/providers")
+
 ENRICHMENT_CACHE_DIR = os.path.join(os.path.dirname(__file__), "recommender/cache/enrichments")
 TASTE_PROFILE_PATH = os.path.join(os.path.dirname(__file__), "recommender/cache/taste_profile.txt")
 WATCH_INDEX_PATH = os.path.join(os.path.dirname(__file__), "recommender/cache/watch_index.json")

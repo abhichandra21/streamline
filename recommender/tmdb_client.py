@@ -244,6 +244,38 @@ class TmdbClient:
 
         return list(candidates.values())
 
+    def get_watch_providers(
+        self,
+        tmdb_id: int,
+        content_type: str,
+        region: str,
+        providers_cache_dir: str,
+    ) -> list[str]:
+        """Return flatrate (subscription) streaming provider names for a title in the given region.
+
+        Results are cached in providers_cache_dir to avoid repeated API calls.
+        Returns an empty list if no provider data is available.
+        """
+        cache_path = Path(providers_cache_dir) / content_type / f"{tmdb_id}.json"
+        if cache_path.exists():
+            cached = json.loads(cache_path.read_text())
+            return cached.get("providers", [])
+
+        endpoint = f"tv/{tmdb_id}/watch/providers" if content_type == "tv" else f"movie/{tmdb_id}/watch/providers"
+        try:
+            data = self._get(endpoint)
+        except Exception as exc:
+            log.debug("Watch providers fetch failed for %s/%d: %s", content_type, tmdb_id, exc)
+            return []
+
+        region_data = data.get("results", {}).get(region, {})
+        flatrate = region_data.get("flatrate", [])
+        providers = [p["provider_name"] for p in flatrate]
+
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps({"providers": providers}))
+        return providers
+
     def clear_cache(self) -> None:
         """Delete all cached TMDB responses."""
         if self.cache_dir.exists():

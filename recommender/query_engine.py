@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import anthropic
 
@@ -15,6 +15,28 @@ from .tmdb_client import TmdbClient, TmdbMetadata
 from .watch_index import WatchIndex
 
 log = logging.getLogger("recommender.query")
+
+
+# Maps casual platform names users say to TMDB provider names.
+PLATFORM_ALIASES: dict[str, str] = {
+    "prime": "Amazon Prime Video",
+    "amazon": "Amazon Prime Video",
+    "amazon prime": "Amazon Prime Video",
+    "netflix": "Netflix",
+    "apple tv": "Apple TV Plus",
+    "apple tv+": "Apple TV Plus",
+    "apple": "Apple TV Plus",
+    "hbo": "Max",
+    "hbo max": "Max",
+    "max": "Max",
+    "disney": "Disney Plus",
+    "disney+": "Disney Plus",
+    "disney plus": "Disney Plus",
+    "paramount": "Paramount Plus",
+    "paramount+": "Paramount Plus",
+    "peacock": "Peacock",
+    "hulu": "Hulu",
+}
 
 
 @dataclass
@@ -30,7 +52,8 @@ class QueryIntent:
     unwatched_only: bool
     special_intent: str | None  # "abandoned", "watchlist", "family", or None
     content_type: str           # "tv", "movie", or "both"
-    top_n: int                  # 1 for single recommendation, >1 for "a few" queries
+    top_n: int                  # default 3; 1 for "the single best", higher for "many options"
+    platforms: list[str]        # e.g. ["Netflix"] from "spy thriller on Netflix"
 
 
 @dataclass
@@ -41,6 +64,9 @@ class RecommendContext:
     tmdb_client: TmdbClient
     anthropic_client: anthropic.Anthropic
     cache_dir: str
+    providers_cache_dir: str = ""
+    watch_region: str = "US"
+    streaming_platforms: list[str] = field(default_factory=list)
 
 
 def _parse_json_response(text: str) -> dict | list:
@@ -61,6 +87,7 @@ def _safe_query_intent(data: dict) -> QueryIntent:
         "max_runtime_minutes": None, "year_from": None, "year_to": None,
         "unwatched_only": True, "special_intent": None,
         "content_type": "both", "top_n": config.DEFAULT_TOP_N,
+        "platforms": [],
     }
     for key, default in defaults.items():
         if key not in filtered:
@@ -94,7 +121,11 @@ def parse_intent(query: str, client: anthropic.Anthropic) -> QueryIntent:
                 '- special_intent: one of "abandoned", "watchlist", "family" or null\n'
                 '- content_type: "tv", "movie", or "both"\n'
                 f'- top_n: integer — default is {config.DEFAULT_TOP_N}; use 1 only if user asks for '
-                '"the single best" or "one recommendation"; use 5-10 for "a lot" or "many options"\n\n'
+                '"the single best" or "one recommendation"; use 5-10 for "a lot" or "many options"\n'
+                '- platforms: list of streaming platform names the user wants e.g. ["Netflix"] '
+                'from "on Netflix" or "available on Prime" — use exact names like '
+                '"Netflix", "Amazon Prime Video", "Apple TV Plus", "Max", "Disney Plus", '
+                '"Paramount Plus", "Peacock", "Hulu"; empty list if no platform specified\n\n'
                 f'Query: "{query}"'
             ),
         }],
@@ -117,6 +148,7 @@ def parse_intent(query: str, client: anthropic.Anthropic) -> QueryIntent:
             max_runtime_minutes=None, year_from=None, year_to=None,
             unwatched_only=True, special_intent=None,
             content_type="both", top_n=config.DEFAULT_TOP_N,
+            platforms=[],
         )
 
 
@@ -295,7 +327,32 @@ def ask(query: str, ctx: RecommendContext, top_n_override: int | None = None) ->
     meta_dict = {c.title: c for c in candidates}
     enrichments = enrich_batch(meta_dict, ctx.cache_dir, ctx.anthropic_client)
 
-    return rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.anthropic_client, intent.top_n)
+    results = rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.anthropic_client, intent.top_n)
+
+    # Annotate results with streaming provider data (and optionally filter by platform).
+    if ctx.providers_cache_dir:
+        meta_by_title = {c.title: c for c in candidates}
+        requested_platforms = [
+            PLATFORM_ALIASES.get(p.lower(), p) for p in (intent.platforms or [])
+        ] or [PLATFORM_ALIASES.get(p.lower(), p) for p in config.STREAMING_PLATFORMS]
+
+        annotated = []
+        for rec in results:
+            meta = meta_by_title.get(rec.title)
+            if meta:
+                providers = ctx.tmdb_client.get_watch_providers(
+                    meta.tmdb_id, meta.content_type,
+                    ctx.watch_region, ctx.providers_cache_dir,
+                )
+                rec.streaming_providers = providers
+            if requested_platforms:
+                if not any(p in rec.streaming_providers for p in requested_platforms):
+                    log.debug("Filtering out %r — not on requested platforms %s", rec.title, requested_platforms)
+                    continue
+            annotated.append(rec)
+        return annotated
+
+    return results
 
 
 def _generate_suggestions(

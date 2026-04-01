@@ -47,6 +47,9 @@ def load_context() -> RecommendContext:
         tmdb_client=TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR),
         anthropic_client=anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY),
         cache_dir=config.ENRICHMENT_CACHE_DIR,
+        providers_cache_dir=config.PROVIDERS_CACHE_DIR,
+        watch_region=config.WATCH_REGION,
+        streaming_platforms=list(config.STREAMING_PLATFORMS),
     )
 
 
@@ -58,8 +61,11 @@ def print_recommendations(results: list[Recommendation], query: str) -> None:
     for i, rec in enumerate(results, 1):
         genres_str = ", ".join(rec.genres[:3])
         title_line = f"{rec.title}  ★ {rec.vote_average:.1f}  [{genres_str}]"
+        body = rec.explanation
+        if rec.streaming_providers:
+            body += f"\n\n[dim]Available on: {', '.join(rec.streaming_providers[:4])}[/dim]"
         panel = Panel(
-            rec.explanation,
+            body,
             title=f"[bold]{i}. {title_line}[/bold]",
             border_style="green",
             padding=(0, 2),
