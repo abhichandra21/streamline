@@ -15,14 +15,15 @@ def _strip_year(name: str) -> str:
 
 def parse(tv_path: str, movies_path: str) -> list[WatchEvent]:
     events = []
-    seen: set[str] = set()
+    seen_tv: set[str] = set()
+    seen_movies: set[str] = set()
 
     with open(tv_path, encoding='utf-8') as f:
         for line in f:
             title = line.strip()
-            if not title or title in seen:
+            if not title or title in seen_tv:
                 continue
-            seen.add(title)
+            seen_tv.add(title)
             events.append(WatchEvent(
                 platform='manual',
                 title=title,
@@ -40,9 +41,9 @@ def parse(tv_path: str, movies_path: str) -> list[WatchEvent]:
             if not raw:
                 continue
             title = _strip_year(raw)
-            if not title or title in seen:
+            if not title or title in seen_movies:
                 continue
-            seen.add(title)
+            seen_movies.add(title)
             events.append(WatchEvent(
                 platform='manual',
                 title=title,

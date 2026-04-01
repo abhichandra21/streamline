@@ -33,20 +33,20 @@ def make_meta(tmdb_id, title, content_type="movie"):
 def test_build_includes_movie_titles():
     events = [make_event("Dilwale Dulhania Le Jayenge (English Subtitled)")]
     index = wi.build(events, {})
-    assert "dilwale dulhania le jayenge" in index.normalized_titles
+    assert ("dilwale dulhania le jayenge", "movie") in index.normalized_titles
 
 
 def test_build_strips_parentheticals():
     events = [make_event("Oppenheimer (4K UHD)")]
     index = wi.build(events, {})
-    assert "oppenheimer" in index.normalized_titles
-    assert "oppenheimer (4k uhd)" not in index.normalized_titles
+    assert ("oppenheimer", "movie") in index.normalized_titles
+    assert ("oppenheimer (4k uhd)", "movie") not in index.normalized_titles
 
 
 def test_build_includes_tv_series_names():
     events = [make_event("Episode 1-Downton Abbey - Season 3", series_name="Downton Abbey", content_type="tv")]
     index = wi.build(events, {})
-    assert "downton abbey" in index.normalized_titles
+    assert ("downton abbey", "tv") in index.normalized_titles
 
 
 def test_build_deduplicates():
@@ -56,7 +56,7 @@ def test_build_deduplicates():
         make_event("Chef (Hindi)"),
     ]
     index = wi.build(events, {})
-    assert len([t for t in index.normalized_titles if "chef" in t]) == 1
+    assert len([t for t in index.normalized_titles if "chef" in t[0]]) == 1
 
 
 def test_build_stores_tmdb_id():
@@ -74,14 +74,21 @@ def test_is_watched_by_tmdb_id():
 
 def test_is_watched_by_title_fallback():
     meta = make_meta(tmdb_id=0, title="Downton Abbey", content_type="tv")
-    index = WatchIndex(tmdb_ids=set(), normalized_titles={"downton abbey"}, entries=[])
+    index = WatchIndex(tmdb_ids=set(), normalized_titles={("downton abbey", "tv")}, entries=[])
     assert index.is_watched(meta) is True
 
 
 def test_is_watched_false_for_unknown():
     meta = make_meta(tmdb_id=99999, title="Broadchurch", content_type="tv")
-    index = WatchIndex(tmdb_ids={12345}, normalized_titles={"fleabag"}, entries=[])
+    index = WatchIndex(tmdb_ids={12345}, normalized_titles={("fleabag", "tv")}, entries=[])
     assert index.is_watched(meta) is False
+
+
+def test_is_watched_content_type_aware():
+    """A watched TV show should not block a movie with the same title."""
+    meta_movie = make_meta(tmdb_id=0, title="Fargo", content_type="movie")
+    index = WatchIndex(tmdb_ids=set(), normalized_titles={("fargo", "tv")}, entries=[])
+    assert index.is_watched(meta_movie) is False
 
 
 def test_save_and_load_roundtrip(tmp_path):
@@ -92,4 +99,4 @@ def test_save_and_load_roundtrip(tmp_path):
     wi.save(index, path)
     loaded = wi.load(path)
     assert 67452 in loaded.tmdb_ids
-    assert "fleabag" in loaded.normalized_titles
+    assert ("fleabag", "tv") in loaded.normalized_titles

@@ -20,6 +20,9 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False) -> None
     if not config.ANTHROPIC_API_KEY:
         print("Error: ANTHROPIC_API_KEY not set. Export it and re-run.", file=sys.stderr)
         sys.exit(1)
+    if not config.TMDB_API_KEY:
+        print("Error: TMDB_API_KEY not set. Export it and re-run.", file=sys.stderr)
+        sys.exit(1)
 
     print("Loading watch history...")
     events = []
@@ -38,6 +41,7 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False) -> None
     claude = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
     enrichments_index_path = Path(config.ENRICHMENT_CACHE_DIR) / "index.json"
+    metadata: dict = {}
 
     index_path = Path(config.WATCH_INDEX_PATH)
     if not refresh_data and index_path.exists():
@@ -46,7 +50,6 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False) -> None
     else:
         print("\nFetching TMDB metadata...")
         tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
-        scores = compute_scores(events, {}, config.RECENCY_HALF_LIFE_DAYS)
 
         title_type: dict[str, str] = {}
         for e in events:
@@ -75,7 +78,7 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False) -> None
     profile_path = Path(config.TASTE_PROFILE_PATH)
     if refresh_profile or not profile_path.exists():
         print("\nBuilding taste profile with Claude Sonnet...")
-        scores = compute_scores(events, {}, config.RECENCY_HALF_LIFE_DAYS)
+        scores = compute_scores(events, metadata, config.RECENCY_HALF_LIFE_DAYS)
         profile = build_taste_profile(events, scores, enrichments, claude)
         profile_path.parent.mkdir(parents=True, exist_ok=True)
         profile_path.write_text(profile)

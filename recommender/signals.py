@@ -57,7 +57,7 @@ def compute_scores(
         # Recency
         most_recent = max(e.timestamp for e in evts)
         days_since = max(0, (today - most_recent).days)
-        recency = math.exp(-days_since / recency_half_life_days)
+        recency = 0.5 ** (days_since / recency_half_life_days)
 
         scores[key] = 0.5 * completion + 0.3 * rewatch_bonus + 0.2 * recency
 

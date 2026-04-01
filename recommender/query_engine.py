@@ -1,5 +1,6 @@
 import json
 import re
+import sys
 from dataclasses import dataclass
 
 import anthropic
@@ -45,11 +46,31 @@ def _parse_json_response(text: str) -> dict | list:
     return json.loads(text.strip())
 
 
+def _safe_query_intent(data: dict) -> QueryIntent:
+    """Construct QueryIntent with validation and defaults for missing/extra fields."""
+    known_fields = {f.name for f in QueryIntent.__dataclass_fields__.values()}
+    filtered = {k: v for k, v in data.items() if k in known_fields}
+    defaults = {
+        "genres": [], "origin_countries": [], "languages": [],
+        "mood_descriptors": [], "similar_to": [],
+        "max_runtime_minutes": None, "year_from": None, "year_to": None,
+        "unwatched_only": True, "special_intent": None,
+        "content_type": "both", "top_n": 1,
+    }
+    for key, default in defaults.items():
+        if key not in filtered:
+            filtered[key] = default
+    if isinstance(filtered.get("top_n"), str):
+        filtered["top_n"] = int(filtered["top_n"])
+    return QueryIntent(**filtered)
+
+
 def parse_intent(query: str, client: anthropic.Anthropic) -> QueryIntent:
     """Parse a natural language query into structured intent using Claude Sonnet."""
     message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=400,
+        timeout=30.0,
         messages=[{
             "role": "user",
             "content": (
@@ -72,8 +93,18 @@ def parse_intent(query: str, client: anthropic.Anthropic) -> QueryIntent:
             ),
         }],
     )
-    data = _parse_json_response(message.content[0].text)
-    return QueryIntent(**data)
+    try:
+        data = _parse_json_response(message.content[0].text)
+        return _safe_query_intent(data)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        print(f"Warning: failed to parse intent ({exc}), using defaults.", file=sys.stderr)
+        return QueryIntent(
+            genres=[], origin_countries=[], languages=[],
+            mood_descriptors=[], similar_to=[],
+            max_runtime_minutes=None, year_from=None, year_to=None,
+            unwatched_only=True, special_intent=None,
+            content_type="both", top_n=1,
+        )
 
 
 def rank_candidates(
@@ -95,6 +126,7 @@ def rank_candidates(
     message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1000,
+        timeout=30.0,
         messages=[{
             "role": "user",
             "content": (
@@ -111,20 +143,24 @@ def rank_candidates(
         }],
     )
 
-    ranked = _parse_json_response(message.content[0].text)
+    try:
+        ranked = _parse_json_response(message.content[0].text)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        print(f"Warning: failed to parse ranking response ({exc}).", file=sys.stderr)
+        return []
     results = []
     for item in ranked:
-        title = item['title']
+        title = item.get('title', '')
         if title not in meta_by_title:
             continue
         meta = meta_by_title[title]
         results.append(Recommendation(
             title=title,
             content_type=meta.content_type,
-            score=item['score'],
+            score=float(item.get('score', 0)),
             vote_average=meta.vote_average,
             genres=meta.genres,
-            explanation=item['explanation'],
+            explanation=item.get('explanation', ''),
         ))
     return results[:top_n]
 
@@ -150,6 +186,7 @@ def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) ->
     message = ctx.anthropic_client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=300,
+        timeout=30.0,
         messages=[{
             "role": "user",
             "content": (
@@ -220,6 +257,7 @@ def _generate_suggestions(
     message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=300,
+        timeout=30.0,
         messages=[{
             "role": "user",
             "content": (
@@ -230,5 +268,8 @@ def _generate_suggestions(
             ),
         }],
     )
-    result = _parse_json_response(message.content[0].text)
-    return result if isinstance(result, list) else []
+    try:
+        result = _parse_json_response(message.content[0].text)
+        return [t for t in result if isinstance(t, str)] if isinstance(result, list) else []
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return []

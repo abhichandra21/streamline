@@ -54,11 +54,11 @@ def enrich(metadata: TmdbMetadata, cache_dir: str, client: anthropic.Anthropic) 
             }],
         )
         description = message.content[0].text.strip()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(description)
     except Exception:
         description = _fallback_description(metadata)
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(description)
     return description
 
 

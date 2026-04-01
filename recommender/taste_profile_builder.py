@@ -24,6 +24,7 @@ def build(
     message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=800,
+        timeout=30.0,
         messages=[{
             "role": "user",
             "content": (

@@ -1,10 +1,13 @@
 import json
 import shutil
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import requests
+
+MAX_DISCOVER_PAGES = 20
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 
@@ -169,7 +172,7 @@ class TmdbClient:
 
         candidates: dict[int, TmdbMetadata] = {}
         page = 1
-        while len(candidates) < size:
+        while len(candidates) < size and page <= MAX_DISCOVER_PAGES:
             params["page"] = page
             data = self._get(f"discover/{prefix}", params=params)
             results = data.get("results", [])
@@ -188,7 +191,8 @@ class TmdbClient:
                         self._save_cache(content_type, tmdb_id, details)
                         candidates[tmdb_id] = self._parse_metadata(details, content_type)
                         time.sleep(0.05)
-                    except Exception:
+                    except Exception as exc:
+                        print(f"Warning: TMDB fetch failed for ID {tmdb_id}: {exc}", file=sys.stderr)
                         continue
                 if len(candidates) >= size:
                     break
@@ -221,7 +225,8 @@ class TmdbClient:
                             self._save_cache(content_type, tmdb_id, details)
                             candidates[tmdb_id] = self._parse_metadata(details, content_type)
                             time.sleep(0.05)  # respect TMDB rate limits
-                        except Exception:
+                        except Exception as exc:
+                            print(f"Warning: TMDB fetch failed for ID {tmdb_id}: {exc}", file=sys.stderr)
                             continue
                     if len(candidates) >= size:
                         return list(candidates.values())
