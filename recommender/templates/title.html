@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Streamline — {{ meta.title if meta else tmdb_id }}{% endblock %}
+{% block content %}
+{% if meta %}
+<div class="mb-4">
+  <a href="/history" class="text-sm text-gray-500 hover:text-gray-300">← Watch History</a>
+</div>
+<div class="flex gap-6 items-start">
+  <div class="flex-1">
+    <h1 class="text-2xl font-bold mb-1">{{ meta.title }}</h1>
+    <div class="flex items-center gap-3 text-sm text-gray-400 mb-4">
+      <span>{{ meta.content_type | upper }}</span>
+      <span>★ {{ "%.1f"|format(meta.vote_average) }} ({{ meta.vote_count }} votes)</span>
+      {% if meta.original_language %}<span>{{ meta.original_language | upper }}</span>{% endif %}
+    </div>
+    {% if meta.genres %}
+    <div class="flex gap-2 flex-wrap mb-4">
+      {% for g in meta.genres %}
+      <span class="px-2 py-0.5 bg-gray-800 rounded text-xs text-gray-300">{{ g }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if description %}
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-4">
+      <p class="text-sm text-gray-300 leading-relaxed">{{ description }}</p>
+    </div>
+    {% endif %}
+    {% if meta.cast %}
+    <p class="text-sm text-gray-400"><span class="text-gray-500">Cast:</span> {{ meta.cast | join(", ") }}</p>
+    {% endif %}
+    {% if meta.creator_or_director %}
+    <p class="text-sm text-gray-400 mt-1"><span class="text-gray-500">{{ "Creator" if meta.content_type == "tv" else "Director" }}:</span> {{ meta.creator_or_director }}</p>
+    {% endif %}
+    {% if meta.keywords %}
+    <div class="flex gap-1.5 flex-wrap mt-4">
+      {% for kw in meta.keywords %}
+      <span class="px-2 py-0.5 bg-gray-900 border border-gray-800 rounded text-xs text-gray-500">{{ kw }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% else %}
+<p class="text-gray-500">Title not found in cache (TMDB ID {{ tmdb_id }}).</p>
+{% endif %}
+{% endblock %}

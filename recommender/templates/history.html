@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Watch History{% endblock %}
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold mb-4">Watch History</h1>
+  <form method="get" action="/history" class="flex gap-3 flex-wrap">
+    <input
+      type="text" name="q" value="{{ q }}" placeholder="Search titles…"
+      class="px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm flex-1 min-w-48 focus:outline-none focus:border-green-600"
+    >
+    <select name="type" class="px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-green-600">
+      <option value="" {% if not ct_filter %}selected{% endif %}>All types</option>
+      <option value="tv" {% if ct_filter == 'tv' %}selected{% endif %}>TV shows</option>
+      <option value="movie" {% if ct_filter == 'movie' %}selected{% endif %}>Movies</option>
+    </select>
+    <button type="submit" class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded-lg text-sm transition-colors">Filter</button>
+    {% if q or ct_filter %}<a href="/history" class="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">Clear</a>{% endif %}
+  </form>
+  <p class="text-sm text-gray-500 mt-3">{{ total }} titles</p>
+</div>
+
+<div class="grid gap-3">
+  {% for item in items %}
+  <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 flex gap-4 items-start">
+    {% if item.poster %}
+    <img src="{{ item.poster }}" alt="{{ item.title }}" class="w-12 rounded flex-shrink-0 object-cover" style="height:72px">
+    {% else %}
+    <div class="w-12 h-16 bg-gray-800 rounded flex-shrink-0 flex items-center justify-center text-gray-600 text-xs">?</div>
+    {% endif %}
+    <div class="flex-1 min-w-0">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="font-medium text-white">{{ item.title }}</span>
+        <span class="text-xs px-1.5 py-0.5 rounded bg-gray-800 text-gray-400">{{ item.content_type }}</span>
+      </div>
+      {% if item.description %}
+      <p class="text-xs text-gray-400 line-clamp-2">{{ item.description }}</p>
+      {% endif %}
+    </div>
+    {% if item.tmdb_id %}
+    <a href="/title/{{ item.tmdb_id }}?type={{ item.content_type }}" class="text-xs text-green-500 hover:text-green-400 flex-shrink-0">Details →</a>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="text-gray-500 text-sm">No titles found.</p>
+  {% endfor %}
+</div>
+{% endblock %}

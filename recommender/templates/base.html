@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Streamline{% endblock %}</title>
+  <script src="https://unpkg.com/htmx.org@2.0.2" integrity="sha384-Y7hw+L/jvKeWIRRkqWYfPcvVxHzVzn5REgzbawhxAuQGwX1XWe70vji+VSeHOThJ" crossorigin="anonymous"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .prose-profile p { margin-bottom: 0.75rem; }
+    .prose-profile strong { color: #e2e8f0; }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+  <nav class="border-b border-gray-800 px-6 py-3 flex items-center gap-6">
+    <span class="font-bold text-lg tracking-tight text-white">Streamline</span>
+    <a href="/" class="text-sm text-gray-400 hover:text-white transition-colors {% if request.path == '/' %}text-white{% endif %}">Dashboard</a>
+    <a href="/history" class="text-sm text-gray-400 hover:text-white transition-colors {% if request.path.startswith('/history') %}text-white{% endif %}">Watch History</a>
+    <a href="/recommend" class="text-sm text-gray-400 hover:text-white transition-colors {% if request.path.startswith('/recommend') %}text-white{% endif %}">Recommend</a>
+  </nav>
+  <main class="max-w-5xl mx-auto px-6 py-8">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

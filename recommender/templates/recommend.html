@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Recommendations{% endblock %}
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold mb-4">Find Something to Watch</h1>
+  <form
+    id="search-form"
+    method="post"
+    action="/recommend"
+    hx-post="/recommend"
+    hx-target="#results"
+    hx-swap="innerHTML"
+    hx-indicator="#spinner"
+    class="flex gap-3"
+  >
+    <input
+      type="text" name="query" value="{{ query }}" placeholder='e.g. "slow-burn British crime drama"'
+      class="px-4 py-2.5 bg-gray-900 border border-gray-700 rounded-lg text-sm flex-1 focus:outline-none focus:border-green-600"
+      autofocus
+    >
+    <button type="submit" class="px-5 py-2.5 bg-green-700 hover:bg-green-600 rounded-lg text-sm font-medium transition-colors">
+      Search
+    </button>
+  </form>
+  <div id="spinner" class="htmx-indicator mt-3 text-sm text-gray-400 flex items-center gap-2">
+    <svg class="animate-spin h-4 w-4 text-green-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+    </svg>
+    Thinking…
+  </div>
+</div>
+
+<div id="results">
+  {% if results is not none %}
+    {% include "_results.html" %}
+  {% endif %}
+</div>
+
+<style>
+  .htmx-indicator { display: none; }
+  .htmx-request .htmx-indicator { display: flex; }
+</style>
+{% endblock %}

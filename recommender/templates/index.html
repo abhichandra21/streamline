@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Dashboard{% endblock %}
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-bold mb-1">Your Taste Profile</h1>
+  <div class="flex gap-6 text-sm text-gray-400 mt-2">
+    <span>{{ total }} titles watched</span>
+    <span>{{ tv_count }} TV shows</span>
+    <span>{{ movie_count }} movies</span>
+    <span>{{ enrichment_count }} enriched</span>
+  </div>
+</div>
+
+<div class="bg-gray-900 rounded-xl border border-gray-800 p-6">
+  <div class="prose-profile text-gray-300 leading-relaxed whitespace-pre-wrap text-sm">{{ taste_profile }}</div>
+</div>
+
+<div class="mt-6 flex gap-3">
+  <a href="/history" class="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">Browse watch history</a>
+  <a href="/recommend" class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded-lg text-sm transition-colors">Get recommendations</a>
+</div>
+{% endblock %}
