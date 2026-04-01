@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 from recommender.query_engine import QueryIntent, parse_intent, RecommendContext, ask, rank_candidates
@@ -89,9 +90,6 @@ def test_parse_intent_bollywood():
     assert intent.content_type == "movie"
 
 
-from datetime import timedelta
-from datetime import datetime
-
 from recommender.tmdb_client import TmdbMetadata
 from recommender.watch_index import WatchIndex
 
@@ -121,7 +119,7 @@ def test_rank_candidates_returns_recommendations():
         {"title": "Hinterland", "explanation": "Similar tone.", "score": 0.85},
     ]
     client = make_rank_client(ranked)
-    results = rank_candidates("British crime drama", "taste profile", candidates, enrichments, client)
+    results = rank_candidates("British crime drama", "taste profile", candidates, enrichments, client, top_n=2)
     assert len(results) == 2
     assert results[0].title == "Broadchurch"
     assert results[0].score == 0.92

@@ -126,7 +126,7 @@ def rank_candidates(
             genres=meta.genres,
             explanation=item['explanation'],
         ))
-    return results
+    return results[:top_n]
 
 
 def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) -> list[Recommendation]:
@@ -135,7 +135,8 @@ def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) ->
 
     matching = [
         e for e in ctx.events
-        if target.lower() in e.title.lower() or target.lower() in e.series_name.lower()
+        if (target.lower() in e.title.lower() or target.lower() in e.series_name.lower())
+        and (intent.content_type == 'both' or e.content_type == intent.content_type)
     ]
     if not matching:
         return []
@@ -163,7 +164,7 @@ def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) ->
     return [Recommendation(
         title=target,
         content_type=ct,
-        score=1.0,
+        score=0.5,
         vote_average=meta.vote_average if meta else 0.0,
         genres=meta.genres if meta else [],
         explanation=message.content[0].text.strip(),
@@ -193,11 +194,13 @@ def ask(query: str, ctx: RecommendContext) -> list[Recommendation]:
     candidates = [c for c in candidates if not ctx.watch_index.is_watched(c)]
 
     if len(candidates) == 0:
+        fallback_types = ['tv', 'movie'] if intent.content_type == 'both' else [intent.content_type]
         for title in _generate_suggestions(query, ctx.taste_profile, ctx.anthropic_client):
-            ct = intent.content_type if intent.content_type != 'both' else 'movie'
-            meta = ctx.tmdb_client.get_metadata(title, ct)
-            if meta and not ctx.watch_index.is_watched(meta):
-                candidates.append(meta)
+            for ct in fallback_types:
+                meta = ctx.tmdb_client.get_metadata(title, ct)
+                if meta and not ctx.watch_index.is_watched(meta):
+                    candidates.append(meta)
+                    break
 
     if not candidates:
         return []
