@@ -9,6 +9,9 @@ PLATFORM_PATHS = {
     "hbo": None,
 }
 
+MANUAL_TV_PATH = os.path.join(os.path.dirname(__file__), "data/manual/tv.csv")
+MANUAL_MOVIES_PATH = os.path.join(os.path.dirname(__file__), "data/manual/movies.csv")
+
 DEFAULT_TOP_N = 10
 CANDIDATE_POOL_SIZE = 500
 MIN_VOTE_COUNT = 100

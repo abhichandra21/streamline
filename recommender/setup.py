@@ -8,6 +8,7 @@ import anthropic
 import config
 from recommender.ingestion.netflix import parse as parse_netflix
 from recommender.ingestion.prime import parse as parse_prime
+from recommender.ingestion.manual import parse as parse_manual
 from recommender.signals import compute_scores
 from recommender.tmdb_client import TmdbClient
 from recommender.enricher import enrich_batch
@@ -28,6 +29,10 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False) -> None
             platform_events = parser(path)
             events.extend(platform_events)
             print(f"  {platform}: {len(platform_events)} events")
+    if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
+        manual_events = parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH)
+        events.extend(manual_events)
+        print(f"  manual: {len(manual_events)} events")
     print(f"  Total: {len(events)} events")
 
     claude = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)

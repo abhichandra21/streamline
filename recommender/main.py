@@ -6,6 +6,7 @@ import anthropic
 import config
 from recommender.ingestion.netflix import parse as parse_netflix
 from recommender.ingestion.prime import parse as parse_prime
+from recommender.ingestion.manual import parse as parse_manual
 from recommender.models import Recommendation
 from recommender.tmdb_client import TmdbClient
 from recommender.query_engine import RecommendContext, ask
@@ -18,6 +19,8 @@ def load_context() -> RecommendContext:
         path = config.PLATFORM_PATHS.get(platform)
         if path:
             events.extend(parser(path))
+    if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
+        events.extend(parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH))
 
     index_path = Path(config.WATCH_INDEX_PATH)
     if not index_path.exists():
