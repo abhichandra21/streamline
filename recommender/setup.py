@@ -1,9 +1,12 @@
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 
 import anthropic
+
+log = logging.getLogger("recommender.setup")
 
 import config
 from recommender.ingestion.netflix import parse as parse_netflix
@@ -95,5 +98,13 @@ if __name__ == "__main__":
                         help="Rebuild taste profile even if it exists")
     parser.add_argument("--refresh-data", action="store_true",
                         help="Re-fetch TMDB metadata, watch index, and enrichments")
+    parser.add_argument("--debug", action="store_true",
+                        help="Enable debug logging")
     args = parser.parse_args()
+    level = logging.DEBUG if args.debug else logging.WARNING
+    logging.basicConfig(
+        level=level,
+        format="%(name)s %(levelname)s: %(message)s",
+        stream=sys.stderr,
+    )
     run_setup(refresh_profile=args.refresh_profile, refresh_data=args.refresh_data)

@@ -1,8 +1,11 @@
+import logging
 import time
 
 import anthropic
 
 from .ingestion.base import WatchEvent
+
+log = logging.getLogger("recommender.profile")
 
 BATCH_SIZE = 200
 RATE_LIMIT_WAIT = 65  # seconds to wait on rate limit

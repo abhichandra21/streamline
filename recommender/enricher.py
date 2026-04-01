@@ -1,9 +1,12 @@
+import logging
 import re
 from pathlib import Path
 
 import anthropic
 
 from .tmdb_client import TmdbMetadata
+
+log = logging.getLogger("recommender.enricher")
 
 
 def _cache_path(metadata: TmdbMetadata, cache_dir: str) -> Path:
@@ -26,7 +29,9 @@ def enrich(metadata: TmdbMetadata, cache_dir: str, client: anthropic.Anthropic) 
     """Return a semantic description for a title, using cache if available."""
     path = _cache_path(metadata, cache_dir)
     if path.exists():
+        log.debug("Enrichment cache hit: %s", metadata.title)
         return path.read_text()
+    log.debug("Enriching: %s (ID %d)", metadata.title, metadata.tmdb_id)
 
     tmdb_info = (
         f"Title: {metadata.title}\n"
@@ -56,7 +61,8 @@ def enrich(metadata: TmdbMetadata, cache_dir: str, client: anthropic.Anthropic) 
         description = message.content[0].text.strip()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(description)
-    except Exception:
+    except Exception as exc:
+        log.warning("Enrichment failed for %s, using fallback: %s", metadata.title, exc)
         description = _fallback_description(metadata)
 
     return description

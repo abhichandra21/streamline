@@ -171,16 +171,20 @@ def test_ask_excludes_watched_titles():
         {"title": "Hinterland", "explanation": "Great fit.", "score": 0.88}
     ])
 
+    suggestions_json = json.dumps(["Shetland", "Vera"])
+
     mock_anthropic = MagicMock()
     intent_msg = MagicMock()
     intent_msg.content = [MagicMock(text=intent_json)]
+    suggestions_msg = MagicMock()
+    suggestions_msg.content = [MagicMock(text=suggestions_json)]
     rank_msg = MagicMock()
     rank_msg.content = [MagicMock(text=ranked_json)]
-    mock_anthropic.messages.create.side_effect = [intent_msg, rank_msg]
+    mock_anthropic.messages.create.side_effect = [intent_msg, suggestions_msg, rank_msg]
 
     ctx = RecommendContext(
         taste_profile="taste profile text",
-        watch_index=WatchIndex(tmdb_ids={1}, normalized_titles={"broadchurch"}, entries=[]),
+        watch_index=WatchIndex(tmdb_ids={1}, normalized_titles={("broadchurch", "tv")}, entries=[]),
         events=[],
         tmdb_client=mock_tmdb,
         anthropic_client=mock_anthropic,

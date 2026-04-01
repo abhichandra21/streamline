@@ -1,3 +1,4 @@
+import logging
 import sys
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from recommender.models import Recommendation
 from recommender.tmdb_client import TmdbClient
 from recommender.query_engine import RecommendContext, ask
 from recommender import watch_index as wi
+
+log = logging.getLogger("recommender")
 
 
 def load_context() -> RecommendContext:
@@ -54,6 +57,20 @@ def print_recommendations(results: list[Recommendation], query: str) -> None:
 
 
 def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(description="Streaming Recommender")
+    parser.add_argument("query", nargs="*", help="Recommendation query")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    args = parser.parse_args()
+
+    level = logging.DEBUG if args.debug else logging.WARNING
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(name)s %(levelname)s: %(message)s",
+        stream=sys.stderr,
+    )
+    logging.getLogger("recommender").setLevel(level)
+
     if not config.ANTHROPIC_API_KEY:
         print("Error: ANTHROPIC_API_KEY not set.", file=sys.stderr)
         sys.exit(1)
@@ -62,9 +79,11 @@ def main() -> None:
         sys.exit(1)
 
     ctx = load_context()
+    log.debug("Context loaded: %d events, %d watched titles",
+              len(ctx.events), len(ctx.watch_index.entries))
 
-    if len(sys.argv) > 1:
-        query = " ".join(sys.argv[1:])
+    if args.query:
+        query = " ".join(args.query)
         results = ask(query, ctx)
         print_recommendations(results, query)
         return

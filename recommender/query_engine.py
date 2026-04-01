@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import sys
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from .ingestion.base import WatchEvent
 from .models import Recommendation
 from .tmdb_client import TmdbClient, TmdbMetadata
 from .watch_index import WatchIndex
+
+log = logging.getLogger("recommender.query")
 
 
 @dataclass
@@ -67,6 +70,7 @@ def _safe_query_intent(data: dict) -> QueryIntent:
 
 def parse_intent(query: str, client: anthropic.Anthropic) -> QueryIntent:
     """Parse a natural language query into structured intent using Claude Sonnet."""
+    log.debug("Parsing intent for: %r", query)
     message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=400,
@@ -93,11 +97,18 @@ def parse_intent(query: str, client: anthropic.Anthropic) -> QueryIntent:
             ),
         }],
     )
+    log.debug("Raw intent response: %s", message.content[0].text[:500])
     try:
         data = _parse_json_response(message.content[0].text)
-        return _safe_query_intent(data)
+        intent = _safe_query_intent(data)
+        log.debug("Parsed intent: genres=%s countries=%s languages=%s content_type=%s "
+                   "mood=%s similar_to=%s special=%s top_n=%d",
+                   intent.genres, intent.origin_countries, intent.languages,
+                   intent.content_type, intent.mood_descriptors, intent.similar_to,
+                   intent.special_intent, intent.top_n)
+        return intent
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
-        print(f"Warning: failed to parse intent ({exc}), using defaults.", file=sys.stderr)
+        log.warning("Failed to parse intent: %s", exc)
         return QueryIntent(
             genres=[], origin_countries=[], languages=[],
             mood_descriptors=[], similar_to=[],
@@ -116,12 +127,14 @@ def rank_candidates(
     top_n: int = 1,
 ) -> list[Recommendation]:
     """Rank candidates against taste profile using Claude Sonnet."""
+    log.debug("Ranking %d candidates for query: %r (top_n=%d)", len(candidates), query, top_n)
     meta_by_title = {c.title: c for c in candidates}
 
     cands_str = '\n'.join(
         f"{i+1}. {c.title} (rating: {c.vote_average:.1f}): {enrichments.get(c.title, ' '.join(c.genres))}"
         for i, c in enumerate(candidates)
     )
+    log.debug("Candidate list sent to ranker:\n%s", cands_str)
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
@@ -130,28 +143,32 @@ def rank_candidates(
         messages=[{
             "role": "user",
             "content": (
-                f'Given this taste profile and query, rank the candidates and explain why each fits.\n\n'
-                f'TASTE PROFILE:\n{taste_profile}\n\n'
+                f'Rank these candidates for a user. IMPORTANT: the query is the primary filter — '
+                f'a candidate must match what the user asked for. The taste profile is secondary, '
+                f'used to break ties between candidates that all fit the query.\n\n'
                 f'QUERY: "{query}"\n\n'
+                f'TASTE PROFILE:\n{taste_profile}\n\n'
                 f'CANDIDATES:\n{cands_str}\n\n'
                 f'Return ONLY valid JSON: a list of objects with fields:\n'
                 f'- title: string (exact title from candidates)\n'
-                f'- explanation: string (1-2 sentences why this fits this specific user)\n'
-                f'- score: float 0-1\n\n'
+                f'- explanation: string (1-2 sentences why this fits the query and this user)\n'
+                f'- score: float 0-1 (how well it matches the QUERY, boosted slightly by taste fit)\n\n'
                 f'Return the top {top_n} ranked candidates.'
             ),
         }],
     )
 
+    log.debug("Raw ranking response: %s", message.content[0].text[:500])
     try:
         ranked = _parse_json_response(message.content[0].text)
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
-        print(f"Warning: failed to parse ranking response ({exc}).", file=sys.stderr)
+        log.warning("Failed to parse ranking response: %s", exc)
         return []
     results = []
     for item in ranked:
         title = item.get('title', '')
         if title not in meta_by_title:
+            log.debug("Ranked title not in candidates, skipping: %r", title)
             continue
         meta = meta_by_title[title]
         results.append(Recommendation(
@@ -162,12 +179,14 @@ def rank_candidates(
             genres=meta.genres,
             explanation=item.get('explanation', ''),
         ))
+    log.debug("Ranking returned %d results", len(results))
     return results[:top_n]
 
 
 def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) -> list[Recommendation]:
     """Handle 'I started X and stopped — worth finishing?' queries."""
     target = intent.similar_to[0] if intent.similar_to else query
+    log.debug("Handling abandoned query for target: %r", target)
 
     matching = [
         e for e in ctx.events
@@ -175,6 +194,7 @@ def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) ->
         and (intent.content_type == 'both' or e.content_type == intent.content_type)
     ]
     if not matching:
+        log.debug("No matching events found for abandoned target")
         return []
 
     total_hours = sum(e.watched_duration.total_seconds() for e in matching) / 3600
@@ -216,9 +236,15 @@ def ask(query: str, ctx: RecommendContext) -> list[Recommendation]:
         return _handle_abandoned(query, intent, ctx)
 
     content_types = ['tv', 'movie'] if intent.content_type == 'both' else [intent.content_type]
+    seen_ids: set[int] = set()
+
+    # Source 1: TMDB Discover (structured metadata filter)
     candidates: list[TmdbMetadata] = []
     for ct in content_types:
-        candidates.extend(ctx.tmdb_client.search_by_filters(
+        log.debug("TMDB discover: type=%s genres=%s countries=%s languages=%s years=%s-%s",
+                   ct, intent.genres, intent.origin_countries, intent.languages,
+                   intent.year_from, intent.year_to)
+        batch = ctx.tmdb_client.search_by_filters(
             content_type=ct,
             genres=intent.genres,
             origin_countries=intent.origin_countries,
@@ -226,22 +252,43 @@ def ask(query: str, ctx: RecommendContext) -> list[Recommendation]:
             year_from=intent.year_from,
             year_to=intent.year_to,
             size=30,
-        ))
+        )
+        log.debug("TMDB returned %d candidates for %s", len(batch), ct)
+        candidates.extend(batch)
 
+    pre_filter = len(candidates)
     candidates = [c for c in candidates if not ctx.watch_index.is_watched(c)]
+    log.debug("Watch filter: %d -> %d candidates (%d excluded)",
+              pre_filter, len(candidates), pre_filter - len(candidates))
+    for c in candidates:
+        seen_ids.add(c.tmdb_id)
 
-    if len(candidates) == 0:
-        fallback_types = ['tv', 'movie'] if intent.content_type == 'both' else [intent.content_type]
-        for title in _generate_suggestions(query, ctx.taste_profile, ctx.anthropic_client):
-            for ct in fallback_types:
-                meta = ctx.tmdb_client.get_metadata(title, ct)
-                if meta and not ctx.watch_index.is_watched(meta):
-                    candidates.append(meta)
-                    break
+    # Source 2: Claude suggestions (semantic, taste-aware — always runs)
+    log.debug("Fetching Claude suggestions for semantic coverage (similar_to=%s)", intent.similar_to)
+    suggestions = _generate_suggestions(query, ctx.taste_profile, ctx.anthropic_client,
+                                         similar_to=intent.similar_to)
+    log.debug("Claude suggested %d titles: %s", len(suggestions), suggestions[:10])
+    suggestion_count = 0
+    for title in suggestions:
+        for ct in content_types:
+            meta = ctx.tmdb_client.get_metadata(title, ct)
+            if meta and meta.tmdb_id not in seen_ids and not ctx.watch_index.is_watched(meta):
+                candidates.append(meta)
+                seen_ids.add(meta.tmdb_id)
+                suggestion_count += 1
+                break
+    log.debug("Claude suggestions added %d new candidates", suggestion_count)
+
+    if log.isEnabledFor(logging.DEBUG) and candidates:
+        log.debug("Final candidate pool (%d): %s",
+                   len(candidates),
+                   [f"{c.title} ({c.content_type}, ★{c.vote_average:.1f})" for c in candidates[:20]])
 
     if not candidates:
+        log.debug("No candidates after all sources, returning empty")
         return []
 
+    log.debug("Enriching %d candidates", len(candidates))
     meta_dict = {c.title: c for c in candidates}
     enrichments = enrich_batch(meta_dict, ctx.cache_dir, ctx.anthropic_client)
 
@@ -252,8 +299,13 @@ def _generate_suggestions(
     query: str,
     taste_profile: str,
     client: anthropic.Anthropic,
+    similar_to: list[str] | None = None,
 ) -> list[str]:
-    """Ask Claude to suggest specific titles when TMDB returns too few candidates."""
+    """Ask Claude to suggest specific titles based on query and taste profile."""
+    similar_ctx = ""
+    if similar_to:
+        similar_ctx = f'\nThe user specifically wants something like: {", ".join(similar_to)}.\n'
+
     message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=300,
@@ -261,9 +313,11 @@ def _generate_suggestions(
         messages=[{
             "role": "user",
             "content": (
-                f'A user is looking for: "{query}"\n\n'
+                f'A user is looking for: "{query}"\n'
+                f'{similar_ctx}\n'
                 f'Their taste profile:\n{taste_profile}\n\n'
-                'Suggest 20 specific titles that fit the query and taste profile. '
+                'Suggest 20 specific titles that fit the query. '
+                'Prioritize query relevance over general taste match. '
                 'Return ONLY a JSON array of title strings. Be precise with names.'
             ),
         }],

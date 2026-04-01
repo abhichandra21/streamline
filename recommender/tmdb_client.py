@@ -1,11 +1,13 @@
 import json
+import logging
 import shutil
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import requests
+
+log = logging.getLogger("recommender.tmdb")
 
 MAX_DISCOVER_PAGES = 20
 
@@ -22,7 +24,7 @@ MOVIE_GENRE_IDS: dict[str, int] = {
 TV_GENRE_IDS: dict[str, int] = {
     'action': 10759, 'adventure': 10759, 'animation': 16, 'comedy': 35,
     'crime': 80, 'documentary': 99, 'drama': 18, 'family': 10751,
-    'kids': 10762, 'mystery': 9648, 'sci-fi': 10765, 'thriller': 80,
+    'kids': 10762, 'mystery': 9648, 'sci-fi': 10765, 'thriller': 9648,
     'war': 10768, 'western': 37,
 }
 
@@ -128,7 +130,9 @@ class TmdbClient:
         """Fetch and cache metadata for a single title. Returns None if not found."""
         tmdb_id = self._search(title, content_type)
         if tmdb_id is None:
+            log.debug("TMDB search miss: %r (%s)", title, content_type)
             return None
+        log.debug("TMDB search hit: %r -> ID %d", title, tmdb_id)
         cached = self._load_cache(content_type, tmdb_id)
         if cached:
             return self._parse_metadata(cached, content_type)
@@ -147,6 +151,8 @@ class TmdbClient:
         size: int = 50,
     ) -> list[TmdbMetadata]:
         """Fetch candidates from TMDB discover endpoint using explicit filters."""
+        log.debug("Discover: type=%s genres=%s countries=%s languages=%s years=%s-%s size=%d",
+                   content_type, genres, origin_countries, languages, year_from, year_to, size)
         prefix = "tv" if content_type == "tv" else "movie"
         genre_map = TV_GENRE_IDS if content_type == "tv" else MOVIE_GENRE_IDS
         date_field = "first_air_date" if content_type == "tv" else "primary_release_date"
@@ -155,8 +161,12 @@ class TmdbClient:
 
         if genres:
             ids = [str(genre_map[g.lower()]) for g in genres if g.lower() in genre_map]
+            unmapped = [g for g in genres if g.lower() not in genre_map]
+            if unmapped:
+                log.debug("Unmapped genres (not in TMDB genre map): %s", unmapped)
             if ids:
                 params["with_genres"] = ",".join(ids)
+                log.debug("Genre filter: %s -> TMDB IDs %s", genres, ids)
 
         if origin_countries:
             params["with_origin_country"] = "|".join(origin_countries)
@@ -192,12 +202,13 @@ class TmdbClient:
                         candidates[tmdb_id] = self._parse_metadata(details, content_type)
                         time.sleep(0.05)
                     except Exception as exc:
-                        print(f"Warning: TMDB fetch failed for ID {tmdb_id}: {exc}", file=sys.stderr)
+                        log.warning("TMDB fetch failed for ID %d: %s", tmdb_id, exc)
                         continue
                 if len(candidates) >= size:
                     break
             page += 1
 
+        log.debug("Discover returned %d candidates after %d pages", len(candidates), page - 1)
         return list(candidates.values())
 
     def get_candidates(self, content_type: str, size: int = 500) -> list[TmdbMetadata]:
@@ -226,7 +237,7 @@ class TmdbClient:
                             candidates[tmdb_id] = self._parse_metadata(details, content_type)
                             time.sleep(0.05)  # respect TMDB rate limits
                         except Exception as exc:
-                            print(f"Warning: TMDB fetch failed for ID {tmdb_id}: {exc}", file=sys.stderr)
+                            log.warning("TMDB fetch failed for ID %d: %s", tmdb_id, exc)
                             continue
                     if len(candidates) >= size:
                         return list(candidates.values())
