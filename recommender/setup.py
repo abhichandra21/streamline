@@ -1,4 +1,5 @@
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -31,10 +32,12 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False) -> None
 
     claude = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
+    enrichments_index_path = Path(config.ENRICHMENT_CACHE_DIR) / "index.json"
+
     index_path = Path(config.WATCH_INDEX_PATH)
     if not refresh_data and index_path.exists():
         print(f"\nWatch index exists, skipping data fetch (use --refresh-data to rebuild).")
-        enrichments = {}
+        enrichments = json.loads(enrichments_index_path.read_text()) if enrichments_index_path.exists() else {}
     else:
         print("\nFetching TMDB metadata...")
         tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
@@ -61,6 +64,7 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False) -> None
 
         print(f"\nEnriching {len(metadata)} titles with Claude Haiku...")
         enrichments = enrich_batch(metadata, config.ENRICHMENT_CACHE_DIR, claude)
+        enrichments_index_path.write_text(json.dumps(enrichments))
         print(f"  {len(enrichments)} descriptions cached → {config.ENRICHMENT_CACHE_DIR}")
 
     profile_path = Path(config.TASTE_PROFILE_PATH)
