@@ -8,6 +8,21 @@ import requests
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 
+MOVIE_GENRE_IDS: dict[str, int] = {
+    'action': 28, 'adventure': 12, 'animation': 16, 'comedy': 35,
+    'crime': 80, 'documentary': 99, 'drama': 18, 'family': 10751,
+    'fantasy': 14, 'history': 36, 'horror': 27, 'music': 10402,
+    'mystery': 9648, 'romance': 10749, 'sci-fi': 878, 'thriller': 53,
+    'war': 10752, 'western': 37,
+}
+
+TV_GENRE_IDS: dict[str, int] = {
+    'action': 10759, 'adventure': 10759, 'animation': 16, 'comedy': 35,
+    'crime': 80, 'documentary': 99, 'drama': 18, 'family': 10751,
+    'kids': 10762, 'mystery': 9648, 'sci-fi': 10765, 'thriller': 80,
+    'war': 10768, 'western': 37,
+}
+
 
 @dataclass
 class TmdbMetadata:
@@ -117,6 +132,69 @@ class TmdbClient:
         data = self._fetch_details(tmdb_id, content_type)
         self._save_cache(content_type, tmdb_id, data)
         return self._parse_metadata(data, content_type)
+
+    def search_by_filters(
+        self,
+        content_type: str,
+        genres: list[str] | None = None,
+        origin_countries: list[str] | None = None,
+        languages: list[str] | None = None,
+        year_from: int | None = None,
+        year_to: int | None = None,
+        size: int = 50,
+    ) -> list[TmdbMetadata]:
+        """Fetch candidates from TMDB discover endpoint using explicit filters."""
+        prefix = "tv" if content_type == "tv" else "movie"
+        genre_map = TV_GENRE_IDS if content_type == "tv" else MOVIE_GENRE_IDS
+        date_field = "first_air_date" if content_type == "tv" else "primary_release_date"
+
+        params: dict = {"sort_by": "vote_average.desc", "vote_count.gte": 100}
+
+        if genres:
+            ids = [str(genre_map[g.lower()]) for g in genres if g.lower() in genre_map]
+            if ids:
+                params["with_genres"] = ",".join(ids)
+
+        if origin_countries:
+            params["with_origin_country"] = "|".join(origin_countries)
+
+        if languages:
+            params["with_original_language"] = "|".join(languages)
+
+        if year_from:
+            params[f"{date_field}.gte"] = f"{year_from}-01-01"
+
+        if year_to:
+            params[f"{date_field}.lte"] = f"{year_to}-12-31"
+
+        candidates: dict[int, TmdbMetadata] = {}
+        page = 1
+        while len(candidates) < size:
+            params["page"] = page
+            data = self._get(f"discover/{prefix}", params=params)
+            results = data.get("results", [])
+            if not results:
+                break
+            for item in results:
+                tmdb_id = item["id"]
+                if tmdb_id in candidates:
+                    continue
+                cached = self._load_cache(content_type, tmdb_id)
+                if cached:
+                    candidates[tmdb_id] = self._parse_metadata(cached, content_type)
+                else:
+                    try:
+                        details = self._fetch_details(tmdb_id, content_type)
+                        self._save_cache(content_type, tmdb_id, details)
+                        candidates[tmdb_id] = self._parse_metadata(details, content_type)
+                        time.sleep(0.05)
+                    except Exception:
+                        continue
+                if len(candidates) >= size:
+                    break
+            page += 1
+
+        return list(candidates.values())
 
     def get_candidates(self, content_type: str, size: int = 500) -> list[TmdbMetadata]:
         """
