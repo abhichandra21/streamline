@@ -14,3 +14,9 @@ CANDIDATE_POOL_SIZE = 500
 MIN_VOTE_COUNT = 100
 RECENCY_HALF_LIFE_DAYS = 90
 CACHE_DIR = "recommender/cache/tmdb"
+
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+ENRICHMENT_CACHE_DIR = os.path.join(os.path.dirname(__file__), "recommender/cache/enrichments")
+TASTE_PROFILE_PATH = os.path.join(os.path.dirname(__file__), "recommender/cache/taste_profile.txt")
+WATCH_INDEX_PATH = os.path.join(os.path.dirname(__file__), "recommender/cache/watch_index.json")
