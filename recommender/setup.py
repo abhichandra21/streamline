@@ -1,4 +1,5 @@
 import argparse
+import sys
 from pathlib import Path
 
 import anthropic
@@ -14,6 +15,10 @@ from recommender import watch_index as wi
 
 
 def run_setup(refresh_profile: bool = False) -> None:
+    if not config.ANTHROPIC_API_KEY:
+        print("Error: ANTHROPIC_API_KEY not set. Export it and re-run.", file=sys.stderr)
+        sys.exit(1)
+
     print("Loading watch history...")
     events = []
     for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime)]:
