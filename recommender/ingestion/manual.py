@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from .base import WatchEvent
 
 _YEAR_RE = re.compile(r'\s+(19|20)\d{2}$')
-_NEUTRAL_DATE = datetime(2022, 1, 1)
+_NEUTRAL_DATE = datetime.now()
 _TV_DURATION = timedelta(minutes=45)
 _MOVIE_DURATION = timedelta(hours=2)
 
