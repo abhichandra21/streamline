@@ -13,7 +13,7 @@ from recommender.ingestion.prime import parse as parse_prime
 from recommender.ingestion.manual import parse as parse_manual
 from recommender.models import Recommendation
 from recommender.tmdb_client import TmdbClient
-from recommender.query_engine import RecommendContext, ask
+from recommender.query_engine import RecommendContext, ConversationContext, ask
 from recommender import watch_index as wi
 
 log = logging.getLogger("recommender")
@@ -175,6 +175,7 @@ def main() -> None:
     console_out.print("Streaming Recommender — ask me anything about what to watch.")
     console_out.print("Feedback: [bold]+liked Title[/bold], [bold]+disliked Title[/bold], [bold]+add Title tv|movie[/bold]")
     console_out.print('Type [bold]exit[/bold] to quit.\n')
+    conv_ctx: ConversationContext | None = None
     while True:
         try:
             line = input("> ").strip()
@@ -185,8 +186,25 @@ def main() -> None:
         if _handle_feedback_command(line):
             continue
         with console_err.status("[bold magenta]Thinking...[/bold magenta]", spinner="dots"):
-            results = ask(line, ctx, top_n_override=args.n)
+            results = ask(line, ctx, top_n_override=args.n, conv_ctx=conv_ctx)
         print_recommendations(results, line)
+        if results:
+            from recommender.query_engine import QueryIntent
+            if conv_ctx is None:
+                # Placeholder intent — ask() will overwrite last_intent before returning.
+                placeholder = QueryIntent(
+                    genres=[], origin_countries=[], languages=[], mood_descriptors=[],
+                    similar_to=[], max_runtime_minutes=None, year_from=None, year_to=None,
+                    unwatched_only=True, special_intent=None, content_type="both",
+                    top_n=len(results), platforms=[],
+                )
+                conv_ctx = ConversationContext(
+                    last_query=line, last_intent=placeholder, last_results=results,
+                )
+            else:
+                conv_ctx.last_query = line
+                conv_ctx.last_results = results
+            conv_ctx.excluded_titles.update(r.title for r in results)
 
 
 if __name__ == "__main__":

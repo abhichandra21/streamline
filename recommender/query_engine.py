@@ -69,6 +69,15 @@ class RecommendContext:
     streaming_platforms: list[str] = field(default_factory=list)
 
 
+@dataclass
+class ConversationContext:
+    """Tracks state across interactive REPL turns for refinement queries."""
+    last_query: str
+    last_intent: "QueryIntent"
+    last_results: list[Recommendation]
+    excluded_titles: set[str] = field(default_factory=set)  # grows across conversation
+
+
 def _parse_json_response(text: str) -> dict | list:
     text = text.strip()
     if text.startswith('```'):
@@ -97,9 +106,24 @@ def _safe_query_intent(data: dict) -> QueryIntent:
     return QueryIntent(**filtered)
 
 
-def parse_intent(query: str, client: anthropic.Anthropic) -> QueryIntent:
+def parse_intent(
+    query: str,
+    client: anthropic.Anthropic,
+    conv_ctx: "ConversationContext | None" = None,
+) -> QueryIntent:
     """Parse a natural language query into structured intent using Claude Sonnet."""
     log.debug("Parsing intent for: %r", query)
+
+    context_section = ""
+    if conv_ctx:
+        prev_titles = ", ".join(f'"{r.title}"' for r in conv_ctx.last_results[:3])
+        context_section = (
+            f'\nPrevious query: "{conv_ctx.last_query}"\n'
+            f'Previous results: {prev_titles}\n'
+            'The new query may be a refinement (e.g. "but something British", '
+            '"more like #2", "something lighter"). Interpret it relative to the previous query.\n'
+        )
+
     message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=400,
@@ -125,7 +149,8 @@ def parse_intent(query: str, client: anthropic.Anthropic) -> QueryIntent:
                 '- platforms: list of streaming platform names the user wants e.g. ["Netflix"] '
                 'from "on Netflix" or "available on Prime" — use exact names like '
                 '"Netflix", "Amazon Prime Video", "Apple TV Plus", "Max", "Disney Plus", '
-                '"Paramount Plus", "Peacock", "Hulu"; empty list if no platform specified\n\n'
+                '"Paramount Plus", "Peacock", "Hulu"; empty list if no platform specified\n'
+                f'{context_section}\n'
                 f'Query: "{query}"'
             ),
         }],
@@ -334,15 +359,44 @@ def _handle_why_not(title: str, ctx: RecommendContext) -> list[Recommendation]:
     )]
 
 
-def ask(query: str, ctx: RecommendContext, top_n_override: int | None = None) -> list[Recommendation]:
+_WHAT_ELSE_PATTERNS = re.compile(
+    r'^(what else|more|show more|anything else|other options?)\??$', re.IGNORECASE
+)
+_MORE_LIKE_N = re.compile(r'^more like #?(\d+)', re.IGNORECASE)
+
+
+def ask(
+    query: str,
+    ctx: RecommendContext,
+    top_n_override: int | None = None,
+    conv_ctx: "ConversationContext | None" = None,
+) -> list[Recommendation]:
     """Answer a natural language recommendation query end-to-end."""
     why_not_title = _extract_why_not_title(query)
     if why_not_title:
         return _handle_why_not(why_not_title, ctx)
 
-    intent = parse_intent(query, ctx.anthropic_client)
-    if top_n_override is not None:
-        intent.top_n = top_n_override
+    # Conversational refinement: "what else?" → re-run last query, exclude seen titles.
+    if conv_ctx and _WHAT_ELSE_PATTERNS.match(query.strip()):
+        log.debug("'What else?' detected — re-running last intent with exclusions")
+        intent = conv_ctx.last_intent
+        intent.top_n = top_n_override or intent.top_n
+        extra_excludes = conv_ctx.excluded_titles
+    else:
+        extra_excludes: set[str] = set()
+        # Conversational refinement: "more like #N" — extract title from last results.
+        if conv_ctx:
+            m = _MORE_LIKE_N.match(query.strip())
+            if m:
+                idx = int(m.group(1)) - 1
+                if 0 <= idx < len(conv_ctx.last_results):
+                    picked = conv_ctx.last_results[idx].title
+                    log.debug("'More like #%d' → using %r as similar_to", idx + 1, picked)
+                    query = f"more like {picked}"
+
+        intent = parse_intent(query, ctx.anthropic_client, conv_ctx=conv_ctx)
+        if top_n_override is not None:
+            intent.top_n = top_n_override
 
     if intent.special_intent == 'abandoned':
         return _handle_abandoned(query, intent, ctx)
@@ -369,7 +423,10 @@ def ask(query: str, ctx: RecommendContext, top_n_override: int | None = None) ->
         candidates.extend(batch)
 
     pre_filter = len(candidates)
-    candidates = [c for c in candidates if not ctx.watch_index.is_watched(c)]
+    candidates = [
+        c for c in candidates
+        if not ctx.watch_index.is_watched(c) and c.title not in extra_excludes
+    ]
     log.debug("Watch filter: %d -> %d candidates (%d excluded)",
               pre_filter, len(candidates), pre_filter - len(candidates))
     for c in candidates:
@@ -426,8 +483,12 @@ def ask(query: str, ctx: RecommendContext, top_n_override: int | None = None) ->
                     log.debug("Filtering out %r — not on requested platforms %s", rec.title, requested_platforms)
                     continue
             annotated.append(rec)
+        if conv_ctx is not None:
+            conv_ctx.last_intent = intent
         return annotated
 
+    if conv_ctx is not None:
+        conv_ctx.last_intent = intent
     return results
 
 
