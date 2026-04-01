@@ -2,7 +2,7 @@ import sys
 import pytest
 from unittest.mock import patch
 from recommender.main import load_all_events, print_results, save_csv
-from recommender import Recommendation
+from recommender.models import Recommendation
 import tempfile, os
 
 

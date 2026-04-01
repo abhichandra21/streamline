@@ -18,7 +18,7 @@ def load_all_events():
     return events
 
 
-def print_results(results: dict[str, list]) -> None:
+def print_results(results):
     for label, recs in results.items():
         header = "TV SHOW RECOMMENDATIONS" if label == "tv" else "MOVIE RECOMMENDATIONS"
         print(f"\n{'═' * 62}")
@@ -34,7 +34,7 @@ def print_results(results: dict[str, list]) -> None:
                 print(f"      Because you watched: {rec.because_you_watched}")
 
 
-def save_csv(results: dict[str, list], path: str) -> None:
+def save_csv(results, path: str) -> None:
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["Rank", "Type", "Title", "Score", "TMDB Rating",
@@ -57,36 +57,12 @@ def main():
 
     if not config.TMDB_API_KEY:
         print("Error: TMDB_API_KEY not set.", file=sys.stderr)
-        print("Get a free key at https://www.themoviedb.org/settings/api", file=sys.stderr)
         sys.exit(1)
 
     client = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
-    if args.refresh_cache:
-        client.clear_cache()
-        print("Cache cleared.")
 
     print("Loading watch history...")
     events = load_all_events()
-    print(f"  {len(events)} watch events loaded.")
-
-    tv_series = {e.series_name for e in events if e.content_type == "tv"}
-    movies_set = {e.title for e in events if e.content_type == "movie"}
-    all_to_enrich = [(t, "tv") for t in tv_series] + [(t, "movie") for t in movies_set]
-
-    print(f"Fetching TMDB metadata for {len(all_to_enrich)} watched titles...")
-    watched_metadata = {}
-    for i, (title, ct) in enumerate(all_to_enrich):
-        meta = client.get_metadata(title, ct)
-        if meta:
-            watched_metadata[title] = meta
-        if (i + 1) % 20 == 0:
-            print(f"  {i+1}/{len(all_to_enrich)} enriched...")
-
-    # TODO: Implement recommendation logic with Claude LLM
-
-    if args.save:
-        save_csv(results, args.save)
-        print(f"\nSaved to {args.save}")
 
 
 if __name__ == "__main__":
