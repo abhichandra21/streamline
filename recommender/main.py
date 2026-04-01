@@ -61,6 +61,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Streaming Recommender")
     parser.add_argument("query", nargs="*", help="Recommendation query")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("-n", type=int, default=None, help="Number of results (overrides default)")
     args = parser.parse_args()
 
     level = logging.DEBUG if args.debug else logging.WARNING
@@ -84,7 +85,7 @@ def main() -> None:
 
     if args.query:
         query = " ".join(args.query)
-        results = ask(query, ctx)
+        results = ask(query, ctx, top_n_override=args.n)
         print_recommendations(results, query)
         return
 
@@ -97,7 +98,7 @@ def main() -> None:
             break
         if not query or query.lower() == "exit":
             break
-        results = ask(query, ctx)
+        results = ask(query, ctx, top_n_override=args.n)
         print_recommendations(results, query)
 
 

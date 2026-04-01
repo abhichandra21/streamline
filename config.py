@@ -12,7 +12,7 @@ PLATFORM_PATHS = {
 MANUAL_TV_PATH = os.path.join(os.path.dirname(__file__), "data/manual/tv.csv")
 MANUAL_MOVIES_PATH = os.path.join(os.path.dirname(__file__), "data/manual/movies.csv")
 
-DEFAULT_TOP_N = 10
+DEFAULT_TOP_N = 3
 CANDIDATE_POOL_SIZE = 500
 MIN_VOTE_COUNT = 100
 RECENCY_HALF_LIFE_DAYS = 90

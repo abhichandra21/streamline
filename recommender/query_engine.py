@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import anthropic
 
+import config
+
 from .enricher import enrich, enrich_batch
 from .ingestion.base import WatchEvent
 from .models import Recommendation
@@ -58,7 +60,7 @@ def _safe_query_intent(data: dict) -> QueryIntent:
         "mood_descriptors": [], "similar_to": [],
         "max_runtime_minutes": None, "year_from": None, "year_to": None,
         "unwatched_only": True, "special_intent": None,
-        "content_type": "both", "top_n": 1,
+        "content_type": "both", "top_n": config.DEFAULT_TOP_N,
     }
     for key, default in defaults.items():
         if key not in filtered:
@@ -91,8 +93,8 @@ def parse_intent(query: str, client: anthropic.Anthropic) -> QueryIntent:
                 '- unwatched_only: boolean (default true)\n'
                 '- special_intent: one of "abandoned", "watchlist", "family" or null\n'
                 '- content_type: "tv", "movie", or "both"\n'
-                '- top_n: integer — 1 for single recommendation (default), 3-5 if query implies '
-                '"a few" or "some options" or "what should I watch"\n\n'
+                f'- top_n: integer — default is {config.DEFAULT_TOP_N}; use 1 only if user asks for '
+                '"the single best" or "one recommendation"; use 5-10 for "a lot" or "many options"\n\n'
                 f'Query: "{query}"'
             ),
         }],
@@ -114,7 +116,7 @@ def parse_intent(query: str, client: anthropic.Anthropic) -> QueryIntent:
             mood_descriptors=[], similar_to=[],
             max_runtime_minutes=None, year_from=None, year_to=None,
             unwatched_only=True, special_intent=None,
-            content_type="both", top_n=1,
+            content_type="both", top_n=config.DEFAULT_TOP_N,
         )
 
 
@@ -228,9 +230,11 @@ def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) ->
     )]
 
 
-def ask(query: str, ctx: RecommendContext) -> list[Recommendation]:
+def ask(query: str, ctx: RecommendContext, top_n_override: int | None = None) -> list[Recommendation]:
     """Answer a natural language recommendation query end-to-end."""
     intent = parse_intent(query, ctx.anthropic_client)
+    if top_n_override is not None:
+        intent.top_n = top_n_override
 
     if intent.special_intent == 'abandoned':
         return _handle_abandoned(query, intent, ctx)
