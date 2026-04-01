@@ -3,11 +3,8 @@ import csv
 import sys
 
 import config
-from recommender.engine import Recommendation, recommend
 from recommender.ingestion.netflix import parse as parse_netflix
 from recommender.ingestion.prime import parse as parse_prime
-from recommender.signals import compute_scores
-from recommender.taste_profile import build_profile
 from recommender.tmdb_client import TmdbClient
 
 
@@ -21,7 +18,7 @@ def load_all_events():
     return events
 
 
-def print_results(results: dict[str, list[Recommendation]]) -> None:
+def print_results(results: dict[str, list]) -> None:
     for label, recs in results.items():
         header = "TV SHOW RECOMMENDATIONS" if label == "tv" else "MOVIE RECOMMENDATIONS"
         print(f"\n{'═' * 62}")
@@ -37,7 +34,7 @@ def print_results(results: dict[str, list[Recommendation]]) -> None:
                 print(f"      Because you watched: {rec.because_you_watched}")
 
 
-def save_csv(results: dict[str, list[Recommendation]], path: str) -> None:
+def save_csv(results: dict[str, list], path: str) -> None:
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["Rank", "Type", "Title", "Score", "TMDB Rating",
@@ -85,38 +82,7 @@ def main():
         if (i + 1) % 20 == 0:
             print(f"  {i+1}/{len(all_to_enrich)} enriched...")
 
-    scores = compute_scores(events, watched_metadata, config.RECENCY_HALF_LIFE_DAYS)
-
-    tv_scores = {k: v for k, v in scores.items() if k in tv_series}
-    movie_scores = {k: v for k, v in scores.items() if k in movies_set}
-    tv_watched_meta = {k: v for k, v in watched_metadata.items() if k in tv_series}
-    movie_watched_meta = {k: v for k, v in watched_metadata.items() if k in movies_set}
-
-    tv_profile = build_profile(tv_scores, tv_watched_meta)
-    movie_profile = build_profile(movie_scores, movie_watched_meta)
-    watched_titles = set(watched_metadata.keys())
-
-    results = {}
-
-    if args.type in ("tv", None):
-        print("Fetching TV candidate pool...")
-        tv_candidates = client.get_candidates("tv", size=config.CANDIDATE_POOL_SIZE)
-        print(f"  {len(tv_candidates)} candidates.")
-        results["tv"] = recommend(
-            "tv", tv_profile, tv_candidates, watched_titles, tv_watched_meta,
-            top_n=args.top, min_vote_count=config.MIN_VOTE_COUNT,
-        )
-
-    if args.type in ("movies", None):
-        print("Fetching movie candidate pool...")
-        movie_candidates = client.get_candidates("movie", size=config.CANDIDATE_POOL_SIZE)
-        print(f"  {len(movie_candidates)} candidates.")
-        results["movies"] = recommend(
-            "movie", movie_profile, movie_candidates, watched_titles, movie_watched_meta,
-            top_n=args.top, min_vote_count=config.MIN_VOTE_COUNT,
-        )
-
-    print_results(results)
+    # TODO: Implement recommendation logic with Claude LLM
 
     if args.save:
         save_csv(results, args.save)
