@@ -18,6 +18,7 @@ from recommender.tmdb_client import TmdbClient
 from recommender.enricher import enrich_batch
 from recommender.taste_profile_builder import build as build_taste_profile
 from recommender import watch_index as wi
+from recommender import feedback as fb
 
 console = Console(stderr=True)
 
@@ -84,9 +85,18 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False) -> None
 
     profile_path = Path(config.TASTE_PROFILE_PATH)
     if refresh_profile or not profile_path.exists():
+        feedback = fb.load(config.FEEDBACK_PATH)
+        liked_count = sum(1 for r in feedback["ratings"] if r.get("rating") == "liked")
+        disliked_count = sum(1 for r in feedback["ratings"] if r.get("rating") == "disliked")
+        if liked_count or disliked_count:
+            console.print(f"  Applying feedback: {liked_count} liked, {disliked_count} disliked titles")
+
         with console.status("[bold magenta]Building taste profile with Claude Sonnet...[/bold magenta]", spinner="dots"):
             scores = compute_scores(events, metadata, config.RECENCY_HALF_LIFE_DAYS)
-            profile = build_taste_profile(events, scores, enrichments, claude)
+            scores = fb.apply_score_multipliers(scores, feedback)
+            negative_prefs = fb.get_disliked_titles(feedback)
+            profile = build_taste_profile(events, scores, enrichments, claude,
+                                          negative_prefs=negative_prefs or None)
         profile_path.parent.mkdir(parents=True, exist_ok=True)
         profile_path.write_text(profile)
         console.print(f"  Taste profile saved → {config.TASTE_PROFILE_PATH}")

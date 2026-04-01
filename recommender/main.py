@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 import config
+from recommender import feedback as fb
 from recommender.ingestion.netflix import parse as parse_netflix
 from recommender.ingestion.prime import parse as parse_prime
 from recommender.ingestion.manual import parse as parse_manual
@@ -73,12 +74,60 @@ def print_recommendations(results: list[Recommendation], query: str) -> None:
         console_out.print(panel)
 
 
+def _handle_feedback_command(line: str) -> bool:
+    """Handle interactive feedback commands. Returns True if line was a feedback command."""
+    # +liked <title> / +loved <title>
+    for prefix in ("+liked ", "+loved ", "+like "):
+        if line.lower().startswith(prefix):
+            title = line[len(prefix):].strip()
+            data = fb.load(config.FEEDBACK_PATH)
+            fb.add_rating(data, title, "liked")
+            fb.save(data, config.FEEDBACK_PATH)
+            console_out.print(f"[green]Marked as liked:[/green] {title}")
+            console_out.print("[dim]Run --refresh-profile to update your taste profile.[/dim]")
+            return True
+
+    # -disliked <title> / +disliked <title>
+    for prefix in ("-disliked ", "+disliked ", "-dislike ", "+dislike "):
+        if line.lower().startswith(prefix):
+            title = line[len(prefix):].strip()
+            data = fb.load(config.FEEDBACK_PATH)
+            fb.add_rating(data, title, "disliked")
+            fb.save(data, config.FEEDBACK_PATH)
+            console_out.print(f"[yellow]Marked as disliked:[/yellow] {title}")
+            console_out.print("[dim]Run --refresh-profile to update your taste profile.[/dim]")
+            return True
+
+    # +add <title> [tv|movie]
+    if line.lower().startswith("+add "):
+        rest = line[5:].strip()
+        parts = rest.rsplit(" ", 1)
+        if len(parts) == 2 and parts[1].lower() in ("tv", "movie"):
+            title, ct = parts[0].strip(), parts[1].lower()
+        else:
+            title, ct = rest, "tv"
+        data = fb.load(config.FEEDBACK_PATH)
+        fb.add_addition(data, title, ct)
+        fb.save(data, config.FEEDBACK_PATH)
+        console_out.print(f"[green]Added to watch history:[/green] {title} ({ct})")
+        console_out.print("[dim]Run --refresh-profile to update your taste profile.[/dim]")
+        return True
+
+    return False
+
+
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Streaming Recommender")
     parser.add_argument("query", nargs="*", help="Recommendation query")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("-n", type=int, default=None, help="Number of results (overrides default)")
+    # Feedback flags
+    parser.add_argument("--liked", metavar="TITLE", help="Mark a title as liked")
+    parser.add_argument("--disliked", metavar="TITLE", help="Mark a title as disliked")
+    parser.add_argument("--add", metavar="TITLE", help="Add a title to watch history")
+    parser.add_argument("--type", choices=["tv", "movie"], default="tv",
+                        help="Content type for --add (default: tv)")
     args = parser.parse_args()
 
     level = logging.DEBUG if args.debug else logging.WARNING
@@ -88,6 +137,22 @@ def main() -> None:
         stream=sys.stderr,
     )
     logging.getLogger("recommender").setLevel(level)
+
+    # Handle feedback-only invocations (no API keys needed).
+    if args.liked or args.disliked or args.add:
+        data = fb.load(config.FEEDBACK_PATH)
+        if args.liked:
+            fb.add_rating(data, args.liked, "liked")
+            console_out.print(f"[green]Marked as liked:[/green] {args.liked}")
+        if args.disliked:
+            fb.add_rating(data, args.disliked, "disliked")
+            console_out.print(f"[yellow]Marked as disliked:[/yellow] {args.disliked}")
+        if args.add:
+            fb.add_addition(data, args.add, args.type)
+            console_out.print(f"[green]Added to watch history:[/green] {args.add} ({args.type})")
+        fb.save(data, config.FEEDBACK_PATH)
+        console_out.print("[dim]Run python -m recommender.setup --refresh-profile to update your taste profile.[/dim]")
+        return
 
     if not config.ANTHROPIC_API_KEY:
         console_err.print("[red]Error: ANTHROPIC_API_KEY not set.[/red]")
@@ -108,17 +173,20 @@ def main() -> None:
         return
 
     console_out.print("Streaming Recommender — ask me anything about what to watch.")
+    console_out.print("Feedback: [bold]+liked Title[/bold], [bold]+disliked Title[/bold], [bold]+add Title tv|movie[/bold]")
     console_out.print('Type [bold]exit[/bold] to quit.\n')
     while True:
         try:
-            query = input("> ").strip()
+            line = input("> ").strip()
         except (EOFError, KeyboardInterrupt):
             break
-        if not query or query.lower() == "exit":
+        if not line or line.lower() == "exit":
             break
+        if _handle_feedback_command(line):
+            continue
         with console_err.status("[bold magenta]Thinking...[/bold magenta]", spinner="dots"):
-            results = ask(query, ctx, top_n_override=args.n)
-        print_recommendations(results, query)
+            results = ask(line, ctx, top_n_override=args.n)
+        print_recommendations(results, line)
 
 
 if __name__ == "__main__":

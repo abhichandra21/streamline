@@ -81,6 +81,7 @@ def build(
     scores: dict[str, float],
     enrichments: dict[str, str],
     client: anthropic.Anthropic,
+    negative_prefs: list[str] | None = None,
 ) -> str:
     """Build a natural-language taste profile using Claude Sonnet.
 
@@ -94,6 +95,15 @@ def build(
 
     if not scored:
         return "No watch history available for taste profiling."
+
+    negative_section = ""
+    if negative_prefs:
+        titles_str = ", ".join(f'"{t}"' for t in negative_prefs)
+        negative_section = (
+            f"\n\nThe user has explicitly disliked: {titles_str}. "
+            "Add a brief 'What you don't enjoy' section to the profile capturing "
+            "patterns in what they disliked."
+        )
 
     # Single batch — no need for merge
     if len(scored) <= BATCH_SIZE:
@@ -113,7 +123,8 @@ def build(
                     "Analyze this person's streaming watch history and write a detailed taste profile.\n"
                     "Identify distinct taste clusters, preferences for tone/pacing/culture, "
                     "what they consistently finish, and notable patterns.\n"
-                    "Write in second person (\"You gravitate toward...\").\n\n"
+                    "Write in second person (\"You gravitate toward...\")."
+                    f"{negative_section}\n\n"
                     f"Watch history (sorted by engagement score):\n{history_str}"
                 ),
             }],

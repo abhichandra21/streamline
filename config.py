@@ -29,3 +29,4 @@ PROVIDERS_CACHE_DIR = os.path.join(os.path.dirname(__file__), "recommender/cache
 ENRICHMENT_CACHE_DIR = os.path.join(os.path.dirname(__file__), "recommender/cache/enrichments")
 TASTE_PROFILE_PATH = os.path.join(os.path.dirname(__file__), "recommender/cache/taste_profile.txt")
 WATCH_INDEX_PATH = os.path.join(os.path.dirname(__file__), "recommender/cache/watch_index.json")
+FEEDBACK_PATH = os.path.join(os.path.dirname(__file__), "recommender/cache/feedback.json")
