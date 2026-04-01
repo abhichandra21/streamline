@@ -43,6 +43,7 @@ def enrich(metadata: TmdbMetadata, cache_dir: str, client: anthropic.Anthropic) 
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=200,
+            timeout=30.0,
             messages=[{
                 "role": "user",
                 "content": (
@@ -68,6 +69,8 @@ def enrich_batch(
 ) -> dict[str, str]:
     """Enrich a batch of titles. Falls back gracefully on individual failures."""
     result = {}
-    for title, metadata in titles_metadata.items():
+    for i, (title, metadata) in enumerate(titles_metadata.items()):
         result[title] = enrich(metadata, cache_dir, client)
+        if (i + 1) % 50 == 0:
+            print(f"  {i+1}/{len(titles_metadata)} enriched...")
     return result
