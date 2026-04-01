@@ -262,8 +262,84 @@ def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) ->
     )]
 
 
+def _extract_why_not_title(query: str) -> str | None:
+    """Extract title from 'why not X?' / 'why didn't you recommend X?' queries."""
+    q = query.strip().rstrip("?").lower()
+    for prefix in ("why not ", "why didn't you recommend ", "why wasn't ", "why isn't "):
+        if q.startswith(prefix):
+            return query.strip().rstrip("?")[len(prefix):].strip()
+    return None
+
+
+def _handle_why_not(title: str, ctx: RecommendContext) -> list[Recommendation]:
+    """Trace a title through the pipeline and explain why it wasn't recommended."""
+    lines: list[str] = [f'Tracing "{title}" through the pipeline:\n']
+
+    # Step 1: TMDB lookup
+    meta_tv = ctx.tmdb_client.get_metadata(title, "tv")
+    meta_movie = ctx.tmdb_client.get_metadata(title, "movie")
+    meta = meta_tv or meta_movie
+
+    if not meta:
+        lines.append("  TMDB: [bold red]Not found[/bold red] — title not in TMDB database.")
+        lines.append("  → Try searching with the exact title, or it may be too obscure for TMDB.")
+        return [Recommendation(
+            title=title, content_type="unknown", score=0.0, vote_average=0.0, genres=[],
+            explanation="\n".join(lines),
+        )]
+
+    ct_label = f"{meta.content_type.upper()} — ID {meta.tmdb_id}"
+    genres_str = ", ".join(meta.genres) or "none"
+    lines.append(f"  TMDB: [green]Found[/green] — {ct_label}, genres: [{genres_str}], ★ {meta.vote_average:.1f}")
+
+    # Step 2: Watch index
+    if ctx.watch_index.is_watched(meta):
+        lines.append("  Watch index: [yellow]WATCHED[/yellow] — already in your watch history.")
+        lines.append("  → Excluded because you've already watched it.")
+        return [Recommendation(
+            title=meta.title, content_type=meta.content_type,
+            score=0.0, vote_average=meta.vote_average, genres=meta.genres,
+            explanation="\n".join(lines),
+        )]
+    lines.append("  Watch index: [green]Not watched[/green] — not in watch history.")
+
+    # Step 3: Popularity / vote threshold
+    if meta.vote_count < config.MIN_VOTE_COUNT:
+        lines.append(
+            f"  Popularity: [yellow]Below threshold[/yellow] — "
+            f"only {meta.vote_count} votes (minimum {config.MIN_VOTE_COUNT})."
+        )
+        lines.append("  → Filtered out as too obscure. Lower MIN_VOTE_COUNT in config.py to include it.")
+        return [Recommendation(
+            title=meta.title, content_type=meta.content_type,
+            score=0.0, vote_average=meta.vote_average, genres=meta.genres,
+            explanation="\n".join(lines),
+        )]
+    lines.append(f"  Popularity: [green]OK[/green] — {meta.vote_count} votes.")
+
+    # Step 4: Candidate pool (we can't replay the last query, so explain what gets it included)
+    lines.append(
+        "  Candidate pool: Title would need to appear via TMDB Discover filters "
+        "(matching genres/country/language) OR be suggested by Claude's semantic search."
+    )
+    lines.append(
+        "  → If it didn't appear, try a broader query or mention it by name "
+        "(e.g. \"something like <Title>\")."
+    )
+
+    return [Recommendation(
+        title=meta.title, content_type=meta.content_type,
+        score=0.0, vote_average=meta.vote_average, genres=meta.genres,
+        explanation="\n".join(lines),
+    )]
+
+
 def ask(query: str, ctx: RecommendContext, top_n_override: int | None = None) -> list[Recommendation]:
     """Answer a natural language recommendation query end-to-end."""
+    why_not_title = _extract_why_not_title(query)
+    if why_not_title:
+        return _handle_why_not(why_not_title, ctx)
+
     intent = parse_intent(query, ctx.anthropic_client)
     if top_n_override is not None:
         intent.top_n = top_n_override
