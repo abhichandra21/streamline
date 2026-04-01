@@ -3,8 +3,8 @@ import os
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "55a3ba0fd07d2cd884871536b48dd04f")
 
 PLATFORM_PATHS = {
-    "netflix": "/home/abhishek/Claude/netflix/2468198246996321264/CONTENT_INTERACTION/ViewingActivity.csv",
-    "prime": None,    # set when data arrives
+    "netflix": os.path.join(os.path.dirname(__file__), "data/netflix/2468198246996321264/CONTENT_INTERACTION/ViewingActivity.csv"),
+    "prime": os.path.join(os.path.dirname(__file__), "data/prime_video/Your Prime Video Viewing Activity/Viewing History.csv"),
     "disney": None,
     "hbo": None,
 }

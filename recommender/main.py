@@ -5,6 +5,7 @@ import sys
 import config
 from recommender.engine import Recommendation, recommend
 from recommender.ingestion.netflix import parse as parse_netflix
+from recommender.ingestion.prime import parse as parse_prime
 from recommender.signals import compute_scores
 from recommender.taste_profile import build_profile
 from recommender.tmdb_client import TmdbClient
@@ -12,7 +13,7 @@ from recommender.tmdb_client import TmdbClient
 
 def load_all_events():
     events = []
-    parsers = {"netflix": parse_netflix}
+    parsers = {"netflix": parse_netflix, "prime": parse_prime}
     for platform, parser in parsers.items():
         path = config.PLATFORM_PATHS.get(platform)
         if path:

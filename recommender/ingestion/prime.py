@@ -1,15 +1,75 @@
+import csv
+import re
+from datetime import datetime, timedelta
+
 from .base import WatchEvent
+
+MIN_WATCH_SECONDS = 20 * 60  # 20 minutes — filters abandoned/skimmed content
+
+# Matches the season/series suffix at the end of a Prime title.
+# Covers: " - Season 2", ", Season 1", " Season Two", " The Final Season", etc.
+_SEASON_RE = re.compile(
+    r'(?:\s*[,-]?\s+(?:Season|Series)\s+(?:\d+|\w+)|\s+The\s+Final\s+Season)\s*$',
+    re.IGNORECASE,
+)
+
+_KEEP_MATERIAL = {'Feature', 'Full'}
+
+
+def _classify(title: str) -> tuple[str, str]:
+    """Return (content_type, series_name) for a Prime title.
+
+    Strategy: strip the season suffix, then split on the last '-' to separate
+    the optional episode title from the series name. Episode titles may contain
+    hyphens themselves (e.g. "Mid-way to Mid-town"), so we always use the last
+    '-' as the separator.
+    """
+    base = _SEASON_RE.sub('', title)
+    if base == title:
+        # No season marker found — treat as movie
+        return 'movie', title
+    # Season marker was present → it's a TV episode or season entry
+    if '-' in base:
+        series_name = base.rsplit('-', 1)[1].strip().rstrip(',')
+    else:
+        series_name = base.strip().rstrip(',')
+    return 'tv', series_name
+
+
+def _clean(s: str) -> str:
+    return s.strip().strip('"')
 
 
 def parse(filepath: str) -> list[WatchEvent]:
-    """
-    Parse Amazon Prime Video watch history CSV.
-    Not yet implemented — waiting for export data.
-
-    Expected columns (update when data arrives):
-    Title, WatchedDate, WatchedDurationSeconds, ...
-    """
-    raise NotImplementedError(
-        "Prime Video parser not implemented. "
-        "Set config.PLATFORM_PATHS['prime'] = None until data arrives."
-    )
+    """Parse Prime Video Viewing History CSV into WatchEvents."""
+    events = []
+    with open(filepath, newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if _clean(row['Material Type Description']) not in _KEEP_MATERIAL:
+                continue
+            try:
+                secs = float(row['Seconds Viewed'])
+            except (ValueError, TypeError):
+                continue
+            if secs < MIN_WATCH_SECONDS:
+                continue
+            try:
+                timestamp = datetime.strptime(
+                    _clean(row['Playback Start Datetime (UTC)']), '%Y-%m-%dT%H:%M:%SZ'
+                )
+            except ValueError:
+                continue
+            title = _clean(row['Title'])
+            content_type, series_name = _classify(title)
+            events.append(WatchEvent(
+                platform='prime',
+                title=title,
+                content_type=content_type,
+                series_name=series_name,
+                watched_duration=timedelta(seconds=secs),
+                total_duration=None,
+                timestamp=timestamp,
+                profile=_clean(row['Profile Type']),
+            ))
+    return events
