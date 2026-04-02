@@ -5,34 +5,52 @@
 Two-phase LLM pipeline. The offline phase runs once (or on demand) to build persistent artifacts. The online phase runs on every query.
 
 ```
-OFFLINE                                     ONLINE
-───────────────────────────────────         ──────────────────────────────────
-Watch history CSVs                          User query (natural language)
-      │                                           │
-      ▼                                           ▼
-  Ingestion                              parse_intent()  ← Claude Sonnet
-  (netflix/prime/manual parsers)               │
-      │                                    QueryIntent
-      ▼                                    (genres, countries,
-  TMDB metadata fetch                       languages, year range,
-  (cached to disk)                          content_type, top_n, ...)
-      │                                           │
-      ▼                                           ▼
-  Watch index                           TMDB Discover API
-  (tmdb_ids + normalized titles)        (filtered candidates)
-      │                                           │
-      ▼                                           ▼
-  Claude Haiku enrichment               Filter watched titles
-  (2-3 sentence descriptions,           (via watch index)
-   cached per tmdb_id)                         │
-      │                                          ▼
-      ▼                                   enrich_batch()  ← Claude Haiku
-  Taste profile                          (cached descriptions)
-  (Claude Sonnet reads top 50                    │
-   titles + enrichments, writes                  ▼
-   a multi-cluster taste summary)        rank_candidates()  ← Claude Sonnet
-                                         (ranks against taste profile,
-                                          explains fit, returns top_n)
+OFFLINE                                      ONLINE
+────────────────────────────────────         ─────────────────────────────────────
+Watch history CSVs                           User query (natural language)
+      |                                            |
+      v                                            v
+  Ingestion                               parse_intent()  <- Claude Sonnet
+  (netflix/prime/manual parsers)                |
+      |                                     QueryIntent
+      v                                     (genres, countries, languages,
+  TMDB metadata fetch                        year range, content_type, top_n,
+  (with title cleanup fallback;              platforms, similar_to, moods...)
+   cached to disk)                                 |
+      |                                            v
+      v                                   +-------------------+
+  Watch index                             | TMDB Discover API |  <- structured filter
+  (tmdb_ids + normalized titles           | (filtered by       |
+   with content type)                     |  intent fields)    |
+      |                                   +--------+----------+
+      v                                            |
+  Claude Haiku enrichment                          |     +---------------------+
+  (2-3 sentence descriptions,                      +---->| Claude suggestions   | <- semantic
+   only cached on success)                         |     | (always-on, uses     |
+      |                                            |     |  taste profile +     |
+      v                                            |     |  similar_to context) |
+  Engagement scoring                               |     +--------+------------+
+  (completion + rewatch + recency;                 |              |
+   true half-life decay)                           v              v
+      |                                     Merge + deduplicate candidates
+      v                                            |
+  Taste profile                                    v
+  (Claude Sonnet processes ALL                Filter watched titles
+   enriched titles in batches,              (content-type-aware)
+   merges into multi-cluster                       |
+   prose summary)                                  v
+                                            Annotate streaming availability
+                                            (TMDB watch providers API, cached)
+                                                   |
+                                                   v
+                                            enrich_batch()  <- Claude Haiku
+                                            (cached descriptions)
+                                                   |
+                                                   v
+                                            rank_candidates()  <- Claude Sonnet
+                                            (query relevance primary,
+                                             taste profile secondary,
+                                             returns top_n with explanations)
 ```
 
 ## Components
@@ -43,144 +61,129 @@ Watch history CSVs                          User query (natural language)
 |--------|--------|------------|
 | `netflix.py` | `ViewingActivity.csv` | title, duration, timestamp, profile |
 | `prime.py` | `Viewing History.csv` | title, duration, timestamp |
-| `manual.py` | `data/manual/tv.csv` + `movies.csv` | title only; synthetic duration + 2022-01-01 date |
+| `manual.py` | `data/manual/tv.csv` + `movies.csv` | title only; synthetic duration + current timestamp |
 
-All parsers emit `WatchEvent` dataclasses (defined in `base.py`). Manual entries use a neutral past date and full-watch duration as proxies since no real viewing data exists.
+All parsers emit `WatchEvent` dataclasses (defined in `base.py`). Manual entries use `datetime.now()` as timestamp so they score competitively with platform data. Each file type deduplicates independently (TV and movie lists use separate seen sets).
 
 ### Signals (`recommender/signals.py`)
 
 Computes a score per unique title from raw watch events:
 
-- **Completion ratio** — `watched_duration / total_duration`
-- **Rewatch bonus** — multiplier for titles watched more than once
-- **Recency decay** — exponential decay with configurable half-life (default 90 days)
-
-Used by the taste profile builder to select the most meaningful titles.
+- **Completion ratio** (50%) — `watched_duration / runtime` (uses TMDB runtime when available, falls back to 45min TV / 90min movie)
+- **Rewatch bonus** (30%) — log-scale multiplier for titles watched more than once
+- **Recency decay** (20%) — true half-life decay: `0.5 ^ (days / half_life_days)`
 
 ### TMDB Client (`recommender/tmdb_client.py`)
 
-Two roles:
+Three roles:
 
-1. **Metadata lookup** (`get_metadata`) — text search by title + content type, returns `TmdbMetadata` (genres, cast, keywords, vote average, language, director/creator). Cached at `recommender/cache/tmdb/`.
+1. **Metadata lookup** (`get_metadata`) — text search by title + content type, returns `TmdbMetadata`. On miss, tries cleaned title variants (strips parenthetical suffixes, edition markers, episode prefixes, season markers) and falls back to alternate content type. Cached at `recommender/cache/tmdb/`.
 
-2. **Candidate discovery** (`search_by_filters`) — calls the TMDB Discover endpoint with genre IDs, origin countries, languages, and year range. Returns up to `size` results with pagination. Used by the online query path.
+2. **Candidate discovery** (`search_by_filters`) — calls TMDB Discover endpoint with genre IDs, origin countries, languages, and year range. Page-limited to `MAX_DISCOVER_PAGES` (20). Failed fetches are logged, not silently swallowed.
 
-Genre name → TMDB ID mappings are stored as module-level dicts (`MOVIE_GENRE_IDS`, `TV_GENRE_IDS`).
+3. **Watch providers** (`get_watch_providers`) — looks up flatrate streaming availability by region. Cached at `recommender/cache/providers/`.
+
+Genre name -> TMDB ID mappings are stored as module-level dicts. TV has no "thriller" genre; it maps to Mystery (9648).
 
 ### Watch Index (`recommender/watch_index.py`)
 
 Persisted at `recommender/cache/watch_index.json`.
 
-Dual-key lookup for cross-platform deduplication:
-- **Primary key** — TMDB ID (reliable, platform-agnostic)
-- **Fallback key** — normalized title (lowercased, parentheticals stripped)
+Content-type-aware dual-key lookup:
+- **Primary key** — TMDB ID
+- **Fallback key** — `(normalized_title, content_type)` tuple
 
-The `_normalize()` function strips suffixes like `(4K UHD)` or `(Hindi Subtitled)` that platforms append to titles. Deduplication at build time is TMDB-ID-first: if two events resolve to the same TMDB ID, only one entry is kept.
+This prevents cross-media false matches (watching the TV show "Fargo" won't block the movie "Fargo" from recommendations).
 
 ### Enricher (`recommender/enricher.py`)
 
-Calls Claude Haiku (`claude-haiku-4-5-20251001`) to generate a 2-3 sentence semantic description per title, capturing mood, pacing, tone, cultural flavor, and themes.
-
-Cache layout:
-```
-recommender/cache/enrichments/
-  tv/{tmdb_id}.txt
-  movie/{tmdb_id}.txt
-  unknown/{title-slug}.txt    ← titles TMDB couldn't resolve
-  index.json                  ← title → description map for fast reload
-```
-
-Falls back to a keyword string (genres + cast + language) on API error or timeout. Timeout is 30 seconds per call.
+Calls Claude Haiku to generate 2-3 sentence semantic descriptions per title. Only successful LLM responses are cached — fallback descriptions (keyword strings) are not persisted, allowing retry on subsequent runs.
 
 ### Taste Profile Builder (`recommender/taste_profile_builder.py`)
 
-Takes the top 50 titles by signal score, filters to those with enrichments, and asks Claude Sonnet (`claude-sonnet-4-6`) to write a multi-cluster taste profile — a prose document describing viewing patterns, tone preferences, and engagement signals.
+Processes ALL enriched titles (no limit) in batches of 200. Each batch produces a mini taste profile, then a merge pass consolidates them into one document covering every taste cluster. Includes rate limit retry with backoff.
 
-The profile is saved to `recommender/cache/taste_profile.txt` and loaded on every query. It is the primary personalisation artifact.
+Previous profiles are auto-backed up with timestamps before rebuild.
+
+Negative preferences from the feedback system are included in the prompt, generating a "What you don't enjoy" section.
+
+### Feedback (`recommender/feedback.py`)
+
+Persists user feedback at `recommender/cache/feedback.json`:
+
+- **Liked/disliked ratings** — applied as score multipliers (1.3x liked, 0.5x disliked) during profile rebuild
+- **Title additions** — added to watch history with current timestamp
+- Disliked titles inform negative preference prompting in the taste profile
 
 ### Query Engine (`recommender/query_engine.py`)
 
-The online pipeline in three steps:
+The online pipeline:
 
-**1. `parse_intent(query, client)`**
+**1. Intent parsing** — Claude Sonnet parses natural language into `QueryIntent` with validation, defaults, and type coercion. Supports conversational context (refinements like "more like that", "but British"). Detects platform filters ("on Netflix"). All API calls have 30s timeout.
 
-Claude Sonnet parses the natural language query into a `QueryIntent` dataclass:
+**2. Hybrid candidate generation** — Two sources run in parallel:
+  - TMDB Discover (structured metadata filter)
+  - Claude suggestions (semantic, taste-aware — always runs, not just as fallback)
+  
+  Both TV and movie versions are kept for suggested titles (ranker decides). Results are deduplicated by TMDB ID.
 
-```python
-@dataclass
-class QueryIntent:
-    genres: list[str]
-    origin_countries: list[str]       # ISO-3166 alpha-2
-    languages: list[str]              # ISO-639-1
-    mood_descriptors: list[str]
-    similar_to: list[str]
-    max_runtime_minutes: int | None
-    year_from: int | None
-    year_to: int | None
-    unwatched_only: bool
-    special_intent: str | None        # "abandoned", "watchlist", "family"
-    content_type: str                 # "tv", "movie", "both"
-    top_n: int                        # 1 default; 3-5 for "a few"/"some options"
-```
+**3. Watch filter** — Content-type-aware exclusion via watch index.
 
-**2. TMDB Discover + watch filter**
+**4. Streaming availability** — Each candidate annotated with flatrate providers for the configured region. Optionally filtered to user's subscribed platforms.
 
-`search_by_filters` is called with the parsed intent fields. Results are filtered through `watch_index.is_watched()`. If zero candidates remain, `_generate_suggestions()` asks Claude for specific title suggestions which are then looked up via TMDB.
+**5. Ranking** — Claude Sonnet ranks with query relevance as primary signal, taste profile as tiebreaker. Returns JSON with title, explanation, and score.
 
-**3. `rank_candidates(query, taste_profile, candidates, enrichments, client, top_n)`**
+**Special modes:**
+- `"why not X?"` — traces a title through the pipeline and explains exactly where it was filtered
+- `"abandoned"` queries — checks watch history for partial viewing and advises whether to continue
 
-Claude Sonnet receives the taste profile, the query, and the candidate list (with enrichment descriptions). It returns a ranked JSON array with `title`, `explanation`, and `score`. Hallucinated titles (not in the candidate set) are silently dropped. Results are sliced to `top_n`.
+### Web UI (`recommender/web.py`)
 
-### Setup Orchestration (`recommender/setup.py`)
-
-Coordinates the offline pipeline:
-
-1. Load watch events from all sources
-2. If `--refresh-data` or no watch index: fetch TMDB metadata → build watch index → run `enrich_batch` → save `index.json`
-3. If `--refresh-profile` or no taste profile: run `build_taste_profile` → save to disk
-
-Skipping is index-existence-gated: if `watch_index.json` exists and no refresh flags are set, the expensive steps are skipped entirely.
+Flask app serving:
+- `/` — Home: search bar (HTMX-powered), taste profile clusters (expandable, markdown-rendered), archive poster wall
+- `/history` — Watch archive with switchable views (list, poster grid, compact). Search + type filter.
+- `/title/:id` — Title detail with poster, TMDB overview, AI analysis, credits, keywords, TMDB link
+- `/recommend` — Standalone discover page
 
 ### CLI (`recommender/main.py`)
 
-`load_context()` assembles a `RecommendContext` from disk (watch index, taste profile, TMDB client, Anthropic client). Exits with a clear error if required artifacts are missing.
-
-Two modes:
-- **Single-shot**: `python3 -m recommender.main "query"`
-- **Interactive REPL**: `python3 -m recommender.main`
+Rich-powered output with spinners during API calls and panel-formatted results. Stderr/stdout separation for pipe-friendly usage. Interactive REPL with conversational context and inline feedback commands (`+liked`, `+disliked`, `+add`).
 
 ## Cache Layout
 
 ```
 recommender/cache/
-  tmdb/                        TMDB metadata (JSON, keyed by title+type)
+  tmdb/                          TMDB metadata (JSON, by content_type/tmdb_id)
   enrichments/
     tv/{tmdb_id}.txt
     movie/{tmdb_id}.txt
     unknown/{slug}.txt
-    index.json                 title → description index
-  watch_index.json             [{tmdb_id, title, content_type}, ...]
-  taste_profile.txt            Claude Sonnet prose output
+    index.json                   title -> description index
+  providers/
+    {content_type}/{region}/{tmdb_id}.json
+  watch_index.json               [{tmdb_id, title, content_type}, ...]
+  taste_profile.txt              Claude Sonnet prose output
+  taste_profile_*.txt            Timestamped backups
+  feedback.json                  User ratings and additions
 ```
 
 ## Configuration (`config.py`)
 
 | Key | Description |
 |-----|-------------|
-| `TMDB_API_KEY` | TMDB v3 API key |
+| `TMDB_API_KEY` | TMDB v3 API key (from env) |
 | `ANTHROPIC_API_KEY` | Anthropic API key (from env) |
-| `PLATFORM_PATHS` | Dict of platform → CSV path |
-| `MANUAL_TV_PATH` | Path to `data/manual/tv.csv` |
-| `MANUAL_MOVIES_PATH` | Path to `data/manual/movies.csv` |
-| `CACHE_DIR` | TMDB metadata cache |
-| `ENRICHMENT_CACHE_DIR` | Enrichment text cache |
-| `TASTE_PROFILE_PATH` | Taste profile file |
-| `WATCH_INDEX_PATH` | Watch index JSON |
-| `RECENCY_HALF_LIFE_DAYS` | Signal decay rate (default 90) |
+| `PLATFORM_PATHS` | Dict of platform -> CSV path |
+| `DEFAULT_TOP_N` | Default results per query (3) |
+| `MIN_VOTE_COUNT` | Minimum TMDB votes for discover (20) |
+| `RECENCY_HALF_LIFE_DAYS` | Signal decay rate (90) |
+| `WATCH_REGION` | Region for streaming providers (US) |
+| `STREAMING_PLATFORMS` | User's subscribed platforms |
+| `FEEDBACK_PATH` | Feedback JSON path |
 
 ## Model Usage
 
 | Model | Where | Why |
 |-------|-------|-----|
-| `claude-haiku-4-5-20251001` | Enricher | High volume, simple task, cheap |
-| `claude-sonnet-4-6` | Taste profile, intent parser, ranker | Complex reasoning, personalisation |
+| `claude-haiku-4-5-20251001` | Enricher | High volume, simple descriptions, cheap |
+| `claude-sonnet-4-6` | Taste profile, intent parser, ranker, suggestions | Complex reasoning, personalisation |

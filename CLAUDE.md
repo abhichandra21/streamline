@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Streamline is a personal streaming recommendation engine. It ingests real watch history (Netflix, Prime Video, manual lists), enriches titles via TMDB and Claude AI, builds a taste profile, then ranks new candidates against that profile for natural language queries.
+Streamline is a personal streaming recommendation engine. It ingests real watch history (Netflix, Prime Video, manual lists), enriches titles via TMDB and Claude AI, builds a full taste profile from all watched content, then answers natural language queries using hybrid candidate generation (TMDB Discover + Claude semantic suggestions).
 
 ## Commands
 
@@ -15,54 +15,52 @@ python3 -m pytest tests/ -v
 # Run a single test file
 python3 -m pytest tests/test_query_engine.py -v
 
-# Run a single test
-python3 -m pytest tests/test_query_engine.py::test_parse_intent_basic -v
+# Everything goes through ./recommend:
+./recommend "good British crime drama"        # single query
+./recommend                                    # interactive REPL
+./recommend setup                              # first-time offline setup
+./recommend setup --refresh-data               # re-fetch TMDB + rebuild all
+./recommend setup --refresh-profile            # rebuild taste profile only
+./recommend --debug "spy thriller"             # full pipeline trace
+./recommend --liked "Title"                    # feedback
+./recommend --add "Title" --type tv            # add to watch history
 
-# Offline setup (fetches metadata, builds enrichments + taste profile)
-python3 -m recommender.setup
-# With flags: --refresh-data, --refresh-profile
-
-# Interactive query mode
-python3 -m recommender.main
-
-# Single query
-python3 -m recommender.main "good British crime drama"
+# Web UI
+./recommend-web start                          # http://localhost:5050
+./recommend-web stop
+./recommend-web restart
 ```
 
-Required env vars: `TMDB_API_KEY`, `ANTHROPIC_API_KEY`.
-
-No build step, no linter configured. Pure Python, no venv checked in.
+Required env vars in `.env`: `TMDB_API_KEY`, `ANTHROPIC_API_KEY`.
 
 ## Architecture
 
 Two-phase LLM pipeline:
 
-**Offline (setup.py):** Ingest CSVs -> TMDB metadata fetch -> watch index build -> Claude Haiku enrichment -> Claude Sonnet taste profile generation. Each step is cached and skipped on subsequent runs unless `--refresh-*` flags are passed.
+**Offline (setup.py):** Ingest CSVs -> TMDB metadata fetch (with title cleanup fallback) -> watch index build -> Claude Haiku enrichment (only caches successes) -> Claude Sonnet taste profile (batched, processes ALL enriched titles, auto-backs up previous).
 
-**Online (query_engine.py):** Parse natural language intent (Sonnet) -> TMDB Discover filter -> exclude watched titles -> enrich candidates (Haiku) -> rank against taste profile (Sonnet) -> return scored recommendations.
-
-### Model Usage
-- **Claude Haiku** — cheap/fast enrichment (2-3 sentence title descriptions)
-- **Claude Sonnet** — intent parsing, candidate ranking, taste profile building
+**Online (query_engine.py):** Parse intent (Sonnet, supports conversational context) -> hybrid candidate generation (TMDB Discover + Claude suggestions, always both) -> content-type-aware watch filter -> streaming availability annotation -> rank (Sonnet, query relevance primary, taste profile secondary).
 
 ### Key Modules
-- `recommender/ingestion/` — Platform parsers (Netflix, Prime, manual). Each exposes `parse()` returning `WatchEvent` list.
-- `recommender/tmdb_client.py` — TMDB metadata lookup and discover endpoint. Caches to `recommender/cache/tmdb/`.
-- `recommender/watch_index.py` — Dual-key dedup (TMDB ID primary, normalized title fallback).
-- `recommender/enricher.py` — Haiku enrichment with 30s timeout. Falls back to keyword string on failure.
-- `recommender/taste_profile_builder.py` — Sonnet analyzes top 50 titles by engagement score.
-- `recommender/signals.py` — Engagement scoring: completion (50%) + rewatch (30%) + recency decay (20%).
-- `recommender/query_engine.py` — Full online pipeline. Handles special intents ("abandoned", "watchlist", "family").
+- `recommender/ingestion/` — Platform parsers. Manual titles use `datetime.now()` for competitive scoring.
+- `recommender/tmdb_client.py` — Metadata lookup with title cleanup fallback (strips suffixes, tries alternate content type), discover endpoint (page-limited), watch providers.
+- `recommender/watch_index.py` — Content-type-aware dual-key dedup (TMDB ID + `(normalized_title, content_type)`).
+- `recommender/enricher.py` — Haiku enrichment, 30s timeout. Only caches successful responses.
+- `recommender/taste_profile_builder.py` — Batched profile builder (200 titles/batch, rate limit retry, merge pass). No top-N limit.
+- `recommender/signals.py` — Scoring: completion (50%) + rewatch (30%) + true half-life recency decay (20%).
+- `recommender/query_engine.py` — Full online pipeline. "Why not X?" trace mode, conversational context, platform filtering.
+- `recommender/feedback.py` — Liked/disliked ratings, title additions. Score multipliers applied at profile rebuild.
+- `recommender/web.py` — Flask web UI with HTMX search, poster grid, taste profile clusters.
+- `recommender/main.py` — Rich CLI with spinners, panels, stderr/stdout separation, REPL with inline feedback.
 
-### Data Models (dataclasses)
-- `WatchEvent` — ingestion output (platform, title, content_type, duration, timestamp)
-- `QueryIntent` — parsed query (genres, countries, languages, moods, year range, content_type, top_n)
-- `TmdbMetadata` — TMDB response (tmdb_id, title, genres, cast, vote_average)
-- `Recommendation` — final output (title, score, explanation)
+### Data Models
+- `QueryIntent` — genres, countries, languages, moods, similar_to, platforms, content_type, top_n
+- `Recommendation` — title, score, explanation, streaming_providers
+- `ConversationContext` — tracks last query/results for refinement ("more like that")
 
 ### Cache Layout
-All under `recommender/cache/`: `tmdb/` (metadata JSON), `enrichments/` (descriptions + index.json), `watch_index.json`, `taste_profile.txt`.
+All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ index.json), `providers/`, `watch_index.json`, `taste_profile.txt` (+ timestamped backups), `feedback.json`.
 
 ## Configuration
 
-All in `config.py`. Key tunables: `RECENCY_HALF_LIFE_DAYS` (90), `CANDIDATE_POOL_SIZE`, `MIN_VOTE_COUNT`, `DEFAULT_TOP_N`. Platform CSV paths are in `PLATFORM_PATHS`, `MANUAL_TV_PATH`, `MANUAL_MOVIES_PATH`.
+All in `config.py`. Key tunables: `DEFAULT_TOP_N` (3), `MIN_VOTE_COUNT` (20), `RECENCY_HALF_LIFE_DAYS` (90), `WATCH_REGION` (US), `STREAMING_PLATFORMS` (empty = annotate only).
