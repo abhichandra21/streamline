@@ -75,7 +75,11 @@ class TmdbClient:
 
     def _search(self, title: str, content_type: str) -> int | None:
         endpoint = "search/tv" if content_type == "tv" else "search/movie"
-        data = self._get(endpoint, {"query": title})
+        try:
+            data = self._get(endpoint, {"query": title})
+        except Exception as exc:
+            log.debug("TMDB search error for %r (%s): %s", title, content_type, exc)
+            return None
         results = data.get("results", [])
         return results[0]["id"] if results else None
 
