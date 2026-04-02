@@ -200,7 +200,9 @@ def rank_candidates(
         f'- score: float 0-1 (how well it matches the QUERY, boosted slightly by taste fit)\n\n'
         f'Return EXACTLY the top {top_n} ranked candidates, no more.'
     )
-    response_text = client.generate(prompt, role="reason", max_tokens=1000)
+    # Scale output tokens based on result count — ~150 tokens per result + overhead
+    rank_tokens = max(1000, top_n * 200 + 200)
+    response_text = client.generate(prompt, role="reason", max_tokens=rank_tokens)
 
     log.debug("Raw ranking response: %s", response_text[:500])
     try:
