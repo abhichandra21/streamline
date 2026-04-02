@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -126,13 +127,81 @@ class TmdbClient:
             runtime_minutes=runtime_minutes,
         )
 
+    def _clean_title_variants(self, title: str) -> list[str]:
+        """Generate cleaned title variants for TMDB search fallback.
+
+        Returns a list of titles to try, most specific first:
+        1. Original title
+        2. Stripped parenthetical suffixes: (English Subtitled), (4K UHD), (Hindi), etc.
+        3. After last hyphen (for "EpisodeName-SeriesName" Prime patterns)
+        4. Before first colon (for "Show: Season X: Episode" Netflix patterns)
+        """
+        variants = [title]
+        seen = {title}
+
+        # Strip parenthetical suffixes
+        stripped = re.sub(r'\s*\([^)]*(?:Subtitl|UHD|Hindi|English|Narrat|4K|Dubbed|Version|Edition|UNRATED|REPACK|Theatrical)[^)]*\)\s*$', '', title, flags=re.IGNORECASE).strip()
+        if stripped and stripped != title and stripped not in seen:
+            variants.append(stripped)
+            seen.add(stripped)
+
+        # Strip non-parenthetical edition/version suffixes
+        stripped_edition = re.sub(r'\s+(?:Theatrical|Directors?\s*Cut|Unrated|Repack|Extended|Special)\s*(?:Edition|Version)?\s*$', '', stripped, flags=re.IGNORECASE).strip()
+        if stripped_edition and stripped_edition != stripped and stripped_edition not in seen:
+            variants.append(stripped_edition)
+            seen.add(stripped_edition)
+
+        # Strip year suffix like (2004)
+        stripped_year = re.sub(r'\s*\(\d{4}\)\s*$', '', title).strip()
+        if stripped_year and stripped_year != title and stripped_year not in seen:
+            variants.append(stripped_year)
+            seen.add(stripped_year)
+
+        # After last hyphen (Prime episode pattern: "EpisodeName-SeriesName")
+        if '-' in title:
+            after_hyphen = title.rsplit('-', 1)[1].strip()
+            # Strip trailing S1/S2/etc season markers
+            after_hyphen = re.sub(r'\s+S\d+\s*$', '', after_hyphen).strip()
+            if len(after_hyphen) > 3 and after_hyphen not in seen:
+                variants.append(after_hyphen)
+                seen.add(after_hyphen)
+
+        # Before first colon (Netflix pattern: "Show: Season: Episode")
+        if ':' in title:
+            before_colon = title.split(':')[0].strip()
+            # Skip if it's just "Episode N" or too generic
+            if (len(before_colon) > 2
+                    and before_colon not in seen
+                    and not re.match(r'^Episode\s+\d+$', before_colon, re.IGNORECASE)):
+                variants.append(before_colon)
+                seen.add(before_colon)
+
+        return variants
+
     def get_metadata(self, title: str, content_type: str) -> TmdbMetadata | None:
-        """Fetch and cache metadata for a single title. Returns None if not found."""
-        tmdb_id = self._search(title, content_type)
-        if tmdb_id is None:
-            log.debug("TMDB search miss: %r (%s)", title, content_type)
+        """Fetch and cache metadata for a single title. Returns None if not found.
+
+        Tries cleaned title variants if the original search fails.
+        """
+        alt_type = "tv" if content_type == "movie" else "movie"
+        for variant in self._clean_title_variants(title):
+            # Try the requested content type first
+            tmdb_id = self._search(variant, content_type)
+            if tmdb_id is not None:
+                if variant != title:
+                    log.debug("TMDB search hit via variant: %r -> %r -> ID %d", title, variant, tmdb_id)
+                else:
+                    log.debug("TMDB search hit: %r -> ID %d", title, tmdb_id)
+                break
+            # Try the alternate content type (misclassified episodes, etc.)
+            tmdb_id = self._search(variant, alt_type)
+            if tmdb_id is not None:
+                content_type = alt_type
+                log.debug("TMDB search hit via alt type: %r -> %r (%s) -> ID %d", title, variant, alt_type, tmdb_id)
+                break
+        else:
+            log.debug("TMDB search miss (all variants): %r (%s)", title, content_type)
             return None
-        log.debug("TMDB search hit: %r -> ID %d", title, tmdb_id)
         cached = self._load_cache(content_type, tmdb_id)
         if cached:
             return self._parse_metadata(cached, content_type)
