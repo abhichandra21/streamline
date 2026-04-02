@@ -1,9 +1,8 @@
 import logging
 import time
 
-import anthropic
-
 from .ingestion.base import WatchEvent
+from .llm import LLMClient
 
 log = logging.getLogger("recommender.profile")
 
@@ -16,7 +15,7 @@ def _build_batch_profile(
     enrichments: dict[str, str],
     batch_num: int,
     total_batches: int,
-    client: anthropic.Anthropic,
+    client: LLMClient,
 ) -> str:
     """Build a mini taste profile from a batch of titles."""
     lines = [
@@ -25,65 +24,49 @@ def _build_batch_profile(
     ]
     history_str = '\n'.join(lines)
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=800,
-        timeout=60.0,
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Analyze this batch ({batch_num}/{total_batches}) of a person's streaming watch history.\n"
-                "Identify distinct taste clusters, preferences for tone/pacing/culture, "
-                "and notable patterns. Be thorough — capture every distinct genre or style cluster "
-                "you see, even small ones.\n"
-                "Write in second person (\"You gravitate toward...\").\n\n"
-                f"Watch history (sorted by engagement score):\n{history_str}"
-            ),
-        }],
+    prompt = (
+        f"Analyze this batch ({batch_num}/{total_batches}) of a person's streaming watch history.\n"
+        "Identify distinct taste clusters, preferences for tone/pacing/culture, "
+        "and notable patterns. Be thorough — capture every distinct genre or style cluster "
+        "you see, even small ones.\n"
+        "Write in second person (\"You gravitate toward...\").\n\n"
+        f"Watch history (sorted by engagement score):\n{history_str}"
     )
-    return message.content[0].text.strip()
+    return client.generate(prompt, role="reason", max_tokens=800, timeout=60.0).strip()
 
 
 def _merge_profiles(
     batch_profiles: list[str],
-    client: anthropic.Anthropic,
+    client: LLMClient,
 ) -> str:
     """Merge multiple batch profiles into one consolidated taste profile."""
     profiles_str = '\n\n---\n\n'.join(
         f"BATCH {i+1}:\n{p}" for i, p in enumerate(batch_profiles)
     )
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1500,
-        timeout=60.0,
-        messages=[{
-            "role": "user",
-            "content": (
-                "Below are taste profile analyses from different segments of the same person's "
-                "watch history. Merge them into one consolidated taste profile.\n\n"
-                "Rules:\n"
-                "- Preserve EVERY distinct taste cluster found across all batches\n"
-                "- Merge overlapping clusters (e.g., if batch 1 says 'British dramas' and batch 3 "
-                "says 'British crime procedurals', combine into one richer cluster)\n"
-                "- Keep the relative strength — clusters that appear across multiple batches are stronger\n"
-                "- Write in second person (\"You gravitate toward...\")\n"
-                "- Be specific about titles, not generic\n\n"
-                f"{profiles_str}"
-            ),
-        }],
+    prompt = (
+        "Below are taste profile analyses from different segments of the same person's "
+        "watch history. Merge them into one consolidated taste profile.\n\n"
+        "Rules:\n"
+        "- Preserve EVERY distinct taste cluster found across all batches\n"
+        "- Merge overlapping clusters (e.g., if batch 1 says 'British dramas' and batch 3 "
+        "says 'British crime procedurals', combine into one richer cluster)\n"
+        "- Keep the relative strength — clusters that appear across multiple batches are stronger\n"
+        "- Write in second person (\"You gravitate toward...\")\n"
+        "- Be specific about titles, not generic\n\n"
+        f"{profiles_str}"
     )
-    return message.content[0].text.strip()
+    return client.generate(prompt, role="reason", max_tokens=1500, timeout=60.0).strip()
 
 
 def build(
     events: list[WatchEvent],
     scores: dict[str, float],
     enrichments: dict[str, str],
-    client: anthropic.Anthropic,
+    client: LLMClient,
     negative_prefs: list[str] | None = None,
 ) -> str:
-    """Build a natural-language taste profile using Claude Sonnet.
+    """Build a natural-language taste profile.
 
     Processes all enriched titles in batches to avoid context window limits
     and ensure full taste coverage.
@@ -113,23 +96,15 @@ def build(
         ]
         history_str = '\n'.join(lines)
 
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1500,
-            timeout=60.0,
-            messages=[{
-                "role": "user",
-                "content": (
-                    "Analyze this person's streaming watch history and write a detailed taste profile.\n"
-                    "Identify distinct taste clusters, preferences for tone/pacing/culture, "
-                    "what they consistently finish, and notable patterns.\n"
-                    "Write in second person (\"You gravitate toward...\")."
-                    f"{negative_section}\n\n"
-                    f"Watch history (sorted by engagement score):\n{history_str}"
-                ),
-            }],
+        prompt = (
+            "Analyze this person's streaming watch history and write a detailed taste profile.\n"
+            "Identify distinct taste clusters, preferences for tone/pacing/culture, "
+            "what they consistently finish, and notable patterns.\n"
+            "Write in second person (\"You gravitate toward...\")."
+            f"{negative_section}\n\n"
+            f"Watch history (sorted by engagement score):\n{history_str}"
         )
-        return message.content[0].text.strip()
+        return client.generate(prompt, role="reason", max_tokens=1500, timeout=60.0).strip()
 
     # Multiple batches — build per-batch profiles then merge
     batches = [scored[i:i + BATCH_SIZE] for i in range(0, len(scored), BATCH_SIZE)]
@@ -144,11 +119,14 @@ def build(
                 profile = _build_batch_profile(batch, enrichments, i + 1, total, client)
                 batch_profiles.append(profile)
                 break
-            except anthropic.RateLimitError:
-                print(f"  Rate limited, waiting {RATE_LIMIT_WAIT}s...")
-                time.sleep(RATE_LIMIT_WAIT)
-        else:
-            print(f"  Warning: batch {i+1} failed after 3 retries, skipping.")
+            except Exception as exc:
+                if "rate" in str(exc).lower() or "429" in str(exc):
+                    print(f"  Rate limited, waiting {RATE_LIMIT_WAIT}s...")
+                    time.sleep(RATE_LIMIT_WAIT)
+                else:
+                    log.warning("Batch %d failed (attempt %d): %s", i + 1, attempt + 1, exc)
+                    if attempt == 2:
+                        print(f"  Warning: batch {i+1} failed after 3 retries, skipping.")
 
     print(f"  Merging {len(batch_profiles)} batch profiles...")
     return _merge_profiles(batch_profiles, client)

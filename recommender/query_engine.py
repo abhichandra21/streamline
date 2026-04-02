@@ -4,12 +4,11 @@ import re
 import sys
 from dataclasses import dataclass, field
 
-import anthropic
-
 import config
 
 from .enricher import enrich, enrich_batch
 from .ingestion.base import WatchEvent
+from .llm import LLMClient
 from .models import Recommendation
 from .tmdb_client import TmdbClient, TmdbMetadata
 from .watch_index import WatchIndex
@@ -62,7 +61,7 @@ class RecommendContext:
     watch_index: "WatchIndex"
     events: list[WatchEvent]
     tmdb_client: TmdbClient
-    anthropic_client: anthropic.Anthropic
+    llm: LLMClient
     cache_dir: str
     providers_cache_dir: str = ""
     watch_region: str = "US"
@@ -108,10 +107,10 @@ def _safe_query_intent(data: dict) -> QueryIntent:
 
 def parse_intent(
     query: str,
-    client: anthropic.Anthropic,
+    client: LLMClient,
     conv_ctx: "ConversationContext | None" = None,
 ) -> QueryIntent:
-    """Parse a natural language query into structured intent using Claude Sonnet."""
+    """Parse a natural language query into structured intent."""
     log.debug("Parsing intent for: %r", query)
 
     context_section = ""
@@ -124,40 +123,33 @@ def parse_intent(
             '"more like #2", "something lighter"). Interpret it relative to the previous query.\n'
         )
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=400,
-        timeout=30.0,
-        messages=[{
-            "role": "user",
-            "content": (
-                'Parse this streaming recommendation query into structured intent. '
-                'Return ONLY valid JSON with these fields:\n'
-                '- genres: list of genre strings e.g. ["crime", "drama"]\n'
-                '- origin_countries: list of ISO-3166 alpha-2 codes e.g. ["GB", "IN"]\n'
-                '- languages: list of ISO-639-1 codes e.g. ["hi", "en"]\n'
-                '- mood_descriptors: list of mood/tone words e.g. ["slow-burn", "feel-good"]\n'
-                '- similar_to: list of title names for similarity search\n'
-                '- max_runtime_minutes: integer or null\n'
-                '- year_from: integer or null\n'
-                '- year_to: integer or null\n'
-                '- unwatched_only: boolean (default true)\n'
-                '- special_intent: one of "abandoned", "watchlist", "family" or null\n'
-                '- content_type: "tv", "movie", or "both"\n'
-                f'- top_n: integer — default is {config.DEFAULT_TOP_N}; use 1 only if user asks for '
-                '"the single best" or "one recommendation"; use 5-10 for "a lot" or "many options"\n'
-                '- platforms: list of streaming platform names the user wants e.g. ["Netflix"] '
-                'from "on Netflix" or "available on Prime" — use exact names like '
-                '"Netflix", "Amazon Prime Video", "Apple TV Plus", "Max", "Disney Plus", '
-                '"Paramount Plus", "Peacock", "Hulu"; empty list if no platform specified\n'
-                f'{context_section}\n'
-                f'Query: "{query}"'
-            ),
-        }],
+    prompt = (
+        'Parse this streaming recommendation query into structured intent. '
+        'Return ONLY valid JSON with these fields:\n'
+        '- genres: list of genre strings e.g. ["crime", "drama"]\n'
+        '- origin_countries: list of ISO-3166 alpha-2 codes e.g. ["GB", "IN"]\n'
+        '- languages: list of ISO-639-1 codes e.g. ["hi", "en"]\n'
+        '- mood_descriptors: list of mood/tone words e.g. ["slow-burn", "feel-good"]\n'
+        '- similar_to: list of title names for similarity search\n'
+        '- max_runtime_minutes: integer or null\n'
+        '- year_from: integer or null\n'
+        '- year_to: integer or null\n'
+        '- unwatched_only: boolean (default true)\n'
+        '- special_intent: one of "abandoned", "watchlist", "family" or null\n'
+        '- content_type: "tv", "movie", or "both"\n'
+        f'- top_n: integer — default is {config.DEFAULT_TOP_N}; use 1 only if user asks for '
+        '"the single best" or "one recommendation"; use 5-10 for "a lot" or "many options"\n'
+        '- platforms: list of streaming platform names the user wants e.g. ["Netflix"] '
+        'from "on Netflix" or "available on Prime" — use exact names like '
+        '"Netflix", "Amazon Prime Video", "Apple TV Plus", "Max", "Disney Plus", '
+        '"Paramount Plus", "Peacock", "Hulu"; empty list if no platform specified\n'
+        f'{context_section}\n'
+        f'Query: "{query}"'
     )
-    log.debug("Raw intent response: %s", message.content[0].text[:500])
+    response_text = client.generate(prompt, role="reason", max_tokens=400)
+    log.debug("Raw intent response: %s", response_text[:500])
     try:
-        data = _parse_json_response(message.content[0].text)
+        data = _parse_json_response(response_text)
         intent = _safe_query_intent(data)
         log.debug("Parsed intent: genres=%s countries=%s languages=%s content_type=%s "
                    "mood=%s similar_to=%s special=%s top_n=%d",
@@ -182,10 +174,10 @@ def rank_candidates(
     taste_profile: str,
     candidates: list[TmdbMetadata],
     enrichments: dict[str, str],
-    client: anthropic.Anthropic,
+    client: LLMClient,
     top_n: int = 1,
 ) -> list[Recommendation]:
-    """Rank candidates against taste profile using Claude Sonnet."""
+    """Rank candidates against taste profile."""
     log.debug("Ranking %d candidates for query: %r (top_n=%d)", len(candidates), query, top_n)
     meta_by_title = {c.title: c for c in candidates}
 
@@ -195,31 +187,24 @@ def rank_candidates(
     )
     log.debug("Candidate list sent to ranker:\n%s", cands_str)
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1000,
-        timeout=30.0,
-        messages=[{
-            "role": "user",
-            "content": (
-                f'Rank these candidates for a user. IMPORTANT: the query is the primary filter — '
-                f'a candidate must match what the user asked for. The taste profile is secondary, '
-                f'used to break ties between candidates that all fit the query.\n\n'
-                f'QUERY: "{query}"\n\n'
-                f'TASTE PROFILE:\n{taste_profile}\n\n'
-                f'CANDIDATES:\n{cands_str}\n\n'
-                f'Return ONLY valid JSON: a list of objects with fields:\n'
-                f'- title: string (exact title from candidates)\n'
-                f'- explanation: string (1-2 sentences why this fits the query and this user)\n'
-                f'- score: float 0-1 (how well it matches the QUERY, boosted slightly by taste fit)\n\n'
-                f'Return the top {top_n} ranked candidates.'
-            ),
-        }],
+    prompt = (
+        f'Rank these candidates for a user. IMPORTANT: the query is the primary filter — '
+        f'a candidate must match what the user asked for. The taste profile is secondary, '
+        f'used to break ties between candidates that all fit the query.\n\n'
+        f'QUERY: "{query}"\n\n'
+        f'TASTE PROFILE:\n{taste_profile}\n\n'
+        f'CANDIDATES:\n{cands_str}\n\n'
+        f'Return ONLY valid JSON: a list of objects with fields:\n'
+        f'- title: string (exact title from candidates)\n'
+        f'- explanation: string (1-2 sentences why this fits the query and this user)\n'
+        f'- score: float 0-1 (how well it matches the QUERY, boosted slightly by taste fit)\n\n'
+        f'Return EXACTLY the top {top_n} ranked candidates, no more.'
     )
+    response_text = client.generate(prompt, role="reason", max_tokens=1000)
 
-    log.debug("Raw ranking response: %s", message.content[0].text[:500])
+    log.debug("Raw ranking response: %s", response_text[:500])
     try:
-        ranked = _parse_json_response(message.content[0].text)
+        ranked = _parse_json_response(response_text)
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         log.warning("Failed to parse ranking response: %s", exc)
         return []
@@ -260,22 +245,15 @@ def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) ->
     ct = matching[0].content_type
     lookup_title = matching[0].series_name if ct == 'tv' else matching[0].title
     meta = ctx.tmdb_client.get_metadata(lookup_title, ct)
-    desc = enrich(meta, ctx.cache_dir, ctx.anthropic_client) if meta else target
+    desc = enrich(meta, ctx.cache_dir, ctx.llm) if meta else target
 
-    message = ctx.anthropic_client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=300,
-        timeout=30.0,
-        messages=[{
-            "role": "user",
-            "content": (
-                f'A user has watched {total_hours:.1f} hours of "{target}".\n\n'
-                f'About "{target}": {desc}\n\n'
-                f'Their taste profile:\n{ctx.taste_profile}\n\n'
-                'Should they continue watching? Give a direct yes/no with 1-2 sentences of reasoning.'
-            ),
-        }],
+    prompt = (
+        f'A user has watched {total_hours:.1f} hours of "{target}".\n\n'
+        f'About "{target}": {desc}\n\n'
+        f'Their taste profile:\n{ctx.taste_profile}\n\n'
+        'Should they continue watching? Give a direct yes/no with 1-2 sentences of reasoning.'
     )
+    response_text = ctx.llm.generate(prompt, role="reason", max_tokens=300)
 
     return [Recommendation(
         title=target,
@@ -283,7 +261,7 @@ def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) ->
         score=0.5,
         vote_average=meta.vote_average if meta else 0.0,
         genres=meta.genres if meta else [],
-        explanation=message.content[0].text.strip(),
+        explanation=response_text.strip(),
     )]
 
 
@@ -394,7 +372,7 @@ def ask(
                     log.debug("'More like #%d' → using %r as similar_to", idx + 1, picked)
                     query = f"more like {picked}"
 
-        intent = parse_intent(query, ctx.anthropic_client, conv_ctx=conv_ctx)
+        intent = parse_intent(query, ctx.llm, conv_ctx=conv_ctx)
         if top_n_override is not None:
             intent.top_n = top_n_override
 
@@ -434,7 +412,7 @@ def ask(
 
     # Source 2: Claude suggestions (semantic, taste-aware — always runs)
     log.debug("Fetching Claude suggestions for semantic coverage (similar_to=%s)", intent.similar_to)
-    suggestions = _generate_suggestions(query, ctx.taste_profile, ctx.anthropic_client,
+    suggestions = _generate_suggestions(query, ctx.taste_profile, ctx.llm,
                                          similar_to=intent.similar_to)
     log.debug("Claude suggested %d titles: %s", len(suggestions), suggestions[:10])
     suggestion_count = 0
@@ -458,7 +436,7 @@ def ask(
 
     log.debug("Enriching %d candidates", len(candidates))
     meta_dict = {c.title: c for c in candidates}
-    enrichments = enrich_batch(meta_dict, ctx.cache_dir, ctx.anthropic_client)
+    enrichments = enrich_batch(meta_dict, ctx.cache_dir, ctx.llm)
 
     # Annotate results with streaming provider data (and optionally filter by platform).
     if ctx.providers_cache_dir:
@@ -470,7 +448,7 @@ def ask(
         # Rank with a larger pool when platform filtering is active, so we have
         # enough candidates after discarding titles not on the requested service.
         rank_size = max(intent.top_n * 3, 15) if requested_platforms else intent.top_n
-        results = rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.anthropic_client, rank_size)
+        results = rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.llm, rank_size)
 
         annotated = []
         for rec in results:
@@ -492,7 +470,7 @@ def ask(
             conv_ctx.last_intent = intent
         return annotated
 
-    results = rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.anthropic_client, intent.top_n)
+    results = rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.llm, intent.top_n)
     if conv_ctx is not None:
         conv_ctx.last_intent = intent
     return results
@@ -501,32 +479,25 @@ def ask(
 def _generate_suggestions(
     query: str,
     taste_profile: str,
-    client: anthropic.Anthropic,
+    client: LLMClient,
     similar_to: list[str] | None = None,
 ) -> list[str]:
-    """Ask Claude to suggest specific titles based on query and taste profile."""
+    """Ask LLM to suggest specific titles based on query and taste profile."""
     similar_ctx = ""
     if similar_to:
         similar_ctx = f'\nThe user specifically wants something like: {", ".join(similar_to)}.\n'
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=300,
-        timeout=30.0,
-        messages=[{
-            "role": "user",
-            "content": (
-                f'A user is looking for: "{query}"\n'
-                f'{similar_ctx}\n'
-                f'Their taste profile:\n{taste_profile}\n\n'
-                'Suggest 20 specific titles that fit the query. '
-                'Prioritize query relevance over general taste match. '
-                'Return ONLY a JSON array of title strings. Be precise with names.'
-            ),
-        }],
+    prompt = (
+        f'A user is looking for: "{query}"\n'
+        f'{similar_ctx}\n'
+        f'Their taste profile:\n{taste_profile}\n\n'
+        'Suggest 20 specific titles that fit the query. '
+        'Prioritize query relevance over general taste match. '
+        'Return ONLY a JSON array of title strings. Be precise with names.'
     )
+    response_text = client.generate(prompt, role="reason", max_tokens=300)
     try:
-        result = _parse_json_response(message.content[0].text)
+        result = _parse_json_response(response_text)
         return [t for t in result if isinstance(t, str)] if isinstance(result, list) else []
     except (json.JSONDecodeError, TypeError, ValueError):
         return []

@@ -7,7 +7,7 @@ import re
 import sys
 from pathlib import Path
 
-import anthropic
+from recommender.llm import create_client
 from flask import Flask, jsonify, render_template, request
 from markupsafe import Markup, escape
 
@@ -58,7 +58,7 @@ def _build_context() -> RecommendContext:
         watch_index=wi.load(config.WATCH_INDEX_PATH),
         events=events,
         tmdb_client=TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR),
-        anthropic_client=anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY),
+        llm=create_client(),
         cache_dir=config.ENRICHMENT_CACHE_DIR,
         providers_cache_dir=config.PROVIDERS_CACHE_DIR,
         watch_region=config.WATCH_REGION,
@@ -264,8 +264,13 @@ def title_detail(tmdb_id: int) -> str:
 
 def run() -> None:
     logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s: %(message)s")
-    if not config.ANTHROPIC_API_KEY or not config.TMDB_API_KEY:
-        print("Error: ANTHROPIC_API_KEY and TMDB_API_KEY must be set.", file=sys.stderr)
+    if not config.TMDB_API_KEY:
+        print("Error: TMDB_API_KEY must be set.", file=sys.stderr)
+        sys.exit(1)
+    try:
+        create_client()
+    except (RuntimeError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     host = os.environ.get("STREAMLINE_HOST", "127.0.0.1")
     port = int(os.environ.get("STREAMLINE_PORT", "5050"))

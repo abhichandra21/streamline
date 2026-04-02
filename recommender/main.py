@@ -2,7 +2,6 @@ import logging
 import sys
 from pathlib import Path
 
-import anthropic
 from rich.console import Console
 from rich.panel import Panel
 
@@ -11,6 +10,7 @@ from recommender import feedback as fb
 from recommender.ingestion.netflix import parse as parse_netflix
 from recommender.ingestion.prime import parse as parse_prime
 from recommender.ingestion.manual import parse as parse_manual
+from recommender.llm import create_client
 from recommender.models import Recommendation
 from recommender.tmdb_client import TmdbClient
 from recommender.query_engine import RecommendContext, ConversationContext, ask
@@ -22,7 +22,7 @@ console_err = Console(stderr=True)   # spinners, progress, warnings
 console_out = Console()              # recommendation results
 
 
-def load_context() -> RecommendContext:
+def load_context(provider: str | None = None) -> RecommendContext:
     events = []
     for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime)]:
         path = config.PLATFORM_PATHS.get(platform)
@@ -33,12 +33,18 @@ def load_context() -> RecommendContext:
 
     index_path = Path(config.WATCH_INDEX_PATH)
     if not index_path.exists():
-        console_err.print("[red]Watch index not found. Run: python -m recommender.setup[/red]")
+        console_err.print("[red]Watch index not found. Run: ./recommend setup[/red]")
         sys.exit(1)
 
     profile_path = Path(config.TASTE_PROFILE_PATH)
     if not profile_path.exists():
-        console_err.print("[red]Taste profile not found. Run: python -m recommender.setup[/red]")
+        console_err.print("[red]Taste profile not found. Run: ./recommend setup[/red]")
+        sys.exit(1)
+
+    try:
+        llm = create_client(provider)
+    except RuntimeError as exc:
+        console_err.print(f"[red]Error: {exc}[/red]")
         sys.exit(1)
 
     return RecommendContext(
@@ -46,7 +52,7 @@ def load_context() -> RecommendContext:
         watch_index=wi.load(config.WATCH_INDEX_PATH),
         events=events,
         tmdb_client=TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR),
-        anthropic_client=anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY),
+        llm=llm,
         cache_dir=config.ENRICHMENT_CACHE_DIR,
         providers_cache_dir=config.PROVIDERS_CACHE_DIR,
         watch_region=config.WATCH_REGION,
@@ -128,6 +134,8 @@ def main() -> None:
     parser.add_argument("--add", metavar="TITLE", help="Add a title to watch history")
     parser.add_argument("--type", choices=["tv", "movie"], default="tv",
                         help="Content type for --add (default: tv)")
+    parser.add_argument("--provider", choices=["anthropic", "gemini"],
+                        help="LLM provider (default: from config/env)")
     args = parser.parse_args()
 
     level = logging.DEBUG if args.debug else logging.WARNING
@@ -154,22 +162,21 @@ def main() -> None:
         console_out.print("[dim]Run python -m recommender.setup --refresh-profile to update your taste profile.[/dim]")
         return
 
-    if not config.ANTHROPIC_API_KEY:
-        console_err.print("[red]Error: ANTHROPIC_API_KEY not set.[/red]")
-        sys.exit(1)
     if not config.TMDB_API_KEY:
         console_err.print("[red]Error: TMDB_API_KEY not set.[/red]")
         sys.exit(1)
 
-    ctx = load_context()
+    ctx = load_context(provider=args.provider)
     log.debug("Context loaded: %d events, %d watched titles",
               len(ctx.events), len(ctx.watch_index.entries))
 
     if args.query:
         query = " ".join(args.query)
+        ctx.llm.usage.reset()
         with console_err.status("[bold magenta]Thinking...[/bold magenta]", spinner="dots"):
             results = ask(query, ctx, top_n_override=args.n)
         print_recommendations(results, query)
+        console_err.print(f"[dim]{ctx.llm.usage.summary()}[/dim]")
         return
 
     console_out.print("Streaming Recommender — ask me anything about what to watch.")
@@ -198,9 +205,11 @@ def main() -> None:
             conv_ctx = ConversationContext(
                 last_query=line, last_intent=placeholder, last_results=[],
             )
+        ctx.llm.usage.reset()
         with console_err.status("[bold magenta]Thinking...[/bold magenta]", spinner="dots"):
             results = ask(line, ctx, top_n_override=args.n, conv_ctx=conv_ctx)
         print_recommendations(results, line)
+        console_err.print(f"[dim]{ctx.llm.usage.summary()}[/dim]")
         conv_ctx.last_query = line
         conv_ctx.last_results = results
         conv_ctx.excluded_titles.update(r.title for r in results)

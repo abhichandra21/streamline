@@ -1,0 +1,35 @@
+# Streamline configuration
+# Secrets (API keys) go in .env, everything else goes here.
+
+# LLM provider: "anthropic" or "gemini"
+provider: anthropic
+
+# Model assignments per provider
+# "fast" is used for enrichment (high volume, simple task)
+# "reason" is used for intent parsing, ranking, taste profile (complex reasoning)
+models:
+  anthropic:
+    fast: claude-haiku-4-5-20251001
+    reason: claude-sonnet-4-6
+  gemini:
+    fast: gemini-2.5-flash
+    reason: gemini-2.5-pro
+
+# Recommendation settings
+default_top_n: 3
+min_vote_count: 20
+recency_half_life_days: 90
+
+# Streaming availability
+watch_region: US
+# Your subscribed platforms. Empty list = annotate only, don't filter.
+# Names must match TMDB provider names.
+streaming_platforms: []
+
+# Data paths (relative to project root)
+platform_paths:
+  netflix: data/netflix/2468198246996321264/CONTENT_INTERACTION/ViewingActivity.csv
+  prime: data/prime_video/Your Prime Video Viewing Activity/Viewing History.csv
+manual_tv_path: data/manual/tv.csv
+manual_movies_path: data/manual/movies.csv
+overrides_path: data/overrides.json
