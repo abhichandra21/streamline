@@ -1,0 +1,17 @@
+[Unit]
+Description=Streamline Web UI
+After=network.target
+
+[Service]
+Type=simple
+User=abhishek
+WorkingDirectory=/home/abhishek/streamline
+EnvironmentFile=/home/abhishek/streamline/.env
+ExecStart=/home/abhishek/streamline/venv/bin/python3 -m recommender.web
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/abhishek/streamline/.web.log
+StandardError=append:/home/abhishek/streamline/.web.log
+
+[Install]
+WantedBy=multi-user.target
