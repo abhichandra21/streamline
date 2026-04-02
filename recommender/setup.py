@@ -78,6 +78,15 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False) -> None
         wi.save(index, config.WATCH_INDEX_PATH)
         console.print(f"  {len(index.entries)} unique titles indexed → {config.WATCH_INDEX_PATH}")
 
+        # Clean up stale cache files for removed/deduped entries
+        removed = wi.cleanup_stale_cache(index, config.ENRICHMENT_CACHE_DIR, config.PROVIDERS_CACHE_DIR)
+        total_removed = sum(removed.values())
+        if total_removed:
+            console.print(f"  Cleaned {total_removed} stale cache files "
+                          f"({removed['enrichments']} enrichments, "
+                          f"{removed['enrichment_index']} index entries, "
+                          f"{removed['providers']} provider files)")
+
         with console.status(f"[bold magenta]Enriching {len(metadata)} titles with Claude Haiku...[/bold magenta]", spinner="dots"):
             enrichments = enrich_batch(metadata, config.ENRICHMENT_CACHE_DIR, claude)
         enrichments_index_path.write_text(json.dumps(enrichments))

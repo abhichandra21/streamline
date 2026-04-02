@@ -111,6 +111,79 @@ def deduplicate(index: WatchIndex) -> WatchIndex:
     return WatchIndex(tmdb_ids=tmdb_ids, normalized_titles=normalized_titles, entries=final)
 
 
+def cleanup_stale_cache(
+    index: WatchIndex,
+    enrichment_cache_dir: str,
+    providers_cache_dir: str,
+) -> dict[str, int]:
+    """Remove cached enrichment and provider files for TMDB IDs not in the index.
+
+    Returns counts of files removed per cache type. Does NOT touch the TMDB
+    metadata cache (useful for re-searches).
+    """
+    valid_ids = index.tmdb_ids
+    valid_titles = {e["title"] for e in index.entries}
+    removed: dict[str, int] = {"enrichments": 0, "enrichment_index": 0, "providers": 0}
+
+    # Clean enrichment text files (tv/*.txt, movie/*.txt, unknown/*.txt)
+    enrich_dir = Path(enrichment_cache_dir)
+    if enrich_dir.exists():
+        for ct_dir in enrich_dir.iterdir():
+            if not ct_dir.is_dir() or ct_dir.name == "__pycache__":
+                continue
+            if ct_dir.name in ("tv", "movie"):
+                for f in ct_dir.glob("*.txt"):
+                    try:
+                        tmdb_id = int(f.stem)
+                        if tmdb_id not in valid_ids:
+                            log.debug("Removing stale enrichment: %s", f)
+                            f.unlink()
+                            removed["enrichments"] += 1
+                    except ValueError:
+                        pass  # not a numeric filename
+            elif ct_dir.name == "unknown":
+                # unknown/ uses slug filenames — harder to map back
+                # leave these alone for safety
+                pass
+
+    # Clean enrichment index.json — remove entries for titles not in index
+    index_json = enrich_dir / "index.json"
+    if index_json.exists():
+        enrichments = json.loads(index_json.read_text())
+        before = len(enrichments)
+        enrichments = {k: v for k, v in enrichments.items() if k in valid_titles}
+        after = len(enrichments)
+        if after < before:
+            index_json.write_text(json.dumps(enrichments))
+            removed["enrichment_index"] = before - after
+
+    # Clean provider cache files
+    prov_dir = Path(providers_cache_dir)
+    if prov_dir.exists():
+        for ct_dir in prov_dir.iterdir():
+            if not ct_dir.is_dir():
+                continue
+            for region_dir in ct_dir.iterdir():
+                if not region_dir.is_dir():
+                    continue
+                for f in region_dir.glob("*.json"):
+                    try:
+                        tmdb_id = int(f.stem)
+                        if tmdb_id not in valid_ids:
+                            log.debug("Removing stale provider cache: %s", f)
+                            f.unlink()
+                            removed["providers"] += 1
+                    except ValueError:
+                        pass
+
+    total = sum(removed.values())
+    if total:
+        log.info("Cache cleanup: removed %d enrichments, %d index entries, %d provider files",
+                  removed["enrichments"], removed["enrichment_index"], removed["providers"])
+
+    return removed
+
+
 def save(index: WatchIndex, path: str) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
