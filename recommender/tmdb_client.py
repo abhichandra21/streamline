@@ -256,7 +256,7 @@ class TmdbClient:
         Results are cached in providers_cache_dir to avoid repeated API calls.
         Returns an empty list if no provider data is available.
         """
-        cache_path = Path(providers_cache_dir) / content_type / f"{tmdb_id}.json"
+        cache_path = Path(providers_cache_dir) / content_type / region / f"{tmdb_id}.json"
         if cache_path.exists():
             cached = json.loads(cache_path.read_text())
             return cached.get("providers", [])

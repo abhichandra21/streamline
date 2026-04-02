@@ -441,7 +441,7 @@ def ask(
     for title in suggestions:
         for ct in content_types:
             meta = ctx.tmdb_client.get_metadata(title, ct)
-            if meta and meta.tmdb_id not in seen_ids and not ctx.watch_index.is_watched(meta):
+            if meta and meta.tmdb_id not in seen_ids and not ctx.watch_index.is_watched(meta) and meta.title not in extra_excludes:
                 candidates.append(meta)
                 seen_ids.add(meta.tmdb_id)
                 suggestion_count += 1
@@ -460,14 +460,17 @@ def ask(
     meta_dict = {c.title: c for c in candidates}
     enrichments = enrich_batch(meta_dict, ctx.cache_dir, ctx.anthropic_client)
 
-    results = rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.anthropic_client, intent.top_n)
-
     # Annotate results with streaming provider data (and optionally filter by platform).
     if ctx.providers_cache_dir:
         meta_by_title = {c.title: c for c in candidates}
         requested_platforms = [
             PLATFORM_ALIASES.get(p.lower(), p) for p in (intent.platforms or [])
         ] or [PLATFORM_ALIASES.get(p.lower(), p) for p in config.STREAMING_PLATFORMS]
+
+        # Rank with a larger pool when platform filtering is active, so we have
+        # enough candidates after discarding titles not on the requested service.
+        rank_size = max(intent.top_n * 3, 15) if requested_platforms else intent.top_n
+        results = rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.anthropic_client, rank_size)
 
         annotated = []
         for rec in results:
@@ -483,10 +486,13 @@ def ask(
                     log.debug("Filtering out %r — not on requested platforms %s", rec.title, requested_platforms)
                     continue
             annotated.append(rec)
+            if len(annotated) == intent.top_n:
+                break
         if conv_ctx is not None:
             conv_ctx.last_intent = intent
         return annotated
 
+    results = rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.anthropic_client, intent.top_n)
     if conv_ctx is not None:
         conv_ctx.last_intent = intent
     return results
