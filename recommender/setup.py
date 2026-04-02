@@ -98,6 +98,13 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False) -> None
             profile = build_taste_profile(events, scores, enrichments, claude,
                                           negative_prefs=negative_prefs or None)
         profile_path.parent.mkdir(parents=True, exist_ok=True)
+        # Auto-backup previous profile before overwriting
+        if profile_path.exists():
+            from datetime import datetime
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup = profile_path.with_name(f"taste_profile_{ts}.txt")
+            profile_path.rename(backup)
+            console.print(f"  Previous profile backed up → {backup.name}")
         profile_path.write_text(profile)
         console.print(f"  Taste profile saved → {config.TASTE_PROFILE_PATH}")
     else:
