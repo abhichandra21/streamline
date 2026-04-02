@@ -35,6 +35,22 @@ PLATFORM_ALIASES: dict[str, str] = {
     "paramount+": "Paramount Plus",
     "peacock": "Peacock",
     "hulu": "Hulu",
+    # UK broadcast networks -> their streaming counterparts
+    "bbc": "BBC iPlayer",
+    "bbc one": "BBC iPlayer",
+    "bbc two": "BBC iPlayer",
+    "bbc iplayer": "BBC iPlayer",
+    "iplayer": "BBC iPlayer",
+    "itv": "ITVX",
+    "itv1": "ITVX",
+    "itvx": "ITVX",
+    "channel 4": "Channel 4",
+    "channel 5": "My5",
+    "all 4": "Channel 4",
+    # UK streaming
+    "britbox": "BritBox",
+    "now tv": "Now TV",
+    "now": "Now TV",
 }
 
 
@@ -453,6 +469,7 @@ def ask(
         results = rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.llm, rank_size)
 
         annotated = []
+        unfiltered = []
         for rec in results:
             meta = meta_by_title.get(rec.title)
             if meta:
@@ -461,6 +478,7 @@ def ask(
                     ctx.watch_region, ctx.providers_cache_dir,
                 )
                 rec.streaming_providers = providers
+            unfiltered.append(rec)
             if requested_platforms:
                 if not any(p in rec.streaming_providers for p in requested_platforms):
                     log.debug("Filtering out %r — not on requested platforms %s", rec.title, requested_platforms)
@@ -468,6 +486,12 @@ def ask(
             annotated.append(rec)
             if len(annotated) == intent.top_n:
                 break
+
+        # If platform filter removed everything, fall back to unfiltered results
+        if not annotated and unfiltered and requested_platforms:
+            log.debug("Platform filter removed all results — returning unfiltered top %d", intent.top_n)
+            annotated = unfiltered[:intent.top_n]
+
         if conv_ctx is not None:
             conv_ctx.last_intent = intent
         return annotated
