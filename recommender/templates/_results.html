@@ -1,26 +1,54 @@
 {% if error %}
-<div class="bg-red-900/30 border border-red-800 rounded-lg p-4 text-sm text-red-300">{{ error }}</div>
+<div style="padding:1.25rem 1.5rem; background:rgba(160,40,40,0.1); border:1px solid rgba(160,40,40,0.3); font-size:0.85rem; color:#c88;">
+  {{ error }}
+</div>
+
 {% elif results %}
-<div class="space-y-4">
+<div style="display:flex; flex-direction:column; gap:0; border-top:1px solid var(--border);">
   {% for r in results %}
-  <div class="bg-gray-900 border border-green-800/40 rounded-xl p-5">
-    <div class="flex items-start justify-between gap-4 mb-2">
-      <div>
-        <span class="font-semibold text-white text-base">{{ loop.index }}. {{ r.title }}</span>
-        <span class="ml-2 text-xs text-gray-400">★ {{ "%.1f"|format(r.vote_average) }}</span>
-        {% if r.genres %}
-        <span class="ml-2 text-xs text-gray-500">[{{ r.genres | join(", ") }}]</span>
-        {% endif %}
+  <div class="result-card" style="display:flex; gap:1.5rem; padding:1.75rem 0; border-bottom:1px solid var(--border); align-items:flex-start;">
+
+    <!-- Frame number -->
+    <div class="frame-number" style="width:4.5rem; flex-shrink:0; text-align:right; padding-top:0.25rem;">{{ loop.index }}</div>
+
+    <!-- Gold vertical line -->
+    <div style="width:1px; background:var(--gold-dim); align-self:stretch; flex-shrink:0; opacity:0.5;"></div>
+
+    <!-- Content -->
+    <div style="flex:1; min-width:0;">
+      <!-- Title row -->
+      <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; margin-bottom:0.6rem;">
+        <div>
+          <h2 style="font-family:'Cormorant Garamond',serif; font-size:1.5rem; font-weight:500; color:var(--text); line-height:1.2; margin:0 0 0.3rem 0;">{{ r.title }}</h2>
+          <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+            <span class="mono" style="font-size:0.65rem; letter-spacing:0.1em; color:var(--gold);">★ {{ "%.1f"|format(r.vote_average) }}</span>
+            {% if r.genres %}
+            <span style="color:var(--border);">·</span>
+            <span class="mono" style="font-size:0.65rem; letter-spacing:0.05em; color:var(--muted);">{{ r.genres | join("  ·  ") }}</span>
+            {% endif %}
+          </div>
+        </div>
+        <span class="badge" style="flex-shrink:0; margin-top:0.2rem;">{{ r.content_type }}</span>
       </div>
-      <span class="text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-400 flex-shrink-0">{{ r.content_type }}</span>
+
+      <!-- Explanation -->
+      <p style="font-size:0.875rem; color:#9c9186; line-height:1.75; margin:0 0 0.75rem 0;">{{ r.explanation }}</p>
+
+      <!-- Streaming providers -->
+      {% if r.streaming_providers %}
+      <div style="display:flex; align-items:center; gap:0.5rem;">
+        <span class="mono" style="font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">Available on</span>
+        <span class="mono" style="font-size:0.6rem; letter-spacing:0.05em; color:var(--gold-dim);">{{ r.streaming_providers | join("  ·  ") }}</span>
+      </div>
+      {% endif %}
     </div>
-    <p class="text-sm text-gray-300 leading-relaxed">{{ r.explanation }}</p>
-    {% if r.streaming_providers %}
-    <p class="text-xs text-gray-500 mt-3">Available on: {{ r.streaming_providers | join(", ") }}</p>
-    {% endif %}
   </div>
   {% endfor %}
 </div>
+
 {% elif query %}
-<p class="text-gray-500 text-sm">No recommendations found for "{{ query }}".</p>
+<div style="padding:4rem 0; text-align:center;">
+  <p class="mono" style="font-size:0.7rem; letter-spacing:0.15em; text-transform:uppercase; color:var(--muted);">No results for "{{ query }}"</p>
+  <p style="font-size:0.85rem; color:var(--muted); margin-top:0.75rem;">Try a broader query or different genres.</p>
+</div>
 {% endif %}

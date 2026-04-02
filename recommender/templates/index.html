@@ -1,22 +1,50 @@
 {% extends "base.html" %}
-{% block title %}Streamline — Dashboard{% endblock %}
+{% block title %}Streamline — Taste Profile{% endblock %}
 {% block content %}
-<div class="mb-8">
-  <h1 class="text-2xl font-bold mb-1">Your Taste Profile</h1>
-  <div class="flex gap-6 text-sm text-gray-400 mt-2">
-    <span>{{ total }} titles watched</span>
-    <span>{{ tv_count }} TV shows</span>
-    <span>{{ movie_count }} movies</span>
-    <span>{{ enrichment_count }} enriched</span>
+
+<!-- Header -->
+<div class="mb-12">
+  <p class="mono text-xs tracking-widest uppercase mb-3" style="color:var(--gold);">Personal Intelligence</p>
+  <h1 class="display" style="font-size:3.5rem; font-weight:300; line-height:1.1; letter-spacing:-0.01em; margin-bottom:1.5rem;">
+    Your Taste<br><em style="font-weight:300;">Profile</em>
+  </h1>
+  <hr class="rule" style="margin-bottom:2rem;">
+
+  <!-- Stats row -->
+  <div class="flex gap-12">
+    <div>
+      <div class="stat-number">{{ total }}</div>
+      <div class="stat-label">Titles Watched</div>
+    </div>
+    <div style="width:1px; background:var(--border);"></div>
+    <div>
+      <div class="stat-number">{{ tv_count }}</div>
+      <div class="stat-label">TV Series</div>
+    </div>
+    <div style="width:1px; background:var(--border);"></div>
+    <div>
+      <div class="stat-number">{{ movie_count }}</div>
+      <div class="stat-label">Films</div>
+    </div>
+    <div style="width:1px; background:var(--border);"></div>
+    <div>
+      <div class="stat-number">{{ enrichment_count }}</div>
+      <div class="stat-label">Enriched</div>
+    </div>
   </div>
 </div>
 
-<div class="bg-gray-900 rounded-xl border border-gray-800 p-6">
-  <div class="prose-profile text-gray-300 leading-relaxed whitespace-pre-wrap text-sm">{{ taste_profile }}</div>
+<!-- Taste profile -->
+<div style="position:relative; padding: 2.5rem 3rem; background:var(--surface); border:1px solid var(--border); border-left: 2px solid var(--gold);">
+  <!-- Large decorative quote mark -->
+  <div style="position:absolute; top:-1.5rem; left:2.5rem; font-family:'Cormorant Garamond',serif; font-size:8rem; line-height:1; color:var(--gold-dim); opacity:0.4; user-select:none;">"</div>
+  <div class="profile-text" style="position:relative; z-index:1; font-size:0.95rem;">{{ taste_profile }}</div>
 </div>
 
-<div class="mt-6 flex gap-3">
-  <a href="/history" class="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">Browse watch history</a>
-  <a href="/recommend" class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded-lg text-sm transition-colors">Get recommendations</a>
+<!-- Actions -->
+<div class="flex gap-4 mt-8">
+  <a href="/history" class="btn-ghost px-6 py-3" style="text-decoration:none; display:inline-block;">Browse Archive</a>
+  <a href="/recommend" class="btn-gold px-6 py-3" style="text-decoration:none; display:inline-block;">Discover Films</a>
 </div>
+
 {% endblock %}

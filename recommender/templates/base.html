@@ -6,20 +6,283 @@
   <title>{% block title %}Streamline{% endblock %}</title>
   <script src="https://unpkg.com/htmx.org@2.0.2" integrity="sha384-Y7hw+L/jvKeWIRRkqWYfPcvVxHzVzn5REgzbawhxAuQGwX1XWe70vji+VSeHOThJ" crossorigin="anonymous"></script>
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400;1,500&family=Jost:wght@300;400;500&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+
   <style>
-    .prose-profile p { margin-bottom: 0.75rem; }
-    .prose-profile strong { color: #e2e8f0; }
+    :root {
+      --bg:       #080806;
+      --surface:  #0f0e0c;
+      --surface2: #181613;
+      --border:   #2c2820;
+      --gold:     #c9a84c;
+      --gold-dim: #6e5c28;
+      --text:     #ede5d8;
+      --muted:    #6e6358;
+      --red:      #a33;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: 'Jost', sans-serif;
+      font-weight: 300;
+      min-height: 100vh;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* Film grain overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+      opacity: 0.035;
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* Typography */
+    h1, h2, h3, .display {
+      font-family: 'Cormorant Garamond', serif;
+    }
+    .mono {
+      font-family: 'Courier Prime', monospace;
+    }
+
+    /* Gold rule */
+    .rule {
+      border: none;
+      border-top: 1px solid var(--border);
+      position: relative;
+    }
+    .rule::after {
+      content: '';
+      position: absolute;
+      left: 0; top: 0;
+      width: 3rem;
+      height: 1px;
+      background: var(--gold);
+    }
+
+    /* Navigation — filmstrip style */
+    .nav-strip {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      position: relative;
+    }
+    .nav-strip::before,
+    .nav-strip::after {
+      content: '';
+      position: absolute;
+      left: 0; right: 0;
+      height: 3px;
+      background-image: repeating-linear-gradient(
+        90deg,
+        transparent 0px, transparent 8px,
+        var(--border) 8px, var(--border) 12px
+      );
+    }
+    .nav-strip::before { top: 0; }
+    .nav-strip::after  { bottom: 0; }
+
+    .nav-link {
+      font-family: 'Courier Prime', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--muted);
+      text-decoration: none;
+      position: relative;
+      padding-bottom: 2px;
+      transition: color 0.2s;
+    }
+    .nav-link::after {
+      content: '';
+      position: absolute;
+      bottom: -2px; left: 0; right: 0;
+      height: 1px;
+      background: var(--gold);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.25s ease;
+    }
+    .nav-link:hover { color: var(--text); }
+    .nav-link:hover::after,
+    .nav-link.active::after { transform: scaleX(1); }
+    .nav-link.active { color: var(--text); }
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 2px solid var(--gold-dim);
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .card:hover {
+      border-left-color: var(--gold);
+      transform: translateX(2px);
+    }
+
+    /* Inputs */
+    .input-field {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: 'Jost', sans-serif;
+      font-weight: 300;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .input-field::placeholder { color: var(--muted); }
+    .input-field:focus {
+      border-color: var(--gold);
+      box-shadow: 0 0 0 3px rgba(201,168,76,0.08);
+    }
+
+    /* Buttons */
+    .btn-gold {
+      background: var(--gold);
+      color: #0a0900;
+      font-family: 'Courier Prime', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-weight: 700;
+      transition: opacity 0.15s, transform 0.15s;
+    }
+    .btn-gold:hover { opacity: 0.9; transform: translateY(-1px); }
+
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-family: 'Courier Prime', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .btn-ghost:hover { border-color: var(--gold-dim); color: var(--text); }
+
+    /* Badges */
+    .badge {
+      font-family: 'Courier Prime', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 2px 7px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    /* Frame number (result index) */
+    .frame-number {
+      font-family: 'Cormorant Garamond', serif;
+      font-style: italic;
+      font-size: 5rem;
+      font-weight: 300;
+      line-height: 1;
+      color: var(--border);
+      user-select: none;
+      transition: color 0.2s;
+    }
+    .result-card:hover .frame-number { color: var(--gold-dim); }
+
+    /* Staggered fade in for result cards */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .result-card {
+      animation: fadeUp 0.4s ease both;
+    }
+    .result-card:nth-child(1) { animation-delay: 0.0s; }
+    .result-card:nth-child(2) { animation-delay: 0.07s; }
+    .result-card:nth-child(3) { animation-delay: 0.14s; }
+    .result-card:nth-child(4) { animation-delay: 0.21s; }
+    .result-card:nth-child(5) { animation-delay: 0.28s; }
+
+    /* HTMX indicator */
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator,
+    .htmx-request.htmx-indicator { display: flex; }
+
+    /* Taste profile text */
+    .profile-text {
+      font-family: 'Jost', sans-serif;
+      font-weight: 300;
+      line-height: 1.9;
+      color: #b8ac9e;
+      white-space: pre-wrap;
+    }
+    .profile-text strong { color: var(--text); font-weight: 500; }
+
+    /* Stat blocks */
+    .stat-number {
+      font-family: 'Cormorant Garamond', serif;
+      font-weight: 300;
+      font-size: 3.5rem;
+      line-height: 1;
+      color: var(--text);
+    }
+    .stat-label {
+      font-family: 'Courier Prime', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-top: 0.25rem;
+    }
+
+    /* Gold dot separator */
+    .dot-sep {
+      display: inline-block;
+      width: 3px; height: 3px;
+      background: var(--gold-dim);
+      border-radius: 50%;
+      vertical-align: middle;
+      margin: 0 0.6rem;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--gold-dim); }
+
+    /* Page fade in */
+    @keyframes pageFade {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    main { animation: pageFade 0.35s ease both; }
   </style>
 </head>
-<body class="bg-gray-950 text-gray-100 min-h-screen">
-  <nav class="border-b border-gray-800 px-6 py-3 flex items-center gap-6">
-    <span class="font-bold text-lg tracking-tight text-white">Streamline</span>
-    <a href="/" class="text-sm text-gray-400 hover:text-white transition-colors {% if request.path == '/' %}text-white{% endif %}">Dashboard</a>
-    <a href="/history" class="text-sm text-gray-400 hover:text-white transition-colors {% if request.path.startswith('/history') %}text-white{% endif %}">Watch History</a>
-    <a href="/recommend" class="text-sm text-gray-400 hover:text-white transition-colors {% if request.path.startswith('/recommend') %}text-white{% endif %}">Recommend</a>
+
+<body>
+
+  <!-- Navigation -->
+  <nav class="nav-strip px-8 py-4 flex items-center gap-10">
+    <a href="/" style="text-decoration:none;">
+      <span style="font-family:'Cormorant Garamond',serif; font-size:1.15rem; letter-spacing:0.25em; text-transform:uppercase; font-weight:500; color:var(--text);">Streamline</span>
+    </a>
+    <div class="flex items-center gap-8 ml-4">
+      <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">Dashboard</a>
+      <a href="/history" class="nav-link {% if request.path.startswith('/history') %}active{% endif %}">Archive</a>
+      <a href="/recommend" class="nav-link {% if request.path.startswith('/recommend') %}active{% endif %}">Discover</a>
+    </div>
   </nav>
-  <main class="max-w-5xl mx-auto px-6 py-8">
+
+  <main class="max-w-4xl mx-auto px-8 py-12">
     {% block content %}{% endblock %}
   </main>
+
 </body>
 </html>

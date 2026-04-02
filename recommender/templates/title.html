@@ -1,46 +1,91 @@
 {% extends "base.html" %}
-{% block title %}Streamline — {{ meta.title if meta else tmdb_id }}{% endblock %}
+{% block title %}Streamline — {{ meta.title if meta else 'Title' }}{% endblock %}
 {% block content %}
+
 {% if meta %}
-<div class="mb-4">
-  <a href="/history" class="text-sm text-gray-500 hover:text-gray-300">← Watch History</a>
+
+<!-- Back -->
+<a href="/history" style="font-family:'Courier Prime',monospace; font-size:0.65rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted); text-decoration:none; transition:color 0.15s;"
+  onmouseover="this.style.color='var(--text)'"
+  onmouseout="this.style.color='var(--muted)'"
+>← Archive</a>
+
+<!-- Header -->
+<div style="margin:2.5rem 0 2rem;">
+  <div style="display:flex; align-items:center; gap:0.75rem; margin-bottom:0.75rem;">
+    <span class="badge">{{ meta.content_type }}</span>
+    {% if meta.original_language %}
+    <span class="badge">{{ meta.original_language | upper }}</span>
+    {% endif %}
+    <span class="mono" style="font-size:0.65rem; letter-spacing:0.1em; color:var(--gold);">★ {{ "%.1f"|format(meta.vote_average) }}</span>
+    <span class="mono" style="font-size:0.6rem; color:var(--muted);">({{ meta.vote_count }} votes)</span>
+  </div>
+
+  <h1 style="font-family:'Cormorant Garamond',serif; font-size:3.25rem; font-weight:400; line-height:1.1; margin:0 0 1rem;">
+    {{ meta.title }}
+  </h1>
+
+  <!-- Genres -->
+  {% if meta.genres %}
+  <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+    {% for g in meta.genres %}
+    <span class="badge">{{ g }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
 </div>
-<div class="flex gap-6 items-start">
-  <div class="flex-1">
-    <h1 class="text-2xl font-bold mb-1">{{ meta.title }}</h1>
-    <div class="flex items-center gap-3 text-sm text-gray-400 mb-4">
-      <span>{{ meta.content_type | upper }}</span>
-      <span>★ {{ "%.1f"|format(meta.vote_average) }} ({{ meta.vote_count }} votes)</span>
-      {% if meta.original_language %}<span>{{ meta.original_language | upper }}</span>{% endif %}
-    </div>
-    {% if meta.genres %}
-    <div class="flex gap-2 flex-wrap mb-4">
-      {% for g in meta.genres %}
-      <span class="px-2 py-0.5 bg-gray-800 rounded text-xs text-gray-300">{{ g }}</span>
-      {% endfor %}
-    </div>
-    {% endif %}
-    {% if description %}
-    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-4">
-      <p class="text-sm text-gray-300 leading-relaxed">{{ description }}</p>
-    </div>
-    {% endif %}
-    {% if meta.cast %}
-    <p class="text-sm text-gray-400"><span class="text-gray-500">Cast:</span> {{ meta.cast | join(", ") }}</p>
-    {% endif %}
-    {% if meta.creator_or_director %}
-    <p class="text-sm text-gray-400 mt-1"><span class="text-gray-500">{{ "Creator" if meta.content_type == "tv" else "Director" }}:</span> {{ meta.creator_or_director }}</p>
-    {% endif %}
-    {% if meta.keywords %}
-    <div class="flex gap-1.5 flex-wrap mt-4">
-      {% for kw in meta.keywords %}
-      <span class="px-2 py-0.5 bg-gray-900 border border-gray-800 rounded text-xs text-gray-500">{{ kw }}</span>
-      {% endfor %}
-    </div>
-    {% endif %}
+
+<hr class="rule" style="margin-bottom:2rem;">
+
+<!-- Enrichment description -->
+{% if description %}
+<div style="padding:2rem 2.5rem; background:var(--surface); border-left:2px solid var(--gold); margin-bottom:2rem; position:relative;">
+  <div style="position:absolute; top:-1rem; left:2rem; font-family:'Cormorant Garamond',serif; font-size:5rem; line-height:1; color:var(--gold-dim); opacity:0.3; user-select:none;">"</div>
+  <p style="font-family:'Jost',sans-serif; font-size:1rem; font-weight:300; color:#b0a898; line-height:1.85; position:relative; z-index:1;">{{ description }}</p>
+</div>
+{% endif %}
+
+<!-- Credits -->
+<div style="display:flex; flex-direction:column; gap:0.85rem;">
+  {% if meta.creator_or_director %}
+  <div style="display:flex; gap:2rem; align-items:baseline; padding-bottom:0.85rem; border-bottom:1px solid var(--border);">
+    <span class="mono" style="font-size:0.65rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted); min-width:7rem;">{{ "Creator" if meta.content_type == "tv" else "Director" }}</span>
+    <span style="font-size:0.95rem; color:var(--text);">{{ meta.creator_or_director }}</span>
+  </div>
+  {% endif %}
+
+  {% if meta.cast %}
+  <div style="display:flex; gap:2rem; align-items:baseline; padding-bottom:0.85rem; border-bottom:1px solid var(--border);">
+    <span class="mono" style="font-size:0.65rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted); min-width:7rem;">Cast</span>
+    <span style="font-size:0.95rem; color:var(--text);">{{ meta.cast | join(", ") }}</span>
+  </div>
+  {% endif %}
+
+  {% if meta.runtime_minutes %}
+  <div style="display:flex; gap:2rem; align-items:baseline; padding-bottom:0.85rem; border-bottom:1px solid var(--border);">
+    <span class="mono" style="font-size:0.65rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted); min-width:7rem;">Runtime</span>
+    <span style="font-size:0.95rem; color:var(--text);">{{ meta.runtime_minutes }} min</span>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Keywords -->
+{% if meta.keywords %}
+<div style="margin-top:2rem;">
+  <p class="mono" style="font-size:0.6rem; letter-spacing:0.15em; text-transform:uppercase; color:var(--muted); margin-bottom:0.75rem;">Keywords</p>
+  <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+    {% for kw in meta.keywords %}
+    <span style="font-family:'Courier Prime',monospace; font-size:0.65rem; letter-spacing:0.05em; padding:3px 10px; border:1px solid var(--border); color:var(--muted);">{{ kw }}</span>
+    {% endfor %}
   </div>
 </div>
-{% else %}
-<p class="text-gray-500">Title not found in cache (TMDB ID {{ tmdb_id }}).</p>
 {% endif %}
+
+{% else %}
+<div style="padding:5rem 0; text-align:center;">
+  <p class="mono" style="font-size:0.7rem; letter-spacing:0.15em; text-transform:uppercase; color:var(--muted);">Title not found in cache</p>
+  <p style="font-size:0.85rem; color:var(--muted); margin-top:0.5rem;">TMDB ID {{ tmdb_id }}</p>
+</div>
+{% endif %}
+
 {% endblock %}

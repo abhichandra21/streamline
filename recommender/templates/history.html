@@ -1,47 +1,79 @@
 {% extends "base.html" %}
-{% block title %}Streamline — Watch History{% endblock %}
+{% block title %}Streamline — Archive{% endblock %}
 {% block content %}
-<div class="mb-6">
-  <h1 class="text-2xl font-bold mb-4">Watch History</h1>
-  <form method="get" action="/history" class="flex gap-3 flex-wrap">
+
+<!-- Header -->
+<div class="mb-10">
+  <p class="mono text-xs tracking-widest uppercase mb-3" style="color:var(--gold);">Personal Archive</p>
+  <h1 class="display" style="font-size:3.5rem; font-weight:300; line-height:1.1; margin-bottom:1.5rem;">
+    Watch<br><em>History</em>
+  </h1>
+  <hr class="rule" style="margin-bottom:2rem;">
+
+  <!-- Filter form -->
+  <form method="get" action="/history" style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:center;">
     <input
       type="text" name="q" value="{{ q }}" placeholder="Search titles…"
-      class="px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm flex-1 min-w-48 focus:outline-none focus:border-green-600"
+      class="input-field"
+      style="padding: 0.65rem 1rem; font-size:0.875rem; flex:1; min-width:200px;"
     >
-    <select name="type" class="px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-green-600">
-      <option value="" {% if not ct_filter %}selected{% endif %}>All types</option>
-      <option value="tv" {% if ct_filter == 'tv' %}selected{% endif %}>TV shows</option>
-      <option value="movie" {% if ct_filter == 'movie' %}selected{% endif %}>Movies</option>
+    <select name="type"
+      class="input-field"
+      style="padding: 0.65rem 1rem; font-size:0.875rem; font-family:'Courier Prime',monospace; font-size:0.75rem; letter-spacing:0.05em;"
+    >
+      <option value="" {% if not ct_filter %}selected{% endif %}>All Types</option>
+      <option value="tv"    {% if ct_filter == 'tv'    %}selected{% endif %}>TV Series</option>
+      <option value="movie" {% if ct_filter == 'movie' %}selected{% endif %}>Film</option>
     </select>
-    <button type="submit" class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded-lg text-sm transition-colors">Filter</button>
-    {% if q or ct_filter %}<a href="/history" class="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">Clear</a>{% endif %}
+    <button type="submit" class="btn-gold" style="padding:0.65rem 1.25rem;">Filter</button>
+    {% if q or ct_filter %}
+    <a href="/history" class="btn-ghost" style="padding:0.65rem 1rem; text-decoration:none; display:inline-block;">Clear</a>
+    {% endif %}
   </form>
-  <p class="text-sm text-gray-500 mt-3">{{ total }} titles</p>
+
+  <p class="mono mt-4" style="font-size:0.65rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted);">
+    {{ total }} titles
+  </p>
 </div>
 
-<div class="grid gap-3">
+<!-- List -->
+<div style="display:flex; flex-direction:column; gap:1px; border-top:1px solid var(--border);">
   {% for item in items %}
-  <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 flex gap-4 items-start">
+  <div class="card" style="display:flex; align-items:center; gap:1.5rem; padding:1rem 1.25rem; border-left:none; border-right:none; border-top:none; border-bottom:1px solid var(--border); transition:background 0.15s, border-color 0.15s; border-left:2px solid var(--gold-dim);">
+
+    <!-- Poster or placeholder -->
     {% if item.poster %}
-    <img src="{{ item.poster }}" alt="{{ item.title }}" class="w-12 rounded flex-shrink-0 object-cover" style="height:72px">
+    <img src="{{ item.poster }}" alt="{{ item.title }}" style="width:36px; height:54px; object-fit:cover; flex-shrink:0; opacity:0.85;">
     {% else %}
-    <div class="w-12 h-16 bg-gray-800 rounded flex-shrink-0 flex items-center justify-center text-gray-600 text-xs">?</div>
+    <div style="width:36px; height:54px; background:var(--surface2); border:1px solid var(--border); flex-shrink:0; display:flex; align-items:center; justify-content:center;">
+      <span style="font-family:'Cormorant Garamond',serif; font-size:1.2rem; color:var(--border);">?</span>
+    </div>
     {% endif %}
-    <div class="flex-1 min-w-0">
-      <div class="flex items-center gap-2 mb-1">
-        <span class="font-medium text-white">{{ item.title }}</span>
-        <span class="text-xs px-1.5 py-0.5 rounded bg-gray-800 text-gray-400">{{ item.content_type }}</span>
+
+    <!-- Content -->
+    <div style="flex:1; min-width:0;">
+      <div style="display:flex; align-items:baseline; gap:0.75rem; margin-bottom:0.25rem;">
+        <span style="font-family:'Cormorant Garamond',serif; font-size:1.15rem; font-weight:500; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ item.title }}</span>
+        <span class="badge">{{ item.content_type }}</span>
       </div>
       {% if item.description %}
-      <p class="text-xs text-gray-400 line-clamp-2">{{ item.description }}</p>
+      <p style="font-size:0.8rem; color:var(--muted); line-height:1.5; overflow:hidden; display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical;">{{ item.description }}</p>
       {% endif %}
     </div>
+
     {% if item.tmdb_id %}
-    <a href="/title/{{ item.tmdb_id }}?type={{ item.content_type }}" class="text-xs text-green-500 hover:text-green-400 flex-shrink-0">Details →</a>
+    <a href="/title/{{ item.tmdb_id }}?type={{ item.content_type }}"
+      style="font-family:'Courier Prime',monospace; font-size:0.65rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--gold-dim); text-decoration:none; flex-shrink:0; transition:color 0.15s;"
+      onmouseover="this.style.color='var(--gold)'"
+      onmouseout="this.style.color='var(--gold-dim)'"
+    >View →</a>
     {% endif %}
   </div>
   {% else %}
-  <p class="text-gray-500 text-sm">No titles found.</p>
+  <div style="padding: 4rem 0; text-align:center;">
+    <p class="mono" style="font-size:0.7rem; letter-spacing:0.15em; text-transform:uppercase; color:var(--muted);">No titles found</p>
+  </div>
   {% endfor %}
 </div>
+
 {% endblock %}
