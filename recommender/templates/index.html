@@ -1,50 +1,158 @@
 {% extends "base.html" %}
-{% block title %}Streamline — Taste Profile{% endblock %}
+{% block title %}Streamline{% endblock %}
 {% block content %}
 
-<!-- Header -->
-<div class="mb-12">
-  <p class="mono text-xs tracking-widest uppercase mb-3" style="color:var(--gold);">Personal Intelligence</p>
-  <h1 class="display" style="font-size:3.5rem; font-weight:300; line-height:1.1; letter-spacing:-0.01em; margin-bottom:1.5rem;">
-    Your Taste<br><em style="font-weight:300;">Profile</em>
+<!-- ════════ DISCOVER ════════ -->
+<section style="margin-bottom:4rem;">
+  <h1 style="font-size:clamp(2.4rem, 5.5vw, 4rem); line-height:1.05; letter-spacing:-0.01em; margin-bottom:0.5rem;">
+    What should you<br><span style="color:var(--accent);">watch next?</span>
   </h1>
-  <hr class="rule" style="margin-bottom:2rem;">
+  <p style="color:var(--muted); font-size:0.92rem; margin-bottom:1.75rem;">Ask anything. Get recommendations tuned to your taste.</p>
 
-  <!-- Stats row -->
-  <div class="flex gap-12">
+  <form
+    id="search-form"
+    method="post" action="/recommend"
+    hx-post="/recommend" hx-target="#results" hx-swap="innerHTML" hx-indicator="#spinner"
+    style="display:flex; gap:0; max-width:680px;"
+  >
+    <input
+      type="text" name="query"
+      placeholder="paranoid spy thriller like The Night Manager..."
+      class="input-field"
+      style="padding:0.85rem 1.25rem; flex:1; border-radius:4px 0 0 4px; border-right:none;"
+      autofocus
+    >
+    <button type="submit" class="btn-primary" style="padding:0.85rem 1.5rem; border-radius:0 4px 4px 0;">Search</button>
+  </form>
+
+  <div id="spinner" class="htmx-indicator" style="align-items:center; gap:0.6rem; margin-top:1rem;">
+    <div style="width:14px; height:14px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 0.6s linear infinite;"></div>
+    <span class="mono" style="font-size:0.65rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">Finding matches...</span>
+  </div>
+
+  <div id="results" style="margin-top:1.5rem;"></div>
+
+  <div style="margin-top:1.25rem; display:flex; flex-wrap:wrap; gap:0.4rem; align-items:center;">
+    <span class="mono" style="font-size:0.6rem; color:var(--muted); padding-top:2px;">Try:</span>
+    {% for s in ["gritty British crime drama", "feel-good comedy", "dark espionage thriller", "Indian family drama"] %}
+    <button
+      onclick="document.querySelector('[name=query]').value='{{ s }}'; document.getElementById('search-form').dispatchEvent(new Event('submit',{bubbles:true}));"
+      class="btn-ghost" style="padding:3px 10px; font-size:0.58rem; cursor:pointer;"
+    >{{ s }}</button>
+    {% endfor %}
+  </div>
+</section>
+
+<div style="height:1px; background:linear-gradient(90deg, var(--accent), var(--lavender), var(--teal)); margin-bottom:3.5rem; opacity:0.4;"></div>
+
+<!-- ════════ TASTE PROFILE ════════ -->
+<section style="margin-bottom:4rem;">
+  <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:1.5rem;">
     <div>
-      <div class="stat-number">{{ total }}</div>
-      <div class="stat-label">Titles Watched</div>
+      <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">Your taste</span>
+      <h2 style="font-size:1.8rem; margin-top:0.2rem;">Profile</h2>
     </div>
-    <div style="width:1px; background:var(--border);"></div>
-    <div>
-      <div class="stat-number">{{ tv_count }}</div>
-      <div class="stat-label">TV Series</div>
-    </div>
-    <div style="width:1px; background:var(--border);"></div>
-    <div>
-      <div class="stat-number">{{ movie_count }}</div>
-      <div class="stat-label">Films</div>
-    </div>
-    <div style="width:1px; background:var(--border);"></div>
-    <div>
-      <div class="stat-number">{{ enrichment_count }}</div>
-      <div class="stat-label">Enriched</div>
+    <div style="display:flex; gap:1.75rem;">
+      <div style="text-align:center;">
+        <div class="stat-number" style="font-size:1.6rem;">{{ total }}</div>
+        <div class="stat-label">Titles</div>
+      </div>
+      <div style="text-align:center;">
+        <div class="stat-number" style="font-size:1.6rem;">{{ tv_count }}</div>
+        <div class="stat-label">TV</div>
+      </div>
+      <div style="text-align:center;">
+        <div class="stat-number" style="font-size:1.6rem;">{{ movie_count }}</div>
+        <div class="stat-label">Films</div>
+      </div>
     </div>
   </div>
-</div>
 
-<!-- Taste profile -->
-<div style="position:relative; padding: 2.5rem 3rem; background:var(--surface); border:1px solid var(--border); border-left: 2px solid var(--gold);">
-  <!-- Large decorative quote mark -->
-  <div style="position:absolute; top:-1.5rem; left:2.5rem; font-family:'Cormorant Garamond',serif; font-size:8rem; line-height:1; color:var(--gold-dim); opacity:0.4; user-select:none;">"</div>
-  <div class="profile-text" style="position:relative; z-index:1; font-size:0.95rem;">{{ taste_profile }}</div>
-</div>
+  {% if clusters %}
+  <div style="display:flex; flex-direction:column; gap:6px;">
+    {% set colors = ['var(--accent)', 'var(--teal)', 'var(--lavender)', 'var(--accent2)'] %}
+    {% for cluster in clusters %}
+    {% set clr = colors[loop.index0 % 4] %}
+    <details class="cluster-details" style="background:var(--surface); border-radius:6px; overflow:hidden;">
+      <summary style="
+        display:flex; align-items:center; gap:0.75rem;
+        padding:1rem 1.25rem;
+        cursor:pointer; list-style:none; user-select:none;
+        border-left:3px solid {{ clr }};
+        transition:background 0.15s;
+      ">
+        <svg class="cluster-arrow" width="10" height="10" viewBox="0 0 10 10" style="flex-shrink:0; transition:transform 0.2s;">
+          <path d="M3 1 L7 5 L3 9" stroke="{{ clr }}" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span style="font-family:'DM Serif Display',serif; font-size:1rem; color:var(--text);">{{ cluster.heading }}</span>
+      </summary>
+      <div class="cluster-content" style="padding:0 1.25rem 1.25rem 2.75rem; border-left:3px solid {{ clr }};">
+        {{ cluster.body_html }}
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div style="padding:1.5rem; background:var(--surface); border-radius:6px; border-left:3px solid var(--accent);">
+    <p style="font-size:0.9rem; color:var(--body); line-height:1.85; white-space:pre-wrap;">{{ taste_profile }}</p>
+  </div>
+  {% endif %}
+</section>
 
-<!-- Actions -->
-<div class="flex gap-4 mt-8">
-  <a href="/history" class="btn-ghost px-6 py-3" style="text-decoration:none; display:inline-block;">Browse Archive</a>
-  <a href="/recommend" class="btn-gold px-6 py-3" style="text-decoration:none; display:inline-block;">Discover Films</a>
-</div>
+<div style="height:1px; background:linear-gradient(90deg, var(--teal), var(--lavender), var(--accent)); margin-bottom:3.5rem; opacity:0.4;"></div>
+
+<!-- ════════ ARCHIVE POSTER WALL ════════ -->
+<section style="margin-bottom:3rem;">
+  <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:1.5rem;">
+    <div>
+      <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--teal);">Collection</span>
+      <h2 style="font-size:1.8rem; margin-top:0.2rem;">Archive</h2>
+    </div>
+    <a href="/history" class="btn-ghost" style="padding:5px 14px; text-decoration:none;">Browse All</a>
+  </div>
+
+  {% if posters %}
+  <div style="
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(88px, 1fr));
+    gap:4px;
+    border-radius:6px;
+    overflow:hidden;
+    mask-image:linear-gradient(to bottom, black 55%, transparent 100%);
+    -webkit-mask-image:linear-gradient(to bottom, black 55%, transparent 100%);
+    max-height:380px;
+  ">
+    {% for p in posters %}
+    <a href="/title/{{ p.tmdb_id }}?type={{ p.content_type }}" style="display:block; aspect-ratio:2/3; overflow:hidden;" title="{{ p.title }}">
+      <img
+        src="{{ p.poster }}" alt="{{ p.title }}" loading="lazy"
+        style="width:100%; height:100%; object-fit:cover; filter:brightness(0.8); transition:filter 0.25s, transform 0.3s;"
+        onmouseover="this.style.filter='brightness(1.05)'; this.style.transform='scale(1.05)'"
+        onmouseout="this.style.filter='brightness(0.8)'; this.style.transform='scale(1)'"
+      >
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+<style>
+  /* Details/summary native expand */
+  .cluster-details summary::-webkit-details-marker { display: none; }
+  .cluster-details summary::marker { content: ''; }
+  .cluster-details summary:hover { background: var(--surface2); }
+  .cluster-details[open] .cluster-arrow { transform: rotate(90deg); }
+
+  /* Cluster body typography */
+  .cluster-content p {
+    font-size: 0.88rem;
+    color: var(--body);
+    line-height: 1.85;
+    margin: 0 0 0.75rem;
+  }
+  .cluster-content p:last-child { margin-bottom: 0; }
+  .cluster-content strong { color: var(--text); font-weight: 500; }
+  .cluster-content em { color: var(--text); font-style: italic; }
+</style>
 
 {% endblock %}

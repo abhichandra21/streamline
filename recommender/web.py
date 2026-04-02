@@ -2,11 +2,14 @@
 
 import json
 import logging
+import os
+import re
 import sys
 from pathlib import Path
 
 import anthropic
 from flask import Flask, jsonify, render_template, request
+from markupsafe import Markup, escape
 
 import config
 from recommender.ingestion.netflix import parse as parse_netflix
@@ -70,20 +73,89 @@ def _load_enrichments() -> dict[str, str]:
     return {}
 
 
+def _md_to_html(text: str) -> str:
+    """Convert basic markdown (bold, italic, em-dash) to HTML. No external deps."""
+    html = str(escape(text))
+    # Bold: **text**
+    html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html)
+    # Italic: *text*
+    html = re.sub(r'\*(.+?)\*', r'<em>\1</em>', html)
+    # Paragraphs: double newline
+    paragraphs = re.split(r'\n\s*\n', html)
+    html = ''.join(f'<p>{p.strip()}</p>' for p in paragraphs if p.strip())
+    return Markup(html)
+
+
+def _get_poster_url(tmdb_id: int, content_type: str, size: str = "w300") -> str | None:
+    """Get poster URL from cached TMDB data."""
+    cache_path = Path(config.CACHE_DIR) / content_type / f"{tmdb_id}.json"
+    if cache_path.exists():
+        data = json.loads(cache_path.read_text())
+        poster = data.get("poster_path")
+        if poster:
+            return f"https://image.tmdb.org/t/p/{size}{poster}"
+    return None
+
+
+def _get_recent_posters(entries: list[dict], limit: int = 24) -> list[dict]:
+    """Get poster URLs for a selection of watched titles."""
+    posters = []
+    for e in entries:
+        tmdb_id = e.get("tmdb_id")
+        ct = e.get("content_type", "movie")
+        if not tmdb_id:
+            continue
+        url = _get_poster_url(tmdb_id, ct, "w185")
+        if url:
+            posters.append({"title": e["title"], "poster": url, "tmdb_id": tmdb_id, "content_type": ct})
+        if len(posters) >= limit:
+            break
+    return posters
+
+
 @app.route("/")
 def dashboard() -> str:
     ctx = _get_context()
     enrichments = _load_enrichments()
-    entries = ctx.watch_index.entries  # list of dicts
+    entries = ctx.watch_index.entries
     tv_count = sum(1 for e in entries if e.get("content_type") == "tv")
     movie_count = sum(1 for e in entries if e.get("content_type") == "movie")
+
+    # Parse profile into clusters
+    clusters = []
+    current_cluster = None
+    for line in ctx.taste_profile.split("\n"):
+        if line.startswith("## "):
+            if current_cluster:
+                clusters.append(current_cluster)
+            heading = line[3:].strip()
+            # Strip "CLUSTER A: " or "CLUSTER B: " prefix
+            heading = re.sub(r'^CLUSTER\s+[A-Z0-9]+:\s*', '', heading)
+            current_cluster = {"heading": heading, "body": ""}
+        elif current_cluster is not None:
+            # Skip standalone --- separators and **Strength:** lines
+            stripped = line.strip()
+            if stripped == '---' or stripped.startswith('**Strength:'):
+                continue
+            current_cluster["body"] += line + "\n"
+    if current_cluster:
+        clusters.append(current_cluster)
+
+    # Convert markdown in cluster bodies to HTML
+    for c in clusters:
+        c["body_html"] = _md_to_html(c["body"].strip())
+
+    posters = _get_recent_posters(entries, limit=30)
+
     return render_template(
         "index.html",
         taste_profile=ctx.taste_profile,
+        clusters=clusters,
         total=len(entries),
         tv_count=tv_count,
         movie_count=movie_count,
         enrichment_count=len(enrichments),
+        posters=posters,
     )
 
 
@@ -108,7 +180,7 @@ def history() -> str:
             "content_type": e.get("content_type", ""),
             "tmdb_id": e.get("tmdb_id"),
             "description": enrichments.get(e["title"], ""),
-            "poster": None,
+            "poster": _get_poster_url(e.get("tmdb_id", 0), e.get("content_type", "movie"), "w185") if e.get("tmdb_id") else None,
         }
         for e in entries
     ]
@@ -131,8 +203,20 @@ def recommend() -> str:
         log.exception("Error during recommendation")
         return render_template("recommend.html", results=None, query=query, error=str(exc))
 
-    items = [
-        {
+    items = []
+    for r in results:
+        # Look up poster from TMDB cache
+        poster = None
+        cached = ctx.tmdb_client._load_cache(r.content_type, 0)  # won't work, need tmdb_id
+        # Search the candidates for tmdb_id
+        meta = ctx.tmdb_client.get_metadata(r.title, r.content_type)
+        if meta:
+            poster = _get_poster_url(meta.tmdb_id, r.content_type)
+        tmdb_url = ""
+        if meta:
+            tmdb_type = "tv" if r.content_type == "tv" else "movie"
+            tmdb_url = f"https://www.themoviedb.org/{tmdb_type}/{meta.tmdb_id}"
+        items.append({
             "title": r.title,
             "content_type": r.content_type,
             "score": r.score,
@@ -140,9 +224,9 @@ def recommend() -> str:
             "genres": r.genres[:3],
             "explanation": r.explanation,
             "streaming_providers": r.streaming_providers[:4],
-        }
-        for r in results
-    ]
+            "poster": poster,
+            "tmdb_url": tmdb_url,
+        })
 
     # HTMX partial — return just the results fragment.
     if request.headers.get("HX-Request"):
@@ -166,7 +250,16 @@ def title_detail(tmdb_id: int) -> str:
         pass
 
     description = enrichments.get(meta.title, "") if meta else ""
-    return render_template("title.html", meta=meta, description=description, tmdb_id=tmdb_id, ct=ct)
+    poster = _get_poster_url(tmdb_id, ct, "w500") if meta else None
+    # Get overview from cached TMDB data
+    overview = ""
+    if meta:
+        cache_path = Path(config.CACHE_DIR) / ct / f"{tmdb_id}.json"
+        if cache_path.exists():
+            raw = json.loads(cache_path.read_text())
+            overview = raw.get("overview", "")
+    return render_template("title.html", meta=meta, description=description, overview=overview,
+                           tmdb_id=tmdb_id, ct=ct, poster=poster)
 
 
 def run() -> None:
@@ -174,8 +267,10 @@ def run() -> None:
     if not config.ANTHROPIC_API_KEY or not config.TMDB_API_KEY:
         print("Error: ANTHROPIC_API_KEY and TMDB_API_KEY must be set.", file=sys.stderr)
         sys.exit(1)
-    print("Starting Streamline web UI at http://localhost:5000")
-    app.run(debug=False, host="127.0.0.1", port=5000)
+    host = os.environ.get("STREAMLINE_HOST", "127.0.0.1")
+    port = int(os.environ.get("STREAMLINE_PORT", "5050"))
+    print(f"Starting Streamline web UI at http://{host}:{port}")
+    app.run(debug=False, host=host, port=port)
 
 
 if __name__ == "__main__":

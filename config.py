@@ -14,7 +14,7 @@ MANUAL_MOVIES_PATH = os.path.join(os.path.dirname(__file__), "data/manual/movies
 
 DEFAULT_TOP_N = 3
 CANDIDATE_POOL_SIZE = 500
-MIN_VOTE_COUNT = 100
+MIN_VOTE_COUNT = 20
 RECENCY_HALF_LIFE_DAYS = 90
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "recommender/cache/tmdb")
 

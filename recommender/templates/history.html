@@ -2,78 +2,172 @@
 {% block title %}Streamline — Archive{% endblock %}
 {% block content %}
 
-<!-- Header -->
-<div class="mb-10">
-  <p class="mono text-xs tracking-widest uppercase mb-3" style="color:var(--gold);">Personal Archive</p>
-  <h1 class="display" style="font-size:3.5rem; font-weight:300; line-height:1.1; margin-bottom:1.5rem;">
-    Watch<br><em>History</em>
-  </h1>
-  <hr class="rule" style="margin-bottom:2rem;">
+<div style="margin-bottom:2rem;">
+  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--teal);">Collection</span>
+  <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:1.25rem;">Archive</h1>
 
-  <!-- Filter form -->
-  <form method="get" action="/history" style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:center;">
+  <form method="get" action="/history" id="filter-form" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
     <input
-      type="text" name="q" value="{{ q }}" placeholder="Search titles…"
+      type="text" name="q" value="{{ q }}" placeholder="Search titles..."
       class="input-field"
-      style="padding: 0.65rem 1rem; font-size:0.875rem; flex:1; min-width:200px;"
+      style="padding:0.6rem 1rem; flex:1; min-width:180px;"
     >
-    <select name="type"
-      class="input-field"
-      style="padding: 0.65rem 1rem; font-size:0.875rem; font-family:'Courier Prime',monospace; font-size:0.75rem; letter-spacing:0.05em;"
-    >
-      <option value="" {% if not ct_filter %}selected{% endif %}>All Types</option>
-      <option value="tv"    {% if ct_filter == 'tv'    %}selected{% endif %}>TV Series</option>
+    <select name="type" class="input-field" style="padding:0.6rem 0.75rem; font-family:'JetBrains Mono',monospace; font-size:0.72rem;">
+      <option value="" {% if not ct_filter %}selected{% endif %}>All</option>
+      <option value="tv" {% if ct_filter == 'tv' %}selected{% endif %}>TV</option>
       <option value="movie" {% if ct_filter == 'movie' %}selected{% endif %}>Film</option>
     </select>
-    <button type="submit" class="btn-gold" style="padding:0.65rem 1.25rem;">Filter</button>
+    <button type="submit" class="btn-primary" style="padding:0.6rem 1.1rem;">Filter</button>
     {% if q or ct_filter %}
-    <a href="/history" class="btn-ghost" style="padding:0.65rem 1rem; text-decoration:none; display:inline-block;">Clear</a>
+    <a href="/history" class="btn-ghost" style="padding:0.6rem 0.9rem;">Clear</a>
     {% endif %}
   </form>
 
-  <p class="mono mt-4" style="font-size:0.65rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted);">
-    {{ total }} titles
-  </p>
+  <div style="display:flex; align-items:center; justify-content:space-between; margin-top:0.75rem;">
+    <p class="mono" style="font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">{{ total }} titles</p>
+
+    <!-- View toggle -->
+    <div style="display:flex; gap:2px; background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:2px;">
+      <button onclick="setView('list')" id="btn-list" class="view-btn active" title="List view">
+        <svg width="14" height="14" viewBox="0 0 14 14"><rect x="1" y="2" width="12" height="1.5" rx="0.5" fill="currentColor"/><rect x="1" y="6" width="12" height="1.5" rx="0.5" fill="currentColor"/><rect x="1" y="10" width="12" height="1.5" rx="0.5" fill="currentColor"/></svg>
+      </button>
+      <button onclick="setView('grid')" id="btn-grid" class="view-btn" title="Poster grid">
+        <svg width="14" height="14" viewBox="0 0 14 14"><rect x="1" y="1" width="5" height="5.5" rx="0.5" fill="currentColor"/><rect x="8" y="1" width="5" height="5.5" rx="0.5" fill="currentColor"/><rect x="1" y="7.5" width="5" height="5.5" rx="0.5" fill="currentColor"/><rect x="8" y="7.5" width="5" height="5.5" rx="0.5" fill="currentColor"/></svg>
+      </button>
+      <button onclick="setView('compact')" id="btn-compact" class="view-btn" title="Compact list">
+        <svg width="14" height="14" viewBox="0 0 14 14"><rect x="1" y="1.5" width="12" height="1" rx="0.5" fill="currentColor"/><rect x="1" y="4.5" width="12" height="1" rx="0.5" fill="currentColor"/><rect x="1" y="7.5" width="12" height="1" rx="0.5" fill="currentColor"/><rect x="1" y="10.5" width="12" height="1" rx="0.5" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </div>
 </div>
 
-<!-- List -->
-<div style="display:flex; flex-direction:column; gap:1px; border-top:1px solid var(--border);">
+<!-- LIST VIEW (default) -->
+<div id="view-list" class="archive-view">
   {% for item in items %}
-  <div class="card" style="display:flex; align-items:center; gap:1.5rem; padding:1rem 1.25rem; border-left:none; border-right:none; border-top:none; border-bottom:1px solid var(--border); transition:background 0.15s, border-color 0.15s; border-left:2px solid var(--gold-dim);">
-
-    <!-- Poster or placeholder -->
+  {% set link = "/title/" ~ item.tmdb_id ~ "?type=" ~ item.content_type if item.tmdb_id else none %}
+  <div style="display:flex; align-items:center; gap:1rem; padding:0.6rem 0.75rem; border-radius:4px; transition:background 0.12s;"
+    onmouseover="this.style.background='var(--surface)'"
+    onmouseout="this.style.background='transparent'"
+  >
     {% if item.poster %}
-    <img src="{{ item.poster }}" alt="{{ item.title }}" style="width:36px; height:54px; object-fit:cover; flex-shrink:0; opacity:0.85;">
+    <a href="{{ link or '#' }}" style="flex-shrink:0; display:block; width:38px; height:57px; overflow:hidden; border-radius:3px;">
+      <img src="{{ item.poster }}" alt="{{ item.title }}" style="width:100%; height:100%; object-fit:cover;">
+    </a>
     {% else %}
-    <div style="width:36px; height:54px; background:var(--surface2); border:1px solid var(--border); flex-shrink:0; display:flex; align-items:center; justify-content:center;">
-      <span style="font-family:'Cormorant Garamond',serif; font-size:1.2rem; color:var(--border);">?</span>
+    <div style="width:38px; height:57px; background:var(--surface2); border-radius:3px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">
+      <span style="font-family:'DM Serif Display',serif; font-size:0.9rem; color:var(--border);">?</span>
     </div>
     {% endif %}
 
-    <!-- Content -->
     <div style="flex:1; min-width:0;">
-      <div style="display:flex; align-items:baseline; gap:0.75rem; margin-bottom:0.25rem;">
-        <span style="font-family:'Cormorant Garamond',serif; font-size:1.15rem; font-weight:500; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ item.title }}</span>
-        <span class="badge">{{ item.content_type }}</span>
+      <div style="display:flex; align-items:baseline; gap:0.5rem;">
+        {% if link %}
+        <a href="{{ link }}" style="font-family:'DM Serif Display',serif; font-size:1.05rem; color:var(--text); text-decoration:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:color 0.12s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">{{ item.title }}</a>
+        {% else %}
+        <span style="font-family:'DM Serif Display',serif; font-size:1.05rem; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ item.title }}</span>
+        {% endif %}
+        <span class="badge {{ 'badge-tv' if item.content_type == 'tv' else 'badge-movie' }}" style="flex-shrink:0;">{{ item.content_type }}</span>
       </div>
       {% if item.description %}
-      <p style="font-size:0.8rem; color:var(--muted); line-height:1.5; overflow:hidden; display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical;">{{ item.description }}</p>
+      <p style="font-size:0.78rem; color:var(--muted); line-height:1.45; overflow:hidden; display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; margin-top:0.1rem;">{{ item.description }}</p>
       {% endif %}
     </div>
-
-    {% if item.tmdb_id %}
-    <a href="/title/{{ item.tmdb_id }}?type={{ item.content_type }}"
-      style="font-family:'Courier Prime',monospace; font-size:0.65rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--gold-dim); text-decoration:none; flex-shrink:0; transition:color 0.15s;"
-      onmouseover="this.style.color='var(--gold)'"
-      onmouseout="this.style.color='var(--gold-dim)'"
-    >View →</a>
-    {% endif %}
   </div>
   {% else %}
-  <div style="padding: 4rem 0; text-align:center;">
-    <p class="mono" style="font-size:0.7rem; letter-spacing:0.15em; text-transform:uppercase; color:var(--muted);">No titles found</p>
+  <div style="padding:4rem; text-align:center;">
+    <p class="mono" style="font-size:0.68rem; color:var(--muted);">No titles found</p>
   </div>
   {% endfor %}
 </div>
+
+<!-- GRID VIEW (posters) -->
+<div id="view-grid" class="archive-view" style="display:none;">
+  {% if items %}
+  <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:8px;">
+    {% for item in items %}
+    {% set link = "/title/" ~ item.tmdb_id ~ "?type=" ~ item.content_type if item.tmdb_id else none %}
+    <a href="{{ link or '#' }}" style="display:block; text-decoration:none; position:relative; group;" title="{{ item.title }}">
+      <div style="aspect-ratio:2/3; overflow:hidden; border-radius:4px; background:var(--surface2); border:1px solid var(--border); transition:border-color 0.2s;"
+        onmouseover="this.style.borderColor='var(--accent)'; this.querySelector('.grid-title').style.opacity='1'"
+        onmouseout="this.style.borderColor='var(--border)'; this.querySelector('.grid-title').style.opacity='0'"
+      >
+        {% if item.poster %}
+        <img src="{{ item.poster }}" alt="{{ item.title }}" loading="lazy"
+          style="width:100%; height:100%; object-fit:cover; transition:transform 0.3s;"
+          onmouseover="this.style.transform='scale(1.05)'"
+          onmouseout="this.style.transform='scale(1)'"
+        >
+        {% else %}
+        <div style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; padding:0.5rem;">
+          <span style="font-family:'DM Serif Display',serif; font-size:0.75rem; color:var(--muted); text-align:center; line-height:1.2;">{{ item.title }}</span>
+        </div>
+        {% endif %}
+        <!-- Hover title overlay -->
+        <div class="grid-title" style="position:absolute; bottom:0; left:0; right:0; padding:0.5rem 0.4rem 0.4rem; background:linear-gradient(transparent, rgba(0,0,0,0.85)); opacity:0; transition:opacity 0.2s;">
+          <span style="font-size:0.7rem; color:#fff; line-height:1.2; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">{{ item.title }}</span>
+          <span class="badge {{ 'badge-tv' if item.content_type == 'tv' else 'badge-movie' }}" style="margin-top:3px; font-size:0.5rem;">{{ item.content_type }}</span>
+        </div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div style="padding:4rem; text-align:center;">
+    <p class="mono" style="font-size:0.68rem; color:var(--muted);">No titles found</p>
+  </div>
+  {% endif %}
+</div>
+
+<!-- COMPACT VIEW -->
+<div id="view-compact" class="archive-view" style="display:none;">
+  <div style="columns:2; column-gap:1.5rem;">
+    {% for item in items %}
+    {% set link = "/title/" ~ item.tmdb_id ~ "?type=" ~ item.content_type if item.tmdb_id else none %}
+    <div style="break-inside:avoid; padding:0.3rem 0; display:flex; align-items:baseline; gap:0.4rem;">
+      <span class="badge {{ 'badge-tv' if item.content_type == 'tv' else 'badge-movie' }}" style="font-size:0.5rem; flex-shrink:0;">{{ item.content_type[:1] | upper }}</span>
+      {% if link %}
+      <a href="{{ link }}" style="font-size:0.85rem; color:var(--body); text-decoration:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:color 0.12s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--body)'">{{ item.title }}</a>
+      {% else %}
+      <span style="font-size:0.85rem; color:var(--body); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ item.title }}</span>
+      {% endif %}
+    </div>
+    {% else %}
+    <div style="padding:4rem; text-align:center;">
+      <p class="mono" style="font-size:0.68rem; color:var(--muted);">No titles found</p>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<style>
+  .view-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    transition: color 0.15s, background 0.15s;
+  }
+  .view-btn:hover { color: var(--text); }
+  .view-btn.active { color: var(--accent); background: var(--surface2); }
+</style>
+
+<script>
+function setView(mode) {
+  document.querySelectorAll('.archive-view').forEach(el => el.style.display = 'none');
+  document.getElementById('view-' + mode).style.display = '';
+  document.querySelectorAll('.view-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('btn-' + mode).classList.add('active');
+  localStorage.setItem('archive-view', mode);
+}
+// Restore saved preference
+const saved = localStorage.getItem('archive-view');
+if (saved && document.getElementById('view-' + saved)) {
+  setView(saved);
+}
+</script>
 
 {% endblock %}

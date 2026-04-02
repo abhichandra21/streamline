@@ -4,5 +4,7 @@ __pycache__/
 *.pyc
 .env
 .envrc
+.web.pid
+.web.log
 .superpowers/
 .worktrees/

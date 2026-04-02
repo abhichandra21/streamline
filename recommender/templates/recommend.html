@@ -2,55 +2,36 @@
 {% block title %}Streamline — Discover{% endblock %}
 {% block content %}
 
-<!-- Header -->
-<div class="mb-10">
-  <p class="mono text-xs tracking-widest uppercase mb-3" style="color:var(--gold);">AI Curation</p>
-  <h1 class="display" style="font-size:3.5rem; font-weight:300; line-height:1.1; margin-bottom:1.5rem;">
-    Discover<br><em>Something New</em>
-  </h1>
-  <hr class="rule" style="margin-bottom:2rem;">
+<div style="margin-bottom:2rem;">
+  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">AI Curation</span>
+  <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:1.25rem;">Discover</h1>
 
-  <!-- Search form -->
   <form
     id="search-form"
-    method="post"
-    action="/recommend"
-    hx-post="/recommend"
-    hx-target="#results"
-    hx-swap="innerHTML"
-    hx-indicator="#spinner"
+    method="post" action="/recommend"
+    hx-post="/recommend" hx-target="#results" hx-swap="innerHTML" hx-indicator="#spinner"
     style="display:flex; gap:0; max-width:680px;"
   >
     <input
-      type="text"
-      name="query"
-      value="{{ query }}"
-      placeholder="slow-burn British crime drama…"
+      type="text" name="query" value="{{ query }}"
+      placeholder="slow-burn British crime drama..."
       class="input-field"
-      style="padding:1rem 1.25rem; font-size:0.9rem; flex:1; border-right:none;"
+      style="padding:0.85rem 1.25rem; flex:1; border-radius:4px 0 0 4px; border-right:none;"
       autofocus
     >
-    <button type="submit" class="btn-gold" style="padding:1rem 1.75rem; white-space:nowrap; flex-shrink:0;">
-      Search
-    </button>
+    <button type="submit" class="btn-primary" style="padding:0.85rem 1.5rem; border-radius:0 4px 4px 0;">Search</button>
   </form>
 
-  <!-- Spinner -->
-  <div id="spinner" class="htmx-indicator" style="align-items:center; gap:0.75rem; margin-top:1.25rem;">
-    <div style="width:16px; height:16px; border:1.5px solid var(--gold-dim); border-top-color:var(--gold); border-radius:50%; animation:spin 0.7s linear infinite;"></div>
-    <span class="mono" style="font-size:0.65rem; letter-spacing:0.15em; text-transform:uppercase; color:var(--muted);">Curating…</span>
+  <div id="spinner" class="htmx-indicator" style="align-items:center; gap:0.6rem; margin-top:1rem;">
+    <div style="width:14px; height:14px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 0.6s linear infinite;"></div>
+    <span class="mono" style="font-size:0.65rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">Finding matches...</span>
   </div>
 </div>
 
-<!-- Results -->
 <div id="results">
   {% if results is not none %}
     {% include "_results.html" %}
   {% endif %}
 </div>
-
-<style>
-  @keyframes spin { to { transform: rotate(360deg); } }
-</style>
 
 {% endblock %}

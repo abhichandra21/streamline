@@ -1,0 +1,146 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PIDFILE="$SCRIPT_DIR/.web.pid"
+LOGFILE="$SCRIPT_DIR/.web.log"
+PORT="${STREAMLINE_PORT:-5050}"
+HOST="${STREAMLINE_HOST:-127.0.0.1}"
+VENV="$SCRIPT_DIR/venv"
+
+# Load environment
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    set -a; source "$SCRIPT_DIR/.env"; set +a
+fi
+
+# Activate venv
+if [ ! -d "$VENV" ]; then
+    echo "Error: venv not found at $VENV. Run: python3 -m venv venv && pip install -r requirements.txt" >&2
+    exit 1
+fi
+source "$VENV/bin/activate"
+
+# Verify critical dependencies load
+python3 -c "import anthropic, flask, rich" 2>/dev/null || {
+    echo "Error: missing dependencies. Run: pip install -r requirements.txt" >&2
+    exit 1
+}
+
+is_running() {
+    [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
+}
+
+wait_for_port() {
+    local max_wait=10
+    local waited=0
+    while [ $waited -lt $max_wait ]; do
+        if python3 -c "import socket; s=socket.socket(); s.settimeout(1); s.connect(('$HOST', $PORT)); s.close()" 2>/dev/null; then
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    return 1
+}
+
+start() {
+    if is_running; then
+        echo "Already running (PID $(cat "$PIDFILE")). http://$HOST:$PORT"
+        return 0
+    fi
+
+    # Check port not in use by something else
+    if python3 -c "import socket; s=socket.socket(); s.settimeout(1); s.connect(('$HOST', $PORT)); s.close()" 2>/dev/null; then
+        echo "Error: port $PORT already in use. Set STREAMLINE_PORT to use a different port." >&2
+        exit 1
+    fi
+
+    # Verify API keys
+    if [ -z "${ANTHROPIC_API_KEY:-}" ] || [ -z "${TMDB_API_KEY:-}" ]; then
+        echo "Error: ANTHROPIC_API_KEY and TMDB_API_KEY must be set in .env or environment." >&2
+        exit 1
+    fi
+
+    # Verify cache artifacts exist
+    if [ ! -f "$SCRIPT_DIR/recommender/cache/taste_profile.txt" ]; then
+        echo "Error: taste profile not found. Run: ./recommend setup first." >&2
+        exit 1
+    fi
+    if [ ! -f "$SCRIPT_DIR/recommender/cache/watch_index.json" ]; then
+        echo "Error: watch index not found. Run: ./recommend setup first." >&2
+        exit 1
+    fi
+
+    echo "Starting Streamline web UI on http://$HOST:$PORT ..."
+    export STREAMLINE_HOST="$HOST"
+    export STREAMLINE_PORT="$PORT"
+    nohup python3 -m recommender.web >> "$LOGFILE" 2>&1 &
+    echo $! > "$PIDFILE"
+
+    if wait_for_port; then
+        echo "Running (PID $(cat "$PIDFILE")). http://$HOST:$PORT"
+    else
+        echo "Error: server did not start within 10s. Check $LOGFILE" >&2
+        [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null
+        rm -f "$PIDFILE"
+        tail -20 "$LOGFILE" >&2
+        exit 1
+    fi
+}
+
+stop() {
+    if ! is_running; then
+        echo "Not running."
+        rm -f "$PIDFILE"
+        return 0
+    fi
+
+    local pid
+    pid=$(cat "$PIDFILE")
+    echo "Stopping (PID $pid)..."
+
+    # Graceful shutdown
+    kill "$pid" 2>/dev/null
+    local waited=0
+    while [ $waited -lt 5 ] && kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    # Force kill if still alive
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "Forcing stop..."
+        kill -9 "$pid" 2>/dev/null
+        sleep 1
+    fi
+
+    rm -f "$PIDFILE"
+    echo "Stopped."
+}
+
+status() {
+    if is_running; then
+        echo "Running (PID $(cat "$PIDFILE")). http://$HOST:$PORT"
+    else
+        echo "Not running."
+        rm -f "$PIDFILE"
+        return 1
+    fi
+}
+
+logs() {
+    if [ -f "$LOGFILE" ]; then
+        tail -${2:-50} "$LOGFILE"
+    else
+        echo "No log file found."
+    fi
+}
+
+case "${1:-start}" in
+    start)   start ;;
+    stop)    stop ;;
+    status)  status ;;
+    restart) stop; start ;;
+    logs)    logs "$@" ;;
+    *)       echo "Usage: $0 {start|stop|status|restart|logs}" ;;
+esac
