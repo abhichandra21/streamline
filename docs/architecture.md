@@ -145,9 +145,34 @@ Flask app serving:
 - `/title/:id` — Title detail with poster, TMDB overview, AI analysis, credits, keywords, TMDB link
 - `/recommend` — Standalone discover page
 
+### LLM Abstraction (`recommender/llm.py`)
+
+ABC-based `LLMClient` with `AnthropicClient` and `GeminiClient`. Call sites use roles instead of model names:
+- `role="fast"` — enrichment (high volume, simple descriptions)
+- `role="reason"` — intent parsing, ranking, taste profile, suggestions (complex reasoning)
+
+Model names are resolved from `config.yaml` per provider:
+```yaml
+models:
+  anthropic:
+    fast: claude-haiku-4-5-20251001
+    reason: claude-sonnet-4-6
+  gemini:
+    fast: gemini-2.5-flash
+    reason: gemini-2.5-pro
+```
+
+Gemini-specific handling: output token scaling (x3), JSON mode via `response_mime_type`, rate limit retry (429/RESOURCE_EXHAUSTED/504), extended timeout for Pro thinking mode.
+
+Token usage and cost tracking via `UsageStats` — accumulated per query, printed after results.
+
+### Title Overrides (`recommender/overrides.py`)
+
+`data/overrides.json` maps raw platform titles to corrected titles, direct TMDB IDs, content type corrections, or skip. Auto-detected at setup time — if the overrides file is newer than the watch index, triggers a rebuild without `--refresh-data`.
+
 ### CLI (`recommender/main.py`)
 
-Rich-powered output with spinners during API calls and panel-formatted results. Stderr/stdout separation for pipe-friendly usage. Interactive REPL with conversational context and inline feedback commands (`+liked`, `+disliked`, `+add`).
+Rich-powered output with spinners during API calls and panel-formatted results. Stderr/stdout separation for pipe-friendly usage. Interactive REPL with conversational context and inline feedback commands (`+liked`, `+disliked`, `+add`). Token usage and cost printed after each query.
 
 ## Cache Layout
 
@@ -162,28 +187,32 @@ recommender/cache/
   providers/
     {content_type}/{region}/{tmdb_id}.json
   watch_index.json               [{tmdb_id, title, content_type}, ...]
-  taste_profile.txt              Claude Sonnet prose output
+  taste_profile.txt              LLM-generated prose output
   taste_profile_*.txt            Timestamped backups
   feedback.json                  User ratings and additions
 ```
 
-## Configuration (`config.py`)
+## Configuration
 
-| Key | Description |
-|-----|-------------|
-| `TMDB_API_KEY` | TMDB v3 API key (from env) |
-| `ANTHROPIC_API_KEY` | Anthropic API key (from env) |
-| `PLATFORM_PATHS` | Dict of platform -> CSV path |
-| `DEFAULT_TOP_N` | Default results per query (3) |
-| `MIN_VOTE_COUNT` | Minimum TMDB votes for discover (20) |
-| `RECENCY_HALF_LIFE_DAYS` | Signal decay rate (90) |
-| `WATCH_REGION` | Region for streaming providers (US) |
-| `STREAMING_PLATFORMS` | User's subscribed platforms |
-| `FEEDBACK_PATH` | Feedback JSON path |
+Split across two files:
 
-## Model Usage
+**`.env`** — secrets only (gitignored):
+- `TMDB_API_KEY` — TMDB v3 API key
+- `ANTHROPIC_API_KEY` — Anthropic API key
+- `GEMINI_API_KEY` — Google Gemini API key (AIza* for AI Studio, AQ.* for Vertex AI)
 
-| Model | Where | Why |
-|-------|-------|-----|
-| `claude-haiku-4-5-20251001` | Enricher | High volume, simple descriptions, cheap |
-| `claude-sonnet-4-6` | Taste profile, intent parser, ranker, suggestions | Complex reasoning, personalisation |
+**`config.yaml`** — all settings:
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `provider` | anthropic | LLM provider ("anthropic" or "gemini") |
+| `models.*` | (see above) | Model assignments per provider (fast/reason roles) |
+| `default_top_n` | 3 | Default results per query |
+| `min_vote_count` | 20 | Minimum TMDB votes for discover |
+| `recency_half_life_days` | 90 | Signal decay rate |
+| `watch_region` | US | Region for streaming providers |
+| `streaming_platforms` | [] | User's subscribed platforms |
+| `platform_paths.*` | (data paths) | Platform CSV file locations |
+| `overrides_path` | data/overrides.json | Title override file |
+
+`config.py` is a thin loader that reads from both.

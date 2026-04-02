@@ -1,19 +1,19 @@
 # Streamline
 
-A personal streaming recommendation engine that knows your actual taste — built on your real watch history from Netflix, Prime Video, and any manually tracked titles.
+A personal streaming recommendation engine that knows your actual taste — built on your real watch history from Netflix, Prime Video, and any manually tracked titles. Supports multiple LLM providers (Anthropic Claude, Google Gemini).
 
 ## How It Works
 
 Two phases:
 
-1. **Setup (run once)** — parses your watch history, fetches metadata from TMDB, enriches each title with a semantic description via Claude Haiku, and builds a full taste profile via Claude Sonnet (processes all enriched titles in batches, no limit).
-2. **Query (any time)** — ask anything in natural language. Claude Sonnet parses your intent, finds candidates via TMDB Discover + Claude semantic suggestions (hybrid generation), filters out what you've already watched, annotates streaming availability, and ranks the results against your taste profile.
+1. **Setup (run once)** — parses your watch history, fetches metadata from TMDB, enriches each title with a semantic description (fast model), and builds a full taste profile (reasoning model) from all enriched titles in batches.
+2. **Query (any time)** — ask anything in natural language. The reasoning model parses your intent, finds candidates via TMDB Discover + semantic suggestions (hybrid generation), filters out what you've already watched, annotates streaming availability, and ranks the results against your taste profile.
 
 ## Prerequisites
 
 - Python 3.10+
 - TMDB API key (free at themoviedb.org)
-- Anthropic API key
+- Anthropic API key and/or Google Gemini API key
 
 ## Quick Start
 
@@ -25,6 +25,7 @@ python3 -m venv venv && source venv/bin/activate && pip install -r requirements.
 cat > .env << 'EOF'
 TMDB_API_KEY=your_key_here
 ANTHROPIC_API_KEY=your_key_here
+GEMINI_API_KEY=your_key_here
 EOF
 
 # 3. Add your watch history under data/ (see below)
@@ -62,7 +63,10 @@ Everything goes through `./recommend`:
 # Options
 ./recommend --debug "spy thriller"              # full pipeline trace
 ./recommend -n 5 "dark thriller"                # override result count
+./recommend --provider gemini "spy thriller"     # use Gemini instead of default
 ```
+
+Each query prints token usage and estimated cost at the end.
 
 ## Web UI
 
@@ -78,6 +82,57 @@ The web UI provides a search interface, taste profile dashboard with expandable 
 
 Port and host are configurable via `STREAMLINE_PORT` and `STREAMLINE_HOST` environment variables.
 
+## Configuration
+
+Settings live in two places:
+
+- **`.env`** — secrets only (API keys, gitignored)
+- **`config.yaml`** — everything else (models, tunables, data paths)
+
+### LLM Providers
+
+```yaml
+# config.yaml
+provider: anthropic                    # or "gemini"
+
+models:
+  anthropic:
+    fast: claude-haiku-4-5-20251001    # enrichment (high volume, cheap)
+    reason: claude-sonnet-4-6          # intent, ranking, profile (complex reasoning)
+  gemini:
+    fast: gemini-2.5-flash
+    reason: gemini-2.5-pro
+```
+
+Switch providers by changing `provider:` in config.yaml or per-query with `--provider gemini`. Model names are user-configurable — update them when new models are released.
+
+### Title Overrides
+
+When TMDB can't match a title, create `data/overrides.json`:
+
+```json
+{
+  "The Matrix III Revolutions": {"title": "The Matrix Revolutions"},
+  "21 REPACK": {"title": "21"},
+  "Some Cooking Show Episode": {"skip": true},
+  "Delhi Cops Episode": {"title": "Delhi Cops", "content_type": "tv"}
+}
+```
+
+The override file is auto-detected — run `./recommend setup` (no flags needed) and it triggers a rebuild.
+
+### Settings Reference
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `provider` | anthropic | LLM provider |
+| `models.*` | (see above) | Model assignments per provider |
+| `default_top_n` | 3 | Default results per query |
+| `min_vote_count` | 20 | Minimum TMDB votes for discover candidates |
+| `recency_half_life_days` | 90 | Scoring decay — days until recency score halves |
+| `watch_region` | US | Region for streaming availability lookup |
+| `streaming_platforms` | [] | Your subscribed platforms (filters results when set) |
+
 ## Watch History Sources
 
 Place exported CSV files under `data/`:
@@ -89,20 +144,6 @@ Place exported CSV files under `data/`:
 | Manual list | `data/manual/tv.csv` and `data/manual/movies.csv` |
 
 Netflix and Prime exports are available from their account settings pages. Manual files are plain text, one title per line. Movie titles may include a trailing year (`Zodiac 2007`) which is stripped automatically.
-
-## Configuration
-
-All in `config.py` and `.env`:
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `TMDB_API_KEY` | (env) | TMDB v3 API key |
-| `ANTHROPIC_API_KEY` | (env) | Anthropic API key |
-| `DEFAULT_TOP_N` | 3 | Default number of results per query |
-| `MIN_VOTE_COUNT` | 20 | Minimum TMDB votes for discover candidates |
-| `RECENCY_HALF_LIFE_DAYS` | 90 | Scoring decay — days until recency score halves |
-| `WATCH_REGION` | US | Region for streaming availability lookup |
-| `STREAMING_PLATFORMS` | [] | Your subscribed platforms (filters results when set) |
 
 ## Running Tests
 
