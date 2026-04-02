@@ -149,7 +149,12 @@ class GeminiClient(LLMClient):
         adjusted_tokens = max(max_tokens * 3, 4000)
 
         config_params: dict = {"max_output_tokens": adjusted_tokens}
-        if "return only valid json" in prompt.lower() or "return only a json" in prompt.lower():
+        # Enable JSON mode when prompt asks for structured JSON output
+        prompt_lower = prompt.lower()
+        if any(phrase in prompt_lower for phrase in [
+            "return only valid json", "return only a json",
+            "return only a json array", "json array of",
+        ]):
             config_params["response_mime_type"] = "application/json"
 
         # Pro with thinking mode needs longer timeouts

@@ -44,8 +44,8 @@ STREAMING_PLATFORMS: list[str] = _cfg.get("streaming_platforms", [])
 # ── Data paths ──
 _paths = _cfg.get("platform_paths", {})
 PLATFORM_PATHS = {
-    "netflix": str(_ROOT / _paths.get("netflix", "data/netflix/ViewingActivity.csv")) if _paths.get("netflix") else None,
-    "prime": str(_ROOT / _paths.get("prime", "data/prime_video/Viewing History.csv")) if _paths.get("prime") else None,
+    "netflix": str(_ROOT / _paths.get("netflix", "data/netflix/ViewingActivity.csv")),
+    "prime": str(_ROOT / _paths.get("prime", "data/prime_video/Viewing History.csv")),
     "disney": None,
     "hbo": None,
 }
