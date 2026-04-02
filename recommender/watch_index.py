@@ -1,10 +1,13 @@
 import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from .ingestion.base import WatchEvent
 from .tmdb_client import TmdbMetadata
+
+log = logging.getLogger("recommender.index")
 
 
 def _normalize(title: str) -> str:
@@ -51,7 +54,61 @@ def build(events: list[WatchEvent], metadata: dict[str, TmdbMetadata]) -> WatchI
                 "content_type": e.content_type,
             })
 
-    return WatchIndex(tmdb_ids=tmdb_ids, normalized_titles=normalized_titles, entries=entries)
+    index = WatchIndex(tmdb_ids=tmdb_ids, normalized_titles=normalized_titles, entries=entries)
+    return deduplicate(index)
+
+
+def deduplicate(index: WatchIndex) -> WatchIndex:
+    """Merge near-duplicate entries using TMDB ID and fuzzy title matching.
+
+    1. Entries with the same TMDB ID are merged (keep first occurrence).
+    2. Entries with no TMDB ID are fuzzy-matched against each other (threshold 90).
+    """
+    from rapidfuzz import fuzz
+
+    # Phase 1: merge by TMDB ID
+    seen_ids: dict[int, int] = {}  # tmdb_id -> index in deduped
+    deduped: list[dict] = []
+    for e in index.entries:
+        tmdb_id = e.get("tmdb_id", 0)
+        if tmdb_id and tmdb_id in seen_ids:
+            log.debug("Dedup by TMDB ID: %r merged with %r (ID %d)",
+                       e["title"], deduped[seen_ids[tmdb_id]]["title"], tmdb_id)
+            continue
+        if tmdb_id:
+            seen_ids[tmdb_id] = len(deduped)
+        deduped.append(e)
+
+    # Phase 2: fuzzy dedup for entries without TMDB ID
+    no_id = [e for e in deduped if not e.get("tmdb_id")]
+    has_id = [e for e in deduped if e.get("tmdb_id")]
+
+    kept_no_id: list[dict] = []
+    for e in no_id:
+        is_dup = False
+        for existing in kept_no_id:
+            if (e.get("content_type") == existing.get("content_type")
+                    and fuzz.ratio(e["title"].lower(), existing["title"].lower()) >= 90):
+                log.debug("Dedup by fuzzy match: %r ~ %r (score >= 90)",
+                           e["title"], existing["title"])
+                is_dup = True
+                break
+        if not is_dup:
+            kept_no_id.append(e)
+
+    final = has_id + kept_no_id
+    before = len(index.entries)
+    after = len(final)
+    if before != after:
+        log.info("Deduplication: %d -> %d entries (%d removed)", before, after, before - after)
+
+    # Rebuild sets from deduped entries
+    tmdb_ids = {e["tmdb_id"] for e in final if e.get("tmdb_id")}
+    normalized_titles = set()
+    for e in final:
+        normalized_titles.add((_normalize(e["title"]), e.get("content_type", "movie")))
+
+    return WatchIndex(tmdb_ids=tmdb_ids, normalized_titles=normalized_titles, entries=final)
 
 
 def save(index: WatchIndex, path: str) -> None:

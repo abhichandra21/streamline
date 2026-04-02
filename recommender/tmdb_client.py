@@ -130,59 +130,86 @@ class TmdbClient:
     def _clean_title_variants(self, title: str) -> list[str]:
         """Generate cleaned title variants for TMDB search fallback.
 
-        Returns a list of titles to try, most specific first:
-        1. Original title
-        2. Stripped parenthetical suffixes: (English Subtitled), (4K UHD), (Hindi), etc.
-        3. After last hyphen (for "EpisodeName-SeriesName" Prime patterns)
-        4. Before first colon (for "Show: Season X: Episode" Netflix patterns)
+        Uses guessit for smart title extraction, plus custom patterns
+        for streaming platform naming conventions.
         """
+        from guessit import guessit as guess
+
         variants = [title]
         seen = {title}
 
-        # Strip parenthetical suffixes
+        def _add(v: str) -> None:
+            v = v.strip()
+            if v and len(v) > 2 and v not in seen:
+                variants.append(v)
+                seen.add(v)
+
+        # 1. guessit extraction — best for structured titles with episode/season markers
+        try:
+            info = guess(title)
+            gi_title = info.get('title', '')
+            if gi_title and gi_title != title:
+                _add(gi_title)
+        except Exception:
+            pass
+
+        # 2. Strip parenthetical suffixes (platform noise: UHD, Subtitled, etc.)
         stripped = re.sub(r'\s*\([^)]*(?:Subtitl|UHD|Hindi|English|Narrat|4K|Dubbed|Version|Edition|UNRATED|REPACK|Theatrical)[^)]*\)\s*$', '', title, flags=re.IGNORECASE).strip()
-        if stripped and stripped != title and stripped not in seen:
-            variants.append(stripped)
-            seen.add(stripped)
+        _add(stripped)
 
-        # Strip non-parenthetical edition/version suffixes
+        # 3. Strip non-parenthetical edition/version suffixes
         stripped_edition = re.sub(r'\s+(?:Theatrical|Directors?\s*Cut|Unrated|Repack|Extended|Special)\s*(?:Edition|Version)?\s*$', '', stripped, flags=re.IGNORECASE).strip()
-        if stripped_edition and stripped_edition != stripped and stripped_edition not in seen:
-            variants.append(stripped_edition)
-            seen.add(stripped_edition)
+        _add(stripped_edition)
 
-        # Strip year suffix like (2004)
+        # 4. Strip year suffix like (2004)
         stripped_year = re.sub(r'\s*\(\d{4}\)\s*$', '', title).strip()
-        if stripped_year and stripped_year != title and stripped_year not in seen:
-            variants.append(stripped_year)
-            seen.add(stripped_year)
+        _add(stripped_year)
 
-        # After last hyphen (Prime episode pattern: "EpisodeName-SeriesName")
+        # 5. After last hyphen (Prime: "EpisodeName-SeriesName")
         if '-' in title:
             after_hyphen = title.rsplit('-', 1)[1].strip()
-            # Strip trailing S1/S2/etc season markers
             after_hyphen = re.sub(r'\s+S\d+\s*$', '', after_hyphen).strip()
-            if len(after_hyphen) > 3 and after_hyphen not in seen:
-                variants.append(after_hyphen)
-                seen.add(after_hyphen)
+            _add(after_hyphen)
 
-        # Before first colon (Netflix pattern: "Show: Season: Episode")
+        # 6. Before first colon (Netflix: "Show: Season: Episode")
         if ':' in title:
             before_colon = title.split(':')[0].strip()
-            # Skip if it's just "Episode N" or too generic
-            if (len(before_colon) > 2
-                    and before_colon not in seen
-                    and not re.match(r'^Episode\s+\d+$', before_colon, re.IGNORECASE)):
-                variants.append(before_colon)
-                seen.add(before_colon)
+            if not re.match(r'^Episode\s+\d+$', before_colon, re.IGNORECASE):
+                _add(before_colon)
 
         return variants
+
+    def classify_title(self, title: str) -> tuple[str, str]:
+        """Use guessit to detect if a title is a TV episode and extract the series name.
+
+        Returns (content_type, clean_title). If guessit detects an episode,
+        returns ('tv', series_name). Otherwise returns the original classification.
+        """
+        from guessit import guessit as guess
+
+        try:
+            info = guess(title)
+            if info.get('type') == 'episode':
+                gi_title = info.get('title', '')
+                if gi_title and len(gi_title) > 2:
+                    return 'tv', gi_title
+        except Exception:
+            pass
+        return '', title
 
     def get_metadata(self, title: str, content_type: str) -> TmdbMetadata | None:
         """Fetch and cache metadata for a single title. Returns None if not found.
 
-        Tries cleaned title variants if the original search fails.
+        Uses guessit to detect misclassified episodes and tries cleaned
+        title variants if the original search fails.
         """
+        # Let guessit override content_type if it detects an episode
+        detected_type, detected_title = self.classify_title(title)
+        if detected_type and detected_type != content_type:
+            log.debug("guessit reclassified %r: %s -> %s (title: %r)",
+                       title, content_type, detected_type, detected_title)
+            content_type = detected_type
+
         alt_type = "tv" if content_type == "movie" else "movie"
         for variant in self._clean_title_variants(title):
             # Try the requested content type first
