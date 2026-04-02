@@ -62,8 +62,9 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         and overrides_path.stat().st_mtime > index_path.stat().st_mtime
     )
     if overrides_newer and not refresh_data:
-        console.print("\n[yellow]Overrides file changed since last build — triggering data refresh.[/yellow]")
+        console.print("\n[yellow]Overrides file changed since last build — triggering data + profile refresh.[/yellow]")
         refresh_data = True
+        refresh_profile = True
 
     if not refresh_data and index_path.exists():
         console.print("\nWatch index exists, skipping data fetch (use --refresh-data to rebuild).")

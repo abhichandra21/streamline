@@ -43,9 +43,23 @@ STREAMING_PLATFORMS: list[str] = _cfg.get("streaming_platforms", [])
 
 # ── Data paths ──
 _paths = _cfg.get("platform_paths", {})
+
+
+def _resolve_platform_path(platform: str, default: str | None) -> str | None:
+    # Missing keys should keep repo defaults; explicit null/empty disables the source.
+    if platform not in _paths:
+        return str(_ROOT / default) if default is not None else None
+
+    configured_path = _paths[platform]
+    if configured_path in (None, ""):
+        return None
+
+    return str(_ROOT / configured_path)
+
+
 PLATFORM_PATHS = {
-    "netflix": str(_ROOT / _paths.get("netflix", "data/netflix/ViewingActivity.csv")) if _paths.get("netflix") else None,
-    "prime": str(_ROOT / _paths.get("prime", "data/prime_video/Viewing History.csv")) if _paths.get("prime") else None,
+    "netflix": _resolve_platform_path("netflix", "data/netflix/ViewingActivity.csv"),
+    "prime": _resolve_platform_path("prime", "data/prime_video/Viewing History.csv"),
     "disney": None,
     "hbo": None,
 }

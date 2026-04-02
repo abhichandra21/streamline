@@ -68,3 +68,23 @@ def test_load_context_exits_if_no_taste_profile(tmp_path, monkeypatch):
     with pytest.raises(SystemExit):
         from recommender.main import load_context
         load_context()
+
+
+def test_resolve_platform_path_uses_default_when_key_missing(monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, '_paths', {})
+
+    resolved = config._resolve_platform_path('netflix', 'data/netflix/ViewingActivity.csv')
+
+    assert resolved == str(config._ROOT / 'data/netflix/ViewingActivity.csv')
+
+
+def test_resolve_platform_path_allows_explicit_disable(monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, '_paths', {'netflix': None})
+    assert config._resolve_platform_path('netflix', 'data/netflix/ViewingActivity.csv') is None
+
+    monkeypatch.setattr(config, '_paths', {'netflix': ''})
+    assert config._resolve_platform_path('netflix', 'data/netflix/ViewingActivity.csv') is None
