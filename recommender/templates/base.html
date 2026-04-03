@@ -208,6 +208,7 @@
     <a href="/" class="nav-brand">Streamline</a>
     <div style="display:flex; gap:1.5rem; margin-left:0.5rem;">
       <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">Home</a>
+      <a href="/searches" class="nav-link {% if request.path == '/searches' %}active{% endif %}">Searches</a>
       <a href="/history" class="nav-link {% if request.path.startswith('/history') or request.path.startswith('/title') %}active{% endif %}">Archive</a>
     </div>
   </nav>

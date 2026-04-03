@@ -16,7 +16,7 @@
     style="display:flex; gap:0; max-width:680px;"
   >
     <input
-      type="text" name="query"
+      type="text" name="query" id="query-input"
       placeholder="paranoid spy thriller like The Night Manager..."
       class="input-field"
       style="padding:0.85rem 1.25rem; flex:1; border-radius:4px 0 0 4px; border-right:none;"
@@ -36,23 +36,38 @@
     <span class="mono" style="font-size:0.6rem; color:var(--muted); padding-top:2px;">Try:</span>
     {% for s in ["gritty British crime drama", "feel-good comedy", "dark espionage thriller", "Indian family drama"] %}
     <button
-      onclick="document.querySelector('[name=query]').value='{{ s }}'; document.getElementById('search-form').dispatchEvent(new Event('submit',{bubbles:true}));"
+      onclick="document.getElementById('query-input').value='{{ s }}'; document.getElementById('search-form').requestSubmit();"
       class="btn-ghost" style="padding:3px 10px; font-size:0.58rem; cursor:pointer;"
     >{{ s }}</button>
     {% endfor %}
   </div>
+
+  <script>
+    // Auto-submit if arriving with ?q= param (from re-search link)
+    (function() {
+      var params = new URLSearchParams(window.location.search);
+      var q = params.get('q');
+      if (q) {
+        document.getElementById('query-input').value = q;
+        // Small delay to let HTMX initialize
+        setTimeout(function() { document.getElementById('search-form').requestSubmit(); }, 100);
+        // Clean up URL
+        history.replaceState(null, '', '/');
+      }
+    })();
+  </script>
 </section>
 
 {% if recent_queries %}
 <!-- ════════ RECENT SEARCHES ════════ -->
 <section style="margin-bottom:2.5rem;">
-  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted);">Recent searches</span>
-  <div style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-top:0.6rem;">
+  <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:0.6rem;">
+    <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted);">Recent searches</span>
+    <a href="/searches" class="mono" style="font-size:0.58rem; color:var(--muted); text-decoration:none; transition:color 0.15s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'">View all</a>
+  </div>
+  <div style="display:flex; flex-wrap:wrap; gap:0.4rem;">
     {% for q in recent_queries %}
-    <button
-      onclick="document.querySelector('[name=query]').value='{{ q.query }}'; document.getElementById('search-form').dispatchEvent(new Event('submit',{bubbles:true}));"
-      class="btn-ghost" style="padding:4px 12px; font-size:0.7rem; cursor:pointer;"
-    >{{ q.query }}</button>
+    <a href="/searches#q-{{ loop.index }}" class="btn-ghost" style="padding:4px 12px; font-size:0.7rem; text-decoration:none;">{{ q.query }}</a>
     {% endfor %}
   </div>
 </section>
