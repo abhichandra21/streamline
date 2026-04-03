@@ -206,11 +206,13 @@
 
   <nav>
     <a href="/" class="nav-brand">Streamline</a>
-    <div style="display:flex; gap:1.5rem; margin-left:0.5rem;">
+    <div style="display:flex; gap:1.5rem; margin-left:0.5rem; flex:1;">
       <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">Home</a>
       <a href="/searches" class="nav-link {% if request.path == '/searches' %}active{% endif %}">Searches</a>
       <a href="/history" class="nav-link {% if request.path.startswith('/history') or request.path.startswith('/title') %}active{% endif %}">Archive</a>
+      <a href="/settings" class="nav-link {% if request.path == '/settings' %}active{% endif %}">Settings</a>
     </div>
+    <a href="/help" class="nav-link {% if request.path == '/help' %}active{% endif %}">Help</a>
   </nav>
 
   <main style="max-width:54rem; margin:0 auto; padding:2.5rem 2rem 5rem;">
