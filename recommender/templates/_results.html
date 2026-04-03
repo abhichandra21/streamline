@@ -4,6 +4,11 @@
 </div>
 
 {% elif results %}
+<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem;">
+  <span class="mono" style="font-size:0.6rem; color:var(--muted);">{{ results|length }} results for "{{ query }}"</span>
+  <button onclick="document.getElementById('results').innerHTML=''; document.getElementById('query-input').value=''; document.getElementById('query-input').focus();"
+    class="btn-ghost" style="padding:3px 10px; font-size:0.55rem; cursor:pointer;">Clear</button>
+</div>
 <div style="display:flex; flex-direction:column; gap:10px;">
   {% for r in results %}
   <div class="result-card" style="display:flex; gap:1rem; padding:1.25rem; background:var(--surface); border-radius:6px; border:1px solid var(--border); transition:border-color 0.2s;"
@@ -22,7 +27,14 @@
 
     <div style="flex:1; min-width:0;">
       <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:0.5rem; margin-bottom:0.35rem;">
+        {% if r.tmdb_url %}
+        <a href="{{ r.tmdb_url }}" target="_blank" rel="noopener" style="text-decoration:none;">
+          <h3 style="font-family:'DM Serif Display',serif; font-size:1.2rem; color:var(--text); line-height:1.25; margin:0; transition:color 0.15s;"
+            onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">{{ r.title }}</h3>
+        </a>
+        {% else %}
         <h3 style="font-family:'DM Serif Display',serif; font-size:1.2rem; color:var(--text); line-height:1.25; margin:0;">{{ r.title }}</h3>
+        {% endif %}
         <span class="badge {{ 'badge-tv' if r.content_type == 'tv' else 'badge-movie' }}">{{ r.content_type }}</span>
       </div>
 
@@ -41,13 +53,28 @@
         <span class="mono" style="font-size:0.58rem; color:var(--muted);">{{ r.streaming_providers | join("  ·  ") }}</span>
         {% endif %}
         {% if r.tmdb_url %}
-        <a href="{{ r.tmdb_url }}" target="_blank" rel="noopener" class="mono" style="font-size:0.58rem; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); transition:color 0.15s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'">TMDB →</a>
+        <a href="{{ r.tmdb_url }}" target="_blank" rel="noopener" class="mono result-link">TMDB</a>
+        {% endif %}
+        {% if r.imdb_url %}
+        <a href="{{ r.imdb_url }}" target="_blank" rel="noopener" class="mono result-link">IMDB</a>
         {% endif %}
       </div>
     </div>
   </div>
   {% endfor %}
 </div>
+
+<style>
+  .result-link {
+    font-size: 0.58rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+  .result-link:hover { color: var(--accent); text-decoration: none; }
+</style>
 
 {% elif query %}
 <div style="padding:3rem; text-align:center;">

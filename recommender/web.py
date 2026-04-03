@@ -265,9 +265,17 @@ def recommend() -> str:
         if meta:
             poster = _get_poster_url(meta.tmdb_id, r.content_type)
         tmdb_url = ""
+        imdb_url = ""
         if meta:
             tmdb_type = "tv" if r.content_type == "tv" else "movie"
             tmdb_url = f"https://www.themoviedb.org/{tmdb_type}/{meta.tmdb_id}"
+            # Movies have imdb_id in the TMDB cache
+            cache_path = Path(config.CACHE_DIR) / r.content_type / f"{meta.tmdb_id}.json"
+            if cache_path.exists():
+                raw = json.loads(cache_path.read_text())
+                imdb_id = raw.get("imdb_id")
+                if imdb_id:
+                    imdb_url = f"https://www.imdb.com/title/{imdb_id}/"
         items.append({
             "title": r.title,
             "content_type": r.content_type,
@@ -278,6 +286,7 @@ def recommend() -> str:
             "streaming_providers": r.streaming_providers[:4],
             "poster": poster,
             "tmdb_url": tmdb_url,
+            "imdb_url": imdb_url,
         })
 
     # HTMX partial — return just the results fragment.
