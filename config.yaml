@@ -15,10 +15,49 @@ models:
     fast: gemini-2.5-flash
     reason: gemini-2.5-pro
 
+# LLM call settings
+llm:
+  # Timeouts in seconds
+  timeout_fast: 30           # enrichment calls
+  timeout_reason: 60         # intent, ranking, suggestions
+  timeout_profile_batch: 120 # taste profile per-batch (4000 tokens needs more time)
+  timeout_profile_merge: 300 # taste profile merge (11 batches -> 1, needs time)
+
+  # Max output tokens
+  tokens_fast: 200           # enrichment descriptions
+  tokens_intent: 400         # intent parsing
+  tokens_ranking: 1000       # base ranking (auto-scales with top_n)
+  tokens_suggestions: 300    # Claude title suggestions
+  tokens_profile_batch: 4000 # per-batch taste profile (200 titles need room)
+  tokens_profile_merge: 16000 # merged taste profile (18 clusters at ~31K chars)
+  tokens_abandoned: 300      # abandoned show advice
+
+  # Taste profile
+  profile_batch_size: 200    # titles per batch
+  rate_limit_wait: 65        # seconds to wait on rate limit
+
 # Recommendation settings
 default_top_n: 3
 min_vote_count: 20
 recency_half_life_days: 90
+
+# Engagement scoring weights (must sum to 1.0)
+scoring:
+  weight_completion: 0.5    # how much of the title was watched
+  weight_rewatch: 0.3       # rewatched titles get a bonus
+  weight_recency: 0.2       # recent watches score higher
+  default_tv_runtime: 45    # fallback minutes when TMDB has no data
+  default_movie_runtime: 90
+  rewatch_saturation: 5     # log scale saturates at ~N rewatches
+
+# Manual title scoring
+# Manual titles have no real watch data, so we use synthetic values.
+# "now" = current timestamp (scores competitively with recent watches)
+# "neutral" = fixed date like 2022-01-01 (scores lower, older feeling)
+manual:
+  timestamp: now              # "now" or a date like "2022-01-01"
+  tv_duration_minutes: 45     # synthetic watch duration for TV
+  movie_duration_minutes: 120 # synthetic watch duration for movies
 
 # Streaming availability
 watch_region: US

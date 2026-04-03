@@ -2,12 +2,9 @@ import math
 from collections import defaultdict
 from datetime import datetime
 
+import config
 from .ingestion.base import WatchEvent
 from .tmdb_client import TmdbMetadata
-
-DEFAULT_TV_RUNTIME = 45      # minutes, used when TMDB has no data
-DEFAULT_MOVIE_RUNTIME = 90
-REWATCH_SATURATION = 5       # log scale saturates at ~5 rewatches
 
 
 def compute_scores(
@@ -16,8 +13,9 @@ def compute_scores(
     recency_half_life_days: int = 90,
 ) -> dict[str, float]:
     """
-    Returns {series_name_or_title: implicit_score (0.0–1.0)}.
+    Returns {series_name_or_title: implicit_score (0.0-1.0)}.
     Groups TV events by series_name; movies by title.
+    Weights from config.yaml: completion, rewatch, recency.
     """
     today = datetime.now()
 
@@ -35,7 +33,7 @@ def compute_scores(
         if meta and meta.runtime_minutes:
             runtime = meta.runtime_minutes
         else:
-            runtime = DEFAULT_TV_RUNTIME if content_type == "tv" else DEFAULT_MOVIE_RUNTIME
+            runtime = config.DEFAULT_TV_RUNTIME if content_type == "tv" else config.DEFAULT_MOVIE_RUNTIME
 
         # Completion rate (average across all watch events)
         completions = [
@@ -52,13 +50,15 @@ def compute_scores(
             rewatch_count = sum(max(0, c - 1) for c in episode_counts.values())
         else:
             rewatch_count = max(0, len(evts) - 1)
-        rewatch_bonus = min(1.0, math.log(rewatch_count + 1) / math.log(REWATCH_SATURATION))
+        rewatch_bonus = min(1.0, math.log(rewatch_count + 1) / math.log(config.REWATCH_SATURATION))
 
         # Recency
         most_recent = max(e.timestamp for e in evts)
         days_since = max(0, (today - most_recent).days)
         recency = 0.5 ** (days_since / recency_half_life_days)
 
-        scores[key] = 0.5 * completion + 0.3 * rewatch_bonus + 0.2 * recency
+        scores[key] = (config.WEIGHT_COMPLETION * completion
+                        + config.WEIGHT_REWATCH * rewatch_bonus
+                        + config.WEIGHT_RECENCY * recency)
 
     return scores

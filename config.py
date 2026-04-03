@@ -31,6 +31,43 @@ LLM_MODELS: dict[str, dict[str, str]] = _cfg.get("models", {
     "gemini": {"fast": "gemini-2.5-flash", "reason": "gemini-2.5-flash"},
 })
 
+# ── LLM call settings ──
+_llm_cfg = _cfg.get("llm", {})
+
+# Timeouts (seconds)
+TIMEOUT_FAST = _llm_cfg.get("timeout_fast", 30)
+TIMEOUT_REASON = _llm_cfg.get("timeout_reason", 60)
+TIMEOUT_PROFILE_BATCH = _llm_cfg.get("timeout_profile_batch", 60)
+TIMEOUT_PROFILE_MERGE = _llm_cfg.get("timeout_profile_merge", 300)
+
+# Max output tokens
+TOKENS_FAST = _llm_cfg.get("tokens_fast", 200)
+TOKENS_INTENT = _llm_cfg.get("tokens_intent", 400)
+TOKENS_RANKING = _llm_cfg.get("tokens_ranking", 1000)
+TOKENS_SUGGESTIONS = _llm_cfg.get("tokens_suggestions", 300)
+TOKENS_PROFILE_BATCH = _llm_cfg.get("tokens_profile_batch", 800)
+TOKENS_PROFILE_MERGE = _llm_cfg.get("tokens_profile_merge", 4000)
+TOKENS_ABANDONED = _llm_cfg.get("tokens_abandoned", 300)
+
+# Taste profile
+PROFILE_BATCH_SIZE = _llm_cfg.get("profile_batch_size", 200)
+RATE_LIMIT_WAIT = _llm_cfg.get("rate_limit_wait", 65)
+
+# ── Scoring weights ──
+_scoring = _cfg.get("scoring", {})
+WEIGHT_COMPLETION = _scoring.get("weight_completion", 0.5)
+WEIGHT_REWATCH = _scoring.get("weight_rewatch", 0.3)
+WEIGHT_RECENCY = _scoring.get("weight_recency", 0.2)
+DEFAULT_TV_RUNTIME = _scoring.get("default_tv_runtime", 45)
+DEFAULT_MOVIE_RUNTIME = _scoring.get("default_movie_runtime", 90)
+REWATCH_SATURATION = _scoring.get("rewatch_saturation", 5)
+
+# ── Manual title settings ──
+_manual = _cfg.get("manual", {})
+MANUAL_TIMESTAMP = _manual.get("timestamp", "now")  # "now" or "YYYY-MM-DD"
+MANUAL_TV_DURATION_MINUTES = _manual.get("tv_duration_minutes", 45)
+MANUAL_MOVIE_DURATION_MINUTES = _manual.get("movie_duration_minutes", 120)
+
 # ── Recommendation settings ──
 DEFAULT_TOP_N = _cfg.get("default_top_n", 3)
 CANDIDATE_POOL_SIZE = _cfg.get("candidate_pool_size", 500)

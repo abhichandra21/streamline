@@ -186,6 +186,9 @@ recommender/cache/
     index.json                   title -> description index
   providers/
     {content_type}/{region}/{tmdb_id}.json
+  profile_batches/               Intermediate batch profiles (auto-cleaned after merge)
+    fingerprint.txt              SHA-256 of scored title list (staleness check)
+    batch_01.txt ... batch_NN.txt
   watch_index.json               [{tmdb_id, title, content_type}, ...]
   taste_profile.txt              LLM-generated prose output
   taste_profile_*.txt            Timestamped backups
@@ -201,18 +204,20 @@ Split across two files:
 - `ANTHROPIC_API_KEY` — Anthropic API key
 - `GEMINI_API_KEY` — Google Gemini API key (AIza* for AI Studio, AQ.* for Vertex AI)
 
-**`config.yaml`** — all settings:
+**`config.yaml`** — all settings, organized in sections:
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `provider` | anthropic | LLM provider ("anthropic" or "gemini") |
-| `models.*` | (see above) | Model assignments per provider (fast/reason roles) |
-| `default_top_n` | 3 | Default results per query |
-| `min_vote_count` | 20 | Minimum TMDB votes for discover |
-| `recency_half_life_days` | 90 | Signal decay rate |
-| `watch_region` | US | Region for streaming providers |
-| `streaming_platforms` | [] | User's subscribed platforms |
-| `platform_paths.*` | (data paths) | Platform CSV file locations |
-| `overrides_path` | data/overrides.json | Title override file |
+| Section | Keys | Description |
+|---------|------|-------------|
+| *(top-level)* | `provider`, `models.*` | LLM provider and model assignments (fast/reason roles) |
+| `llm.*` | `timeout_*`, `tokens_*`, `profile_batch_size`, `rate_limit_wait` | Per-call-type timeouts, token limits, batch sizes |
+| `scoring.*` | `weight_completion`, `weight_rewatch`, `weight_recency`, `default_*_runtime`, `rewatch_saturation` | Engagement scoring weights and fallback runtimes |
+| `manual.*` | `timestamp`, `tv_duration_minutes`, `movie_duration_minutes` | Synthetic values for manual list titles |
+| *(top-level)* | `default_top_n`, `min_vote_count`, `recency_half_life_days` | Recommendation tuning |
+| *(top-level)* | `watch_region`, `streaming_platforms` | Streaming availability |
+| *(top-level)* | `platform_paths.*`, `manual_*_path`, `overrides_path` | Data file locations |
 
-`config.py` is a thin loader that reads from both.
+`config.py` is a thin loader that reads from both. All values have sensible defaults — a minimal `config.yaml` with just `provider:` works.
+
+### Taste Profile Batch Caching
+
+The taste profile builder saves intermediate batch profiles to `recommender/cache/profile_batches/` as they complete. A SHA-256 fingerprint of the scored title list detects staleness — if enrichments, scores, or the title set change, cached batches are invalidated. This makes profile rebuilds resumable: if the merge step fails (timeout, rate limit), re-running `--refresh-profile` loads the cached batches and retries only the merge. Batch files are cleaned up after a successful merge.

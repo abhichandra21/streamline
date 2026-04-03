@@ -1,13 +1,70 @@
+import hashlib
+import json
 import logging
 import time
+from pathlib import Path
 
+import config
 from .ingestion.base import WatchEvent
 from .llm import LLMClient
 
 log = logging.getLogger("recommender.profile")
 
-BATCH_SIZE = 200
-RATE_LIMIT_WAIT = 65  # seconds to wait on rate limit
+_BATCH_DIR = Path(config.ENRICHMENT_CACHE_DIR).parent / "profile_batches"
+
+
+def _batch_fingerprint(scored: list[tuple[str, float]]) -> str:
+    """Hash the scored title list to detect when batches are stale.
+
+    Hashes titles in their scored order with rounded scores. Rounding to
+    2 decimal places absorbs minor recency drift between runs while still
+    invalidating on meaningful changes (feedback, weight changes, new titles).
+    """
+    rounded = [(t, round(s, 2)) for t, s in scored]
+    content = json.dumps(rounded)
+    return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+def _load_cached_batches(fingerprint: str, total: int) -> list[str | None]:
+    """Load cached batch profiles. Returns a list with None for missing batches."""
+    results: list[str | None] = []
+    fp_file = _BATCH_DIR / "fingerprint.txt"
+
+    if not _BATCH_DIR.exists() or not fp_file.exists():
+        return [None] * total
+
+    cached_fp = fp_file.read_text().strip()
+    if cached_fp != fingerprint:
+        log.debug("Batch fingerprint changed (%s -> %s), invalidating cache", cached_fp, fingerprint)
+        _clear_batch_cache()
+        return [None] * total
+
+    for i in range(total):
+        path = _BATCH_DIR / f"batch_{i+1:02d}.txt"
+        if path.exists():
+            results.append(path.read_text())
+        else:
+            results.append(None)
+
+    cached_count = sum(1 for r in results if r is not None)
+    if cached_count:
+        log.debug("Found %d/%d cached batch profiles", cached_count, total)
+    return results
+
+
+def _save_batch(index: int, text: str, fingerprint: str) -> None:
+    """Save a single batch profile to disk."""
+    _BATCH_DIR.mkdir(parents=True, exist_ok=True)
+    (_BATCH_DIR / "fingerprint.txt").write_text(fingerprint)
+    (_BATCH_DIR / f"batch_{index+1:02d}.txt").write_text(text)
+
+
+def _clear_batch_cache() -> None:
+    """Remove all cached batch files."""
+    if _BATCH_DIR.exists():
+        for f in _BATCH_DIR.iterdir():
+            f.unlink()
+        log.debug("Cleared batch cache")
 
 
 def _build_batch_profile(
@@ -32,31 +89,54 @@ def _build_batch_profile(
         "Write in second person (\"You gravitate toward...\").\n\n"
         f"Watch history (sorted by engagement score):\n{history_str}"
     )
-    return client.generate(prompt, role="reason", max_tokens=800, timeout=60.0).strip()
+    return client.generate(prompt, role="reason", max_tokens=config.TOKENS_PROFILE_BATCH,
+                            timeout=config.TIMEOUT_PROFILE_BATCH).strip()
 
 
 def _merge_profiles(
     batch_profiles: list[str],
     client: LLMClient,
 ) -> str:
-    """Merge multiple batch profiles into one consolidated taste profile."""
+    """Merge multiple batch profiles into one consolidated taste profile.
+
+    Uses a two-step approach:
+    1. Extract cluster labels from all batches (short, structured)
+    2. Write the full profile with strict length constraints
+    """
     profiles_str = '\n\n---\n\n'.join(
         f"BATCH {i+1}:\n{p}" for i, p in enumerate(batch_profiles)
     )
 
-    prompt = (
+    # Step 1: Extract and consolidate cluster labels
+    cluster_prompt = (
         "Below are taste profile analyses from different segments of the same person's "
-        "watch history. Merge them into one consolidated taste profile.\n\n"
-        "Rules:\n"
-        "- Preserve EVERY distinct taste cluster found across all batches\n"
-        "- Merge overlapping clusters (e.g., if batch 1 says 'British dramas' and batch 3 "
-        "says 'British crime procedurals', combine into one richer cluster)\n"
-        "- Keep the relative strength — clusters that appear across multiple batches are stronger\n"
-        "- Write in second person (\"You gravitate toward...\")\n"
-        "- Be specific about titles, not generic\n\n"
+        "watch history. List ONLY the distinct taste cluster names you see, merging "
+        "overlapping clusters. Return a numbered list of 8-15 cluster names, nothing else.\n\n"
         f"{profiles_str}"
     )
-    return client.generate(prompt, role="reason", max_tokens=4000, timeout=60.0).strip()
+    clusters_text = client.generate(cluster_prompt, role="reason",
+                                     max_tokens=500, timeout=config.TIMEOUT_PROFILE_MERGE).strip()
+    log.debug("Extracted clusters: %s", clusters_text[:500])
+
+    # Step 2: Write the full profile constrained to those clusters
+    prompt = (
+        "Below are taste profile analyses from different segments of the same person's "
+        "watch history, followed by a consolidated list of taste clusters.\n\n"
+        f"BATCH ANALYSES:\n{profiles_str}\n\n"
+        f"CONSOLIDATED CLUSTERS:\n{clusters_text}\n\n"
+        "Write the final merged taste profile. Rules:\n"
+        "- Write one section (## heading) per cluster from the list above\n"
+        "- Each section: a rich paragraph describing the pattern (tone, pacing, themes, "
+        "what draws this person), followed by key titles in bold/italic\n"
+        "- Merge overlapping content from different batches into the same cluster\n"
+        "- Clusters that appear across multiple batches are stronger — note this\n"
+        "- Write in second person (\"You gravitate toward...\")\n"
+        "- Be specific about titles and what connects them, not generic\n"
+        "- IMPORTANT: You MUST complete every section. If running low on space, "
+        "make later sections shorter rather than cutting off mid-sentence.\n"
+    )
+    return client.generate(prompt, role="reason", max_tokens=config.TOKENS_PROFILE_MERGE,
+                            timeout=config.TIMEOUT_PROFILE_MERGE).strip()
 
 
 def build(
@@ -68,8 +148,9 @@ def build(
 ) -> str:
     """Build a natural-language taste profile.
 
-    Processes all enriched titles in batches to avoid context window limits
-    and ensure full taste coverage.
+    Processes all enriched titles in batches. Batch results are cached to disk
+    so that a failed merge can be retried without re-generating batches.
+    Cached batches are invalidated when the scored title list changes.
     """
     scored = sorted(
         [(title, score) for title, score in scores.items() if title in enrichments],
@@ -88,8 +169,8 @@ def build(
             "patterns in what they disliked."
         )
 
-    # Single batch — no need for merge
-    if len(scored) <= BATCH_SIZE:
+    # Single batch — no need for merge or caching
+    if len(scored) <= config.PROFILE_BATCH_SIZE:
         lines = [
             f"- {title} (score: {score:.2f}): {enrichments[title]}"
             for title, score in scored
@@ -104,29 +185,69 @@ def build(
             f"{negative_section}\n\n"
             f"Watch history (sorted by engagement score):\n{history_str}"
         )
-        return client.generate(prompt, role="reason", max_tokens=4000, timeout=60.0).strip()
+        return client.generate(prompt, role="reason", max_tokens=config.TOKENS_PROFILE_MERGE,
+                                timeout=config.TIMEOUT_PROFILE_MERGE).strip()
 
-    # Multiple batches — build per-batch profiles then merge
-    batches = [scored[i:i + BATCH_SIZE] for i in range(0, len(scored), BATCH_SIZE)]
+    # Multiple batches — use cache for resumability
+    batches = [scored[i:i + config.PROFILE_BATCH_SIZE] for i in range(0, len(scored), config.PROFILE_BATCH_SIZE)]
     total = len(batches)
-    print(f"  Building taste profile in {total} batches ({len(scored)} titles)...")
+    fingerprint = _batch_fingerprint(scored)
+
+    # Check for cached batches from a previous interrupted run
+    cached = _load_cached_batches(fingerprint, total)
+    cached_count = sum(1 for c in cached if c is not None)
+    if cached_count == total:
+        print(f"  All {total} batch profiles cached, skipping to merge...")
+    elif cached_count > 0:
+        print(f"  Resuming: {cached_count}/{total} batch profiles cached, generating remaining...")
+    else:
+        print(f"  Building taste profile in {total} batches ({len(scored)} titles)...")
 
     batch_profiles = []
-    for i, batch in enumerate(batches):
-        print(f"  Batch {i+1}/{total} ({len(batch)} titles)...")
-        for attempt in range(3):
-            try:
-                profile = _build_batch_profile(batch, enrichments, i + 1, total, client)
-                batch_profiles.append(profile)
-                break
-            except Exception as exc:
-                if "rate" in str(exc).lower() or "429" in str(exc):
-                    print(f"  Rate limited, waiting {RATE_LIMIT_WAIT}s...")
-                    time.sleep(RATE_LIMIT_WAIT)
-                else:
-                    log.warning("Batch %d failed (attempt %d): %s", i + 1, attempt + 1, exc)
-                    if attempt == 2:
-                        print(f"  Warning: batch {i+1} failed after 3 retries, skipping.")
+    try:
+        for i, batch in enumerate(batches):
+            if cached[i] is not None:
+                batch_profiles.append(cached[i])
+                continue
+
+            print(f"  Batch {i+1}/{total} ({len(batch)} titles)...")
+            for attempt in range(3):
+                try:
+                    profile = _build_batch_profile(batch, enrichments, i + 1, total, client)
+                    _save_batch(i, profile, fingerprint)
+                    batch_profiles.append(profile)
+                    break
+                except KeyboardInterrupt:
+                    raise
+                except Exception as exc:
+                    err = str(exc).lower()
+                    is_retryable = ("rate" in err or "429" in err
+                                    or "timeout" in err or "timed out" in err)
+                    if is_retryable and attempt < 2:
+                        wait = config.RATE_LIMIT_WAIT if "rate" in err or "429" in err else 10
+                        print(f"  {'Rate limited' if '429' in err else 'Timed out'}, "
+                              f"waiting {wait}s (attempt {attempt+1}/3)...")
+                        time.sleep(wait)
+                    else:
+                        log.warning("Batch %d failed (attempt %d): %s", i + 1, attempt + 1, exc)
+                        if attempt == 2:
+                            print(f"  Warning: batch {i+1} failed after 3 retries, skipping.")
+    except KeyboardInterrupt:
+        on_disk = sum(1 for f in _BATCH_DIR.glob("batch_*.txt")) if _BATCH_DIR.exists() else 0
+        print(f"\n  Interrupted. {on_disk}/{total} batches saved to cache.")
+        if on_disk:
+            print(f"  Re-run --refresh-profile to resume from batch {on_disk + 1}.")
+        raise
 
     print(f"  Merging {len(batch_profiles)} batch profiles...")
-    return _merge_profiles(batch_profiles, client)
+    result = _merge_profiles(batch_profiles, client)
+
+    if client.was_truncated:
+        print(f"  ERROR: Merge output was truncated ({len(result)} chars). "
+              f"Batch cache preserved — re-run --refresh-profile to retry merge only.")
+        print(f"  To fix: increase llm.tokens_profile_merge in config.yaml (currently {config.TOKENS_PROFILE_MERGE}).")
+        log.error("Profile merge truncated at %d chars. Batches preserved.", len(result))
+        raise RuntimeError(f"Profile merge truncated. Increase llm.tokens_profile_merge (currently {config.TOKENS_PROFILE_MERGE}).")
+
+    _clear_batch_cache()
+    return result

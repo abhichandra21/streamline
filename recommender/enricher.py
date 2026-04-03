@@ -3,13 +3,11 @@ import re
 import time
 from pathlib import Path
 
+import config
 from .llm import LLMClient
 from .tmdb_client import TmdbMetadata
 
 log = logging.getLogger("recommender.enricher")
-
-RATE_LIMIT_WAIT = 30  # seconds to wait on rate limit
-MAX_RETRIES = 3
 
 
 def _cache_path(metadata: TmdbMetadata, cache_dir: str) -> Path:
@@ -53,23 +51,23 @@ def enrich(metadata: TmdbMetadata, cache_dir: str, client: LLMClient) -> str:
         + tmdb_info
     )
 
-    for attempt in range(MAX_RETRIES):
+    for attempt in range(3):
         try:
-            description = client.generate(prompt, role="fast", max_tokens=200).strip()
+            description = client.generate(prompt, role="fast", max_tokens=config.TOKENS_FAST, timeout=config.TIMEOUT_FAST).strip()
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(description)
             break
         except Exception as exc:
             if ("429" in str(exc) or "rate" in str(exc).lower()
                     or "RESOURCE_EXHAUSTED" in str(exc)):
-                log.debug("Rate limited during enrichment, waiting %ds...", RATE_LIMIT_WAIT)
-                time.sleep(RATE_LIMIT_WAIT)
+                log.debug("Rate limited during enrichment, waiting %ds...", config.RATE_LIMIT_WAIT)
+                time.sleep(config.RATE_LIMIT_WAIT)
                 continue
             log.warning("Enrichment failed for %s, using fallback: %s", metadata.title, exc)
             description = _fallback_description(metadata)
             break
     else:
-        log.warning("Enrichment failed for %s after %d retries, using fallback", metadata.title, MAX_RETRIES)
+        log.warning("Enrichment failed for %s after %d retries, using fallback", metadata.title, 3)
         description = _fallback_description(metadata)
 
     return description

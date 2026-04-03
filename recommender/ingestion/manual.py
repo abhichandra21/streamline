@@ -1,12 +1,20 @@
 import re
 from datetime import datetime, timedelta
 
+import config
 from .base import WatchEvent
 
 _YEAR_RE = re.compile(r'\s+(19|20)\d{2}$')
-_NEUTRAL_DATE = datetime.now()
-_TV_DURATION = timedelta(minutes=45)
-_MOVIE_DURATION = timedelta(hours=2)
+
+
+def _get_timestamp() -> datetime:
+    ts = config.MANUAL_TIMESTAMP
+    if ts == "now":
+        return datetime.now()
+    try:
+        return datetime.strptime(ts, "%Y-%m-%d")
+    except ValueError:
+        return datetime.now()
 
 
 def _strip_year(name: str) -> str:
@@ -17,6 +25,9 @@ def parse(tv_path: str, movies_path: str) -> list[WatchEvent]:
     events = []
     seen_tv: set[str] = set()
     seen_movies: set[str] = set()
+    timestamp = _get_timestamp()
+    tv_duration = timedelta(minutes=config.MANUAL_TV_DURATION_MINUTES)
+    movie_duration = timedelta(minutes=config.MANUAL_MOVIE_DURATION_MINUTES)
 
     with open(tv_path, encoding='utf-8') as f:
         for line in f:
@@ -29,9 +40,9 @@ def parse(tv_path: str, movies_path: str) -> list[WatchEvent]:
                 title=title,
                 content_type='tv',
                 series_name=title,
-                watched_duration=_TV_DURATION,
-                total_duration=_TV_DURATION,
-                timestamp=_NEUTRAL_DATE,
+                watched_duration=tv_duration,
+                total_duration=tv_duration,
+                timestamp=timestamp,
                 profile='',
             ))
 
@@ -49,9 +60,9 @@ def parse(tv_path: str, movies_path: str) -> list[WatchEvent]:
                 title=title,
                 content_type='movie',
                 series_name=title,
-                watched_duration=_MOVIE_DURATION,
-                total_duration=_MOVIE_DURATION,
-                timestamp=_NEUTRAL_DATE,
+                watched_duration=movie_duration,
+                total_duration=movie_duration,
+                timestamp=timestamp,
                 profile='',
             ))
 

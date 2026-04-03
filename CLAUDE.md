@@ -69,5 +69,11 @@ All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ index.json), `provide
 ## Configuration
 
 - **`.env`** — secrets: `TMDB_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
-- **`config.yaml`** — settings: provider, models (fast/reason per provider), tunables (`default_top_n`, `min_vote_count`, `recency_half_life_days`, `watch_region`, `streaming_platforms`), data paths, overrides path
-- **`config.py`** — thin loader, reads from both
+- **`config.yaml`** — all settings in sections:
+  - `provider`, `models.*` — LLM provider and model assignments
+  - `llm.*` — timeouts, token limits, batch sizes, rate limit wait
+  - `scoring.*` — engagement weights (completion/rewatch/recency), fallback runtimes
+  - `manual.*` — synthetic timestamp and durations for manual list titles
+  - Top-level: `default_top_n`, `min_vote_count`, `recency_half_life_days`, `watch_region`, `streaming_platforms`
+  - Data paths: `platform_paths.*`, `overrides_path`
+- **`config.py`** — thin loader, reads from both. All values have sensible defaults.

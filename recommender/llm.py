@@ -79,6 +79,7 @@ class LLMClient(ABC):
     provider: str
     models: dict[str, str]
     usage: UsageStats
+    was_truncated: bool = False  # set after each generate() call
 
     @abstractmethod
     def generate(
@@ -121,6 +122,10 @@ class AnthropicClient(LLMClient):
             input_t=message.usage.input_tokens,
             output_t=message.usage.output_tokens,
         )
+        self.was_truncated = message.stop_reason == "max_tokens"
+        if self.was_truncated:
+            log.warning("Anthropic response truncated (max_tokens=%d, model=%s). "
+                        "Increase the token limit in config.yaml.", max_tokens, model)
         return message.content[0].text
 
 
@@ -193,9 +198,11 @@ class GeminiClient(LLMClient):
                 thinking_t=getattr(um, "thoughts_token_count", 0) or 0,
             )
 
+        self.was_truncated = False
         if response.candidates:
             reason = response.candidates[0].finish_reason
             if str(reason) != "FinishReason.STOP":
+                self.was_truncated = "MAX_TOKENS" in str(reason)
                 log.warning("Gemini finish_reason=%s (model=%s, max_tokens=%d)",
                             reason, model, adjusted_tokens)
 

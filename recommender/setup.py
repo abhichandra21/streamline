@@ -183,8 +183,13 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
             scores = compute_scores(events, metadata, config.RECENCY_HALF_LIFE_DAYS)
             scores = fb.apply_score_multipliers(scores, feedback)
             negative_prefs = fb.get_disliked_titles(feedback)
-            profile = build_taste_profile(events, scores, enrichments, llm,
-                                          negative_prefs=negative_prefs or None)
+            try:
+                profile = build_taste_profile(events, scores, enrichments, llm,
+                                              negative_prefs=negative_prefs or None)
+            except RuntimeError as exc:
+                console.print(f"\n[red]{exc}[/red]")
+                console.print("[yellow]Previous profile kept unchanged.[/yellow]")
+                sys.exit(1)
         profile_path.parent.mkdir(parents=True, exist_ok=True)
         # Auto-backup previous profile before overwriting
         if profile_path.exists():

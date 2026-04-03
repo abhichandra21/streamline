@@ -123,13 +123,41 @@ The override file is auto-detected — run `./recommend setup` (no flags needed)
 
 ### Settings Reference
 
+All settings in `config.yaml`. The file is well-commented — see it for full details.
+
+**LLM:**
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `provider` | anthropic | LLM provider |
-| `models.*` | (see above) | Model assignments per provider |
+| `provider` | anthropic | LLM provider ("anthropic" or "gemini") |
+| `models.*` | (see above) | Model assignments per provider (fast/reason roles) |
+| `llm.timeout_*` | 30-300s | Per-call-type timeouts |
+| `llm.tokens_*` | 200-4000 | Per-call-type max output tokens |
+| `llm.profile_batch_size` | 200 | Titles per taste profile batch |
+| `llm.rate_limit_wait` | 65 | Seconds to wait on rate limit |
+
+**Scoring:**
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scoring.weight_completion` | 0.5 | Weight for watch completion rate |
+| `scoring.weight_rewatch` | 0.3 | Weight for rewatch bonus |
+| `scoring.weight_recency` | 0.2 | Weight for recency (must sum to 1.0) |
+| `scoring.default_tv_runtime` | 45 | Fallback TV episode runtime (minutes) |
+| `scoring.default_movie_runtime` | 90 | Fallback movie runtime (minutes) |
+| `scoring.rewatch_saturation` | 5 | Log scale saturates at ~N rewatches |
+
+**Manual titles:**
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `manual.timestamp` | now | "now" (competitive) or "2022-01-01" (lower scoring) |
+| `manual.tv_duration_minutes` | 45 | Synthetic watch duration for TV |
+| `manual.movie_duration_minutes` | 120 | Synthetic watch duration for movies |
+
+**Recommendations:**
+| Setting | Default | Description |
+|---------|---------|-------------|
 | `default_top_n` | 3 | Default results per query |
 | `min_vote_count` | 20 | Minimum TMDB votes for discover candidates |
-| `recency_half_life_days` | 90 | Scoring decay — days until recency score halves |
+| `recency_half_life_days` | 90 | Days until recency score halves |
 | `watch_region` | US | Region for streaming availability lookup |
 | `streaming_platforms` | [] | Your subscribed platforms (filters results when set) |
 

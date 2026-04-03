@@ -162,7 +162,8 @@ def parse_intent(
         f'{context_section}\n'
         f'Query: "{query}"'
     )
-    response_text = client.generate(prompt, role="reason", max_tokens=400)
+    response_text = client.generate(prompt, role="reason", max_tokens=config.TOKENS_INTENT,
+                                     timeout=config.TIMEOUT_REASON)
     log.debug("Raw intent response: %s", response_text[:500])
     try:
         data = _parse_json_response(response_text)
@@ -216,9 +217,10 @@ def rank_candidates(
         f'- score: float 0-1 (how well it matches the QUERY, boosted slightly by taste fit)\n\n'
         f'Return EXACTLY the top {top_n} ranked candidates, no more.'
     )
-    # Scale output tokens based on result count — ~150 tokens per result + overhead
-    rank_tokens = max(1000, top_n * 200 + 200)
-    response_text = client.generate(prompt, role="reason", max_tokens=rank_tokens)
+    # Scale output tokens based on result count
+    rank_tokens = max(config.TOKENS_RANKING, top_n * 200 + 200)
+    response_text = client.generate(prompt, role="reason", max_tokens=rank_tokens,
+                                     timeout=config.TIMEOUT_REASON)
 
     log.debug("Raw ranking response: %s", response_text[:500])
     try:
@@ -271,7 +273,8 @@ def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) ->
         f'Their taste profile:\n{ctx.taste_profile}\n\n'
         'Should they continue watching? Give a direct yes/no with 1-2 sentences of reasoning.'
     )
-    response_text = ctx.llm.generate(prompt, role="reason", max_tokens=300)
+    response_text = ctx.llm.generate(prompt, role="reason", max_tokens=config.TOKENS_ABANDONED,
+                                      timeout=config.TIMEOUT_REASON)
 
     return [Recommendation(
         title=target,
@@ -521,7 +524,8 @@ def _generate_suggestions(
         'Prioritize query relevance over general taste match. '
         'Return ONLY a JSON array of title strings. Be precise with names.'
     )
-    response_text = client.generate(prompt, role="reason", max_tokens=300)
+    response_text = client.generate(prompt, role="reason", max_tokens=config.TOKENS_SUGGESTIONS,
+                                     timeout=config.TIMEOUT_REASON)
     try:
         result = _parse_json_response(response_text)
         return [t for t in result if isinstance(t, str)] if isinstance(result, list) else []
