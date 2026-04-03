@@ -263,7 +263,8 @@ def title_detail(tmdb_id: int) -> str:
 
 
 def run() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s: %(message)s")
+    from recommender.log import setup_logging
+    setup_logging()
     if not config.TMDB_API_KEY:
         print("Error: TMDB_API_KEY must be set.", file=sys.stderr)
         sys.exit(1)

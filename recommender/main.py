@@ -138,13 +138,8 @@ def main() -> None:
                         help="LLM provider (default: from config/env)")
     args = parser.parse_args()
 
-    level = logging.DEBUG if args.debug else logging.WARNING
-    logging.basicConfig(
-        level=logging.WARNING,
-        format="%(name)s %(levelname)s: %(message)s",
-        stream=sys.stderr,
-    )
-    logging.getLogger("recommender").setLevel(level)
+    from recommender.log import setup_logging
+    setup_logging(level_override="DEBUG" if args.debug else None)
 
     # Handle feedback-only invocations (no API keys needed).
     if args.liked or args.disliked or args.add:

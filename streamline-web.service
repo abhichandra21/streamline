@@ -10,8 +10,9 @@ EnvironmentFile=/home/abhishek/streamline/.env
 ExecStart=/home/abhishek/streamline/venv/bin/python3 -m recommender.web
 Restart=on-failure
 RestartSec=5
-StandardOutput=append:/home/abhishek/streamline/.web.log
-StandardError=append:/home/abhishek/streamline/.web.log
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=streamline-web
 
 [Install]
 WantedBy=multi-user.target
