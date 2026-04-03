@@ -80,6 +80,10 @@ Each query prints token usage and estimated cost at the end.
 
 The web UI provides a search interface, taste profile dashboard with expandable clusters, and a watch history archive with list/grid/compact views.
 
+![Search results](docs/screenshot-search.png)
+
+![Watch history archive](docs/screenshot-archive.png)
+
 Port and host are configurable via `STREAMLINE_PORT` and `STREAMLINE_HOST` environment variables.
 
 ## Configuration
