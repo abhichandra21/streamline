@@ -15,6 +15,7 @@ _recommend() {
         '--disliked[Mark a title as disliked]:title:'
         '--add[Add a title to watch history]:title:'
         '--type[Content type for --add]:type:(tv movie)'
+        '--history[Show recent query history]'
         '--help[Show help]'
     )
 

@@ -19,6 +19,9 @@ if _CONFIG_PATH.exists():
 else:
     _cfg = {}
 
+# ── Logging ──
+LOG_LEVEL = os.environ.get("LOG_LEVEL", _cfg.get("log_level", "WARNING")).upper()
+
 # ── Secrets (from .env / environment only) ──
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")

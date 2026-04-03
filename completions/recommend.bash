@@ -43,7 +43,7 @@ _recommend_completion() {
         local opts="--debug --provider -n --liked --disliked --add --type --help"
         COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
     elif [[ "$COMP_CWORD" == 1 ]]; then
-        COMPREPLY=( $(compgen -W "setup" -- "$cur") )
+        COMPREPLY=( $(compgen -W "setup history" -- "$cur") )
     fi
 }
 

@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Searches{% endblock %}
+{% block content %}
+
+<div style="margin-bottom:2rem;">
+  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">History</span>
+  <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:0.5rem;">Searches</h1>
+  <p style="color:var(--muted); font-size:0.85rem;">{{ entries|length }} recent {% if entries|length == 1 %}query{% else %}queries{% endif %}</p>
+</div>
+
+{% if not entries %}
+<div style="padding:3rem; text-align:center;">
+  <p class="mono" style="font-size:0.7rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">No searches yet</p>
+  <p style="font-size:0.85rem; color:var(--muted); margin-top:0.5rem;">Try searching from the <a href="/">home page</a>.</p>
+</div>
+{% endif %}
+
+<div style="display:flex; flex-direction:column; gap:6px;">
+{% for entry in entries %}
+  <details class="search-details" id="q-{{ loop.index }}" style="background:var(--surface); border-radius:6px; overflow:hidden;">
+    <summary style="
+      display:flex; align-items:center; gap:0.75rem;
+      padding:1rem 1.25rem;
+      cursor:pointer; list-style:none; user-select:none;
+      border-left:3px solid var(--accent);
+      transition:background 0.15s;
+    ">
+      <svg class="search-arrow" width="10" height="10" viewBox="0 0 10 10" style="flex-shrink:0; transition:transform 0.2s;">
+        <path d="M3 1 L7 5 L3 9" stroke="var(--accent)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div style="flex:1; min-width:0;">
+        <span style="font-family:'DM Serif Display',serif; font-size:1.05rem; color:var(--text);">{{ entry.query }}</span>
+        <div style="display:flex; align-items:center; gap:0.75rem; margin-top:0.2rem;">
+          <span class="mono" style="font-size:0.55rem; color:var(--muted);">{{ entry.timestamp_display }}</span>
+          <span class="mono" style="font-size:0.55rem; color:var(--muted);">{{ entry.results|length }} results</span>
+          <span class="mono" style="font-size:0.55rem; color:var(--muted);">{{ entry.provider }}</span>
+        </div>
+      </div>
+      <div style="display:flex; gap:0.4rem; flex-shrink:0;" onclick="event.stopPropagation();">
+        <a href="/?q={{ entry.query|urlencode }}" class="btn-ghost" style="padding:4px 12px; font-size:0.55rem; text-decoration:none;">Re-search</a>
+        <button
+          class="btn-ghost"
+          style="padding:4px 10px; font-size:0.55rem; cursor:pointer; color:var(--muted);"
+          hx-delete="/searches/delete?ts={{ entry.timestamp|urlencode }}"
+          hx-target="#q-{{ loop.index }}"
+          hx-swap="outerHTML swap:0.3s"
+          hx-confirm="Delete this search?"
+        >Delete</button>
+      </div>
+    </summary>
+
+    <div style="border-left:3px solid var(--accent); padding:0 0 0.5rem;">
+      {% if entry.results %}
+      {% for r in entry.results %}
+      <div style="display:flex; gap:0.85rem; padding:0.65rem 1.25rem 0.65rem 2.75rem; transition:background 0.15s;{% if not loop.last %} border-bottom:1px solid rgba(53,47,64,0.5);{% endif %}"
+        onmouseover="this.style.background='var(--surface2)'"
+        onmouseout="this.style.background='transparent'"
+      >
+        <div style="flex:1; min-width:0;">
+          <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.2rem;">
+            <span style="font-family:'DM Serif Display',serif; font-size:0.95rem; color:var(--text);">{{ r.title }}</span>
+            <span class="badge {{ 'badge-tv' if r.content_type == 'tv' else 'badge-movie' }}" style="font-size:0.5rem;">{{ r.content_type }}</span>
+            <span class="mono" style="font-size:0.58rem; color:var(--accent2);">★ {{ "%.1f"|format(r.vote_average) }}</span>
+          </div>
+          <p style="font-size:0.8rem; color:var(--body); line-height:1.65; margin:0;">{{ r.explanation }}</p>
+          {% if r.streaming_providers %}
+          <span class="mono" style="font-size:0.55rem; color:var(--muted); margin-top:0.2rem; display:inline-block;">{{ r.streaming_providers | join("  ·  ") }}</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+      {% else %}
+      <div style="padding:0.75rem 1.25rem 0.75rem 2.75rem;">
+        <span class="mono" style="font-size:0.62rem; color:var(--muted);">No results</span>
+      </div>
+      {% endif %}
+
+      {% if entry.usage %}
+      <div style="padding:0.4rem 1.25rem 0 2.75rem;">
+        <span class="mono" style="font-size:0.5rem; color:var(--muted);">{{ entry.usage }}</span>
+      </div>
+      {% endif %}
+    </div>
+  </details>
+{% endfor %}
+</div>
+
+<style>
+  .search-details summary::-webkit-details-marker { display: none; }
+  .search-details summary::marker { content: ''; }
+  .search-details summary:hover { background: var(--surface2); }
+  .search-details[open] .search-arrow { transform: rotate(90deg); }
+  .search-details.htmx-swapping { opacity: 0; transition: opacity 0.3s ease; }
+</style>
+
+{% endblock %}

@@ -1,6 +1,9 @@
 # Streamline configuration
 # Secrets (API keys) go in .env, everything else goes here.
 
+# Logging: "WARNING" (default), "INFO", or "DEBUG"
+log_level: WARNING
+
 # LLM provider: "anthropic" or "gemini"
 provider: anthropic
 

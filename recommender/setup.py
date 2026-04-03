@@ -217,11 +217,7 @@ if __name__ == "__main__":
     parser.add_argument("--provider", choices=["anthropic", "gemini"],
                         help="LLM provider (default: from config/env)")
     args = parser.parse_args()
-    level = logging.DEBUG if args.debug else logging.WARNING
-    logging.basicConfig(
-        level=level,
-        format="%(name)s %(levelname)s: %(message)s",
-        stream=sys.stderr,
-    )
+    from recommender.log import setup_logging
+    setup_logging(level_override="DEBUG" if args.debug else None)
     run_setup(refresh_profile=args.refresh_profile, refresh_data=args.refresh_data,
               provider=args.provider)

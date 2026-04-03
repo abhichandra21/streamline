@@ -18,6 +18,7 @@ from recommender.ingestion.manual import parse as parse_manual
 from recommender.tmdb_client import TmdbClient
 from recommender.query_engine import RecommendContext, ask
 from recommender import watch_index as wi
+from recommender import history as query_history
 
 log = logging.getLogger("recommender.web")
 
@@ -146,6 +147,7 @@ def dashboard() -> str:
         c["body_html"] = _md_to_html(c["body"].strip())
 
     posters = _get_recent_posters(entries, limit=30)
+    recent_queries = query_history.load(limit=5)
 
     return render_template(
         "index.html",
@@ -156,6 +158,7 @@ def dashboard() -> str:
         movie_count=movie_count,
         enrichment_count=len(enrichments),
         posters=posters,
+        recent_queries=recent_queries,
     )
 
 
@@ -187,6 +190,46 @@ def history() -> str:
     return render_template("history.html", items=items, q=q, ct_filter=ct_filter, total=len(entries))
 
 
+@app.route("/searches")
+def searches() -> str:
+    entries = query_history.load()
+    # Format timestamps for display
+    for e in entries:
+        ts = e.get("timestamp", "")
+        try:
+            from datetime import datetime, timezone
+            dt = datetime.fromisoformat(ts)
+            now = datetime.now(timezone.utc)
+            delta = now - dt
+            if delta.days == 0:
+                hours = delta.seconds // 3600
+                if hours == 0:
+                    minutes = delta.seconds // 60
+                    e["timestamp_display"] = f"{minutes}m ago" if minutes > 0 else "just now"
+                else:
+                    e["timestamp_display"] = f"{hours}h ago"
+            elif delta.days == 1:
+                e["timestamp_display"] = "yesterday"
+            elif delta.days < 7:
+                e["timestamp_display"] = f"{delta.days}d ago"
+            else:
+                e["timestamp_display"] = dt.strftime("%b %d, %Y")
+        except (ValueError, TypeError):
+            e["timestamp_display"] = ts[:19]
+    return render_template("searches.html", entries=entries)
+
+
+@app.route("/searches/delete", methods=["DELETE"])
+def delete_search():
+    ts = request.args.get("ts", "")
+    if not ts:
+        return "", 400
+    deleted = query_history.delete(ts)
+    if not deleted:
+        return "", 404
+    return "", 200, {"HX-Redirect": "/searches"}
+
+
 @app.route("/recommend", methods=["GET", "POST"])
 def recommend() -> str:
     if request.method == "GET":
@@ -197,11 +240,17 @@ def recommend() -> str:
         return render_template("recommend.html", results=None, query="")
 
     ctx = _get_context()
+    ctx.llm.usage.reset()
     try:
         results = ask(query, ctx)
     except Exception as exc:
         log.exception("Error during recommendation")
         return render_template("recommend.html", results=None, query=query, error=str(exc))
+
+    try:
+        query_history.record(query, results, ctx.llm.provider, ctx.llm.usage.summary())
+    except OSError as exc:
+        log.warning("Failed to persist query history for %r: %s", query, exc)
 
     items = []
     for r in results:
@@ -263,7 +312,8 @@ def title_detail(tmdb_id: int) -> str:
 
 
 def run() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s: %(message)s")
+    from recommender.log import setup_logging
+    setup_logging()
     if not config.TMDB_API_KEY:
         print("Error: TMDB_API_KEY must be set.", file=sys.stderr)
         sys.exit(1)
