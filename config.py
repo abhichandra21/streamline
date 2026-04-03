@@ -75,6 +75,8 @@ MANUAL_MOVIE_DURATION_MINUTES = _manual.get("movie_duration_minutes", 120)
 DEFAULT_TOP_N = _cfg.get("default_top_n", 3)
 CANDIDATE_POOL_SIZE = _cfg.get("candidate_pool_size", 500)
 MIN_VOTE_COUNT = _cfg.get("min_vote_count", 20)
+MIN_RATING = float(_cfg.get("min_rating", 0))
+MIN_YEAR = int(_cfg.get("min_year", 0))
 RECENCY_HALF_LIFE_DAYS = _cfg.get("recency_half_life_days", 90)
 
 # ── Streaming availability ──

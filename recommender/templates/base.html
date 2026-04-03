@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Streamline{% endblock %}</title>
+  <link rel="icon" type="image/png" href="/static/logo.png">
   <script src="https://unpkg.com/htmx.org@2.0.2" integrity="sha384-Y7hw+L/jvKeWIRRkqWYfPcvVxHzVzn5REgzbawhxAuQGwX1XWe70vji+VSeHOThJ" crossorigin="anonymous"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -205,7 +206,7 @@
 <body>
 
   <nav>
-    <a href="/" class="nav-brand">Streamline</a>
+    <a href="/" class="nav-brand"><img src="/static/logo.png" alt="Streamline" style="height:22px; width:22px; vertical-align:middle; margin-right:0.4rem; border-radius:3px;">Streamline</a>
     <div style="display:flex; gap:1.5rem; margin-left:0.5rem; flex:1;">
       <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">Home</a>
       <a href="/searches" class="nav-link {% if request.path == '/searches' %}active{% endif %}">Searches</a>
