@@ -341,6 +341,36 @@ def _handle_why_not(title: str, ctx: RecommendContext) -> list[Recommendation]:
         )]
     lines.append(f"  Popularity: [green]OK[/green] — {meta.vote_count} votes.")
 
+    # Step 3b: Rating filter
+    if config.MIN_RATING > 0 and meta.vote_average < config.MIN_RATING:
+        lines.append(
+            f"  Rating: [yellow]Below minimum[/yellow] — "
+            f"★ {meta.vote_average:.1f} (minimum {config.MIN_RATING})."
+        )
+        lines.append("  → Filtered by min_rating setting. Lower it in Settings to include this title.")
+        return [Recommendation(
+            title=meta.title, content_type=meta.content_type,
+            score=0.0, vote_average=meta.vote_average, genres=meta.genres,
+            explanation="\n".join(lines),
+        )]
+    if config.MIN_RATING > 0:
+        lines.append(f"  Rating: [green]OK[/green] — ★ {meta.vote_average:.1f} (minimum {config.MIN_RATING}).")
+
+    # Step 3c: Year filter
+    if config.MIN_YEAR > 0 and meta.release_year and meta.release_year < config.MIN_YEAR:
+        lines.append(
+            f"  Year: [yellow]Too old[/yellow] — "
+            f"released {meta.release_year} (minimum {config.MIN_YEAR})."
+        )
+        lines.append("  → Filtered by min_year setting. Lower it in Settings to include this title.")
+        return [Recommendation(
+            title=meta.title, content_type=meta.content_type,
+            score=0.0, vote_average=meta.vote_average, genres=meta.genres,
+            explanation="\n".join(lines),
+        )]
+    if config.MIN_YEAR > 0 and meta.release_year:
+        lines.append(f"  Year: [green]OK[/green] — released {meta.release_year} (minimum {config.MIN_YEAR}).")
+
     # Step 4: Candidate pool (we can't replay the last query, so explain what gets it included)
     lines.append(
         "  Candidate pool: Title would need to appear via TMDB Discover filters "
@@ -409,12 +439,16 @@ def ask(
         log.debug("TMDB discover: type=%s genres=%s countries=%s languages=%s years=%s-%s",
                    ct, intent.genres, intent.origin_countries, intent.languages,
                    intent.year_from, intent.year_to)
+        # Use the more restrictive of intent year_from and config MIN_YEAR
+        effective_year_from = intent.year_from
+        if config.MIN_YEAR > 0:
+            effective_year_from = max(config.MIN_YEAR, intent.year_from or 0) or config.MIN_YEAR
         batch = ctx.tmdb_client.search_by_filters(
             content_type=ct,
             genres=intent.genres,
             origin_countries=intent.origin_countries,
             languages=intent.languages,
-            year_from=intent.year_from,
+            year_from=effective_year_from,
             year_to=intent.year_to,
             size=30,
         )
@@ -428,6 +462,15 @@ def ask(
     ]
     log.debug("Watch filter: %d -> %d candidates (%d excluded)",
               pre_filter, len(candidates), pre_filter - len(candidates))
+
+    # Apply min rating filter (min_year is already pushed into TMDB discover)
+    pre_quality = len(candidates)
+    if config.MIN_RATING > 0:
+        candidates = [c for c in candidates if c.vote_average >= config.MIN_RATING]
+    if len(candidates) < pre_quality:
+        log.debug("Rating filter: %d -> %d candidates (min_rating=%.1f)",
+                  pre_quality, len(candidates), config.MIN_RATING)
+
     for c in candidates:
         seen_ids.add(c.tmdb_id)
 
@@ -441,6 +484,10 @@ def ask(
         for ct in content_types:
             meta = ctx.tmdb_client.get_metadata(title, ct)
             if meta and meta.tmdb_id not in seen_ids and not ctx.watch_index.is_watched(meta) and meta.title not in extra_excludes:
+                if config.MIN_RATING > 0 and meta.vote_average < config.MIN_RATING:
+                    continue
+                if config.MIN_YEAR > 0 and meta.release_year and meta.release_year < config.MIN_YEAR:
+                    continue
                 candidates.append(meta)
                 seen_ids.add(meta.tmdb_id)
                 suggestion_count += 1

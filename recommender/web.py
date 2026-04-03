@@ -370,6 +370,8 @@ _SETTINGS_DEFAULTS = {
     },
     "default_top_n": 3,
     "min_vote_count": 20,
+    "min_rating": 0,
+    "min_year": 0,
     "recency_half_life_days": 90,
     "watch_region": "US",
     "streaming_platforms": [],
@@ -574,6 +576,8 @@ def settings_save() -> str:
         recommendation_values = {
             "default_top_n": _parse_int_field(form, "default_top_n", current_cfg["default_top_n"]),
             "min_vote_count": _parse_int_field(form, "min_vote_count", current_cfg["min_vote_count"]),
+            "min_rating": _parse_float_field(form, "min_rating", current_cfg["min_rating"]),
+            "min_year": _parse_int_field(form, "min_year", current_cfg["min_year"]),
             "recency_half_life_days": _parse_int_field(
                 form, "recency_half_life_days", current_cfg["recency_half_life_days"]
             ),

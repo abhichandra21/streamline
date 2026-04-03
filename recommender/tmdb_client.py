@@ -43,6 +43,7 @@ class TmdbMetadata:
     vote_average: float = 0.0
     vote_count: int = 0
     runtime_minutes: int | None = None
+    release_year: int | None = None
 
 
 class TmdbClient:
@@ -117,6 +118,9 @@ class TmdbClient:
         else:
             runtime_minutes = data.get("runtime")
 
+        date_str = data.get("first_air_date") if content_type == "tv" else data.get("release_date")
+        release_year = int(date_str[:4]) if date_str and len(date_str) >= 4 else None
+
         return TmdbMetadata(
             tmdb_id=data["id"],
             content_type=content_type,
@@ -129,6 +133,7 @@ class TmdbClient:
             vote_average=data.get("vote_average", 0.0),
             vote_count=data.get("vote_count", 0),
             runtime_minutes=runtime_minutes,
+            release_year=release_year,
         )
 
     def _clean_title_variants(self, title: str) -> list[str]:

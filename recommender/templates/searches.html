@@ -36,16 +36,28 @@
           <span class="mono" style="font-size:0.55rem; color:var(--muted);">{{ entry.provider }}</span>
         </div>
       </div>
-      <div style="display:flex; gap:0.4rem; flex-shrink:0;" onclick="event.stopPropagation();">
+      <div class="search-actions" style="display:flex; gap:0.4rem; flex-shrink:0;" onclick="event.stopPropagation();">
         <a href="/?q={{ entry.query|urlencode }}" class="btn-ghost" style="padding:4px 12px; font-size:0.55rem; text-decoration:none;">Re-search</a>
         <button
-          class="btn-ghost"
+          class="btn-ghost delete-trigger"
           style="padding:4px 10px; font-size:0.55rem; cursor:pointer; color:var(--muted);"
-          hx-delete="/searches/delete?ts={{ entry.timestamp|urlencode }}"
-          hx-target="#q-{{ loop.index }}"
-          hx-swap="outerHTML swap:0.3s"
-          hx-confirm="Delete this search?"
+          onclick="this.parentElement.querySelector('.delete-confirm').style.display='flex'; this.style.display='none';"
         >Delete</button>
+        <div class="delete-confirm" style="display:none; align-items:center; gap:0.35rem;">
+          <span style="font-size:0.6rem; color:var(--muted);">Delete?</span>
+          <button
+            class="btn-ghost"
+            style="padding:3px 8px; font-size:0.5rem; cursor:pointer; color:var(--accent); border-color:var(--accent);"
+            hx-delete="/searches/delete?ts={{ entry.timestamp|urlencode }}"
+            hx-target="#q-{{ loop.index }}"
+            hx-swap="outerHTML swap:0.3s"
+          >Yes</button>
+          <button
+            class="btn-ghost"
+            style="padding:3px 8px; font-size:0.5rem; cursor:pointer;"
+            onclick="this.parentElement.style.display='none'; this.parentElement.parentElement.querySelector('.delete-trigger').style.display='';"
+          >No</button>
+        </div>
       </div>
     </summary>
 

@@ -22,6 +22,8 @@
 
 <form method="post" action="/settings" style="display:flex; flex-direction:column; gap:1.5rem;">
 
+  <!-- ═══════ REGULAR SETTINGS ═══════ -->
+
   <!-- LLM Provider -->
   <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
     <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">LLM Provider</legend>
@@ -66,106 +68,6 @@
     </div>
   </fieldset>
 
-  <!-- LLM Timeouts & Tokens -->
-  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
-    <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">LLM Limits</legend>
-    <p class="section-intro">Timeouts and token budgets per call type. Increase if you see truncation or timeout errors.</p>
-
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
-      <div>
-        <span class="mono" style="font-size:0.58rem; color:var(--muted); letter-spacing:0.08em;">TIMEOUTS (seconds)</span>
-        {% set timeout_hints = {
-          'timeout_fast': 'Enrichment calls',
-          'timeout_reason': 'Intent parsing, ranking, suggestions',
-          'timeout_profile_batch': 'Each batch during taste profile build',
-          'timeout_profile_merge': 'Final merge of all batches into profile'
-        } %}
-        {% for key, label in [('timeout_fast', 'Fast'), ('timeout_reason', 'Reason'), ('timeout_profile_batch', 'Profile batch'), ('timeout_profile_merge', 'Profile merge')] %}
-        <div class="form-row" style="margin-top:0.5rem;">
-          <label class="form-label">{{ label }}</label>
-          <input type="number" name="llm_{{ key }}" value="{{ cfg.llm[key] }}" class="form-input" style="width:100px;" min="1">
-          <span class="form-hint">{{ timeout_hints[key] }}</span>
-        </div>
-        {% endfor %}
-      </div>
-      <div>
-        <span class="mono" style="font-size:0.58rem; color:var(--muted); letter-spacing:0.08em;">MAX OUTPUT TOKENS</span>
-        {% set token_hints = {
-          'tokens_fast': 'Enrichment descriptions (~1 paragraph)',
-          'tokens_intent': 'Query intent parsing (JSON)',
-          'tokens_ranking': 'Ranking explanation per result (auto-scales with result count)',
-          'tokens_suggestions': 'AI title suggestions per query',
-          'tokens_profile_batch': 'Per-batch taste analysis (200 titles needs ~4000)',
-          'tokens_profile_merge': 'Final merged profile (15 clusters needs ~16000)',
-          'tokens_abandoned': 'Abandoned show advice'
-        } %}
-        {% for key, label in [('tokens_fast', 'Fast'), ('tokens_intent', 'Intent'), ('tokens_ranking', 'Ranking'), ('tokens_suggestions', 'Suggestions'), ('tokens_profile_batch', 'Profile batch'), ('tokens_profile_merge', 'Profile merge'), ('tokens_abandoned', 'Abandoned')] %}
-        <div class="form-row" style="margin-top:0.5rem;">
-          <label class="form-label">{{ label }}</label>
-          <input type="number" name="llm_{{ key }}" value="{{ cfg.llm[key] }}" class="form-input" style="width:100px;" min="1">
-          <span class="form-hint">{{ token_hints[key] }}</span>
-        </div>
-        {% endfor %}
-      </div>
-    </div>
-
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-top:1rem;">
-      <div class="form-row">
-        <label class="form-label">Profile batch size</label>
-        <input type="number" name="llm_profile_batch_size" value="{{ cfg.llm.profile_batch_size }}" class="form-input" style="width:100px;" min="10">
-        <span class="form-hint">Titles per batch during taste profile build</span>
-      </div>
-      <div class="form-row">
-        <label class="form-label">Rate limit wait (s)</label>
-        <input type="number" name="llm_rate_limit_wait" value="{{ cfg.llm.rate_limit_wait }}" class="form-input" style="width:100px;" min="1">
-        <span class="form-hint">Seconds to pause on 429 rate limit errors</span>
-      </div>
-    </div>
-  </fieldset>
-
-  <!-- Scoring -->
-  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
-    <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Scoring</legend>
-    <p class="section-intro">How engagement scores are calculated from your watch history. Weights must sum to 1.0.</p>
-
-    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem;">
-      <div class="form-row">
-        <label class="form-label">Completion weight</label>
-        <input type="number" name="weight_completion" value="{{ cfg.scoring.weight_completion }}" class="form-input" style="width:80px;" step="0.1" min="0" max="1">
-        <span class="form-hint">How much of the title was watched</span>
-      </div>
-      <div class="form-row">
-        <label class="form-label">Rewatch weight</label>
-        <input type="number" name="weight_rewatch" value="{{ cfg.scoring.weight_rewatch }}" class="form-input" style="width:80px;" step="0.1" min="0" max="1">
-        <span class="form-hint">Bonus for titles watched multiple times</span>
-      </div>
-      <div class="form-row">
-        <label class="form-label">Recency weight</label>
-        <input type="number" name="weight_recency" value="{{ cfg.scoring.weight_recency }}" class="form-input" style="width:80px;" step="0.1" min="0" max="1">
-        <span class="form-hint">Recent watches score higher</span>
-      </div>
-    </div>
-    <p id="weight-warn" class="mono" style="font-size:0.58rem; color:#e85d4a; margin-top:0.5rem; display:none;">Weights must sum to 1.0</p>
-
-    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem; margin-top:1rem;">
-      <div class="form-row">
-        <label class="form-label">TV runtime (min)</label>
-        <input type="number" name="default_tv_runtime" value="{{ cfg.scoring.default_tv_runtime }}" class="form-input" style="width:80px;" min="1">
-        <span class="form-hint">Fallback when TMDB has no runtime data</span>
-      </div>
-      <div class="form-row">
-        <label class="form-label">Movie runtime (min)</label>
-        <input type="number" name="default_movie_runtime" value="{{ cfg.scoring.default_movie_runtime }}" class="form-input" style="width:80px;" min="1">
-        <span class="form-hint">Fallback when TMDB has no runtime data</span>
-      </div>
-      <div class="form-row">
-        <label class="form-label">Rewatch saturation</label>
-        <input type="number" name="rewatch_saturation" value="{{ cfg.scoring.rewatch_saturation }}" class="form-input" style="width:80px;" min="1">
-        <span class="form-hint">Log scale caps at ~N rewatches (diminishing returns)</span>
-      </div>
-    </div>
-  </fieldset>
-
   <!-- Recommendations -->
   <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
     <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Recommendations</legend>
@@ -178,14 +80,14 @@
         <span class="form-hint">Results per query (override with -n flag)</span>
       </div>
       <div class="form-row">
-        <label class="form-label">Min TMDB votes</label>
-        <input type="number" name="min_vote_count" value="{{ cfg.min_vote_count }}" class="form-input" style="width:80px;" min="0">
-        <span class="form-hint">Filter out obscure titles with few ratings</span>
+        <label class="form-label">Min rating</label>
+        <input type="number" name="min_rating" value="{{ cfg.min_rating }}" class="form-input" style="width:80px;" step="0.5" min="0" max="10">
+        <span class="form-hint">Minimum TMDB rating (0 to disable)</span>
       </div>
       <div class="form-row">
-        <label class="form-label">Recency half-life (days)</label>
-        <input type="number" name="recency_half_life_days" value="{{ cfg.recency_half_life_days }}" class="form-input" style="width:100px;" min="1">
-        <span class="form-hint">Days until a watch's recency score halves</span>
+        <label class="form-label">Min year</label>
+        <input type="number" name="min_year" value="{{ cfg.min_year }}" class="form-input" style="width:80px;" min="0" max="2030">
+        <span class="form-hint">Minimum release year (0 to disable)</span>
       </div>
     </div>
   </fieldset>
@@ -209,45 +111,6 @@
     </div>
   </fieldset>
 
-  <!-- Manual titles -->
-  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
-    <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Manual Titles</legend>
-    <p class="section-intro">How manually added titles are scored. They have no real watch data, so synthetic values are used.</p>
-    {% set manual_timestamp_is_now = cfg.manual.timestamp == 'now' %}
-
-    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem;">
-      <div class="form-row">
-        <label class="form-label">Timestamp</label>
-        <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-          <select id="manual-timestamp-mode" name="manual_timestamp_mode" class="form-input" style="width:120px;">
-            <option value="now" {{ 'selected' if manual_timestamp_is_now }}>now</option>
-            <option value="fixed" {{ 'selected' if not manual_timestamp_is_now }}>fixed date</option>
-          </select>
-          <input
-            id="manual-timestamp-date"
-            type="date"
-            name="manual_timestamp_date"
-            value="{{ cfg.manual.timestamp if not manual_timestamp_is_now else '2022-01-01' }}"
-            class="form-input"
-            style="width:150px;"
-            {{ 'disabled' if manual_timestamp_is_now }}
-          >
-        </div>
-        <span class="form-hint">"now" = competes with recent watches. Fixed = scores lower.</span>
-      </div>
-      <div class="form-row">
-        <label class="form-label">TV duration (min)</label>
-        <input type="number" name="manual_tv_duration" value="{{ cfg.manual.tv_duration_minutes }}" class="form-input" style="width:80px;" min="1">
-        <span class="form-hint">Synthetic watch duration for TV titles</span>
-      </div>
-      <div class="form-row">
-        <label class="form-label">Movie duration (min)</label>
-        <input type="number" name="manual_movie_duration" value="{{ cfg.manual.movie_duration_minutes }}" class="form-input" style="width:80px;" min="1">
-        <span class="form-hint">Synthetic watch duration for movies</span>
-      </div>
-    </div>
-  </fieldset>
-
   <!-- Logging -->
   <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
     <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Logging</legend>
@@ -262,6 +125,172 @@
       <span class="form-hint">WARNING = errors only. INFO = request logs. DEBUG = full pipeline trace.</span>
     </div>
   </fieldset>
+
+  <!-- ═══════ ADVANCED SETTINGS ═══════ -->
+
+  <details class="advanced-details">
+    <summary class="advanced-summary">
+      <svg class="advanced-arrow" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1 L7 5 L3 9" stroke="var(--muted)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="mono" style="font-size:0.65rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">Advanced Settings</span>
+      <span style="font-size:0.72rem; color:var(--muted); margin-left:0.5rem;">LLM limits, scoring weights, manual titles</span>
+    </summary>
+
+    <div style="display:flex; flex-direction:column; gap:1.5rem; margin-top:1.5rem;">
+
+      <!-- LLM Timeouts & Tokens -->
+      <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+        <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">LLM Limits</legend>
+        <p class="section-intro">Timeouts and token budgets per call type. Increase if you see truncation or timeout errors.</p>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
+          <div>
+            <span class="mono" style="font-size:0.58rem; color:var(--muted); letter-spacing:0.08em;">TIMEOUTS (seconds)</span>
+            {% set timeout_hints = {
+              'timeout_fast': 'Enrichment calls',
+              'timeout_reason': 'Intent parsing, ranking, suggestions',
+              'timeout_profile_batch': 'Each batch during taste profile build',
+              'timeout_profile_merge': 'Final merge of all batches into profile'
+            } %}
+            {% for key, label in [('timeout_fast', 'Fast'), ('timeout_reason', 'Reason'), ('timeout_profile_batch', 'Profile batch'), ('timeout_profile_merge', 'Profile merge')] %}
+            <div class="form-row" style="margin-top:0.5rem;">
+              <label class="form-label">{{ label }}</label>
+              <input type="number" name="llm_{{ key }}" value="{{ cfg.llm[key] }}" class="form-input" style="width:100px;" min="1">
+              <span class="form-hint">{{ timeout_hints[key] }}</span>
+            </div>
+            {% endfor %}
+          </div>
+          <div>
+            <span class="mono" style="font-size:0.58rem; color:var(--muted); letter-spacing:0.08em;">MAX OUTPUT TOKENS</span>
+            {% set token_hints = {
+              'tokens_fast': 'Enrichment descriptions (~1 paragraph)',
+              'tokens_intent': 'Query intent parsing (JSON)',
+              'tokens_ranking': 'Ranking explanation per result (auto-scales with result count)',
+              'tokens_suggestions': 'AI title suggestions per query',
+              'tokens_profile_batch': 'Per-batch taste analysis (200 titles needs ~4000)',
+              'tokens_profile_merge': 'Final merged profile (15 clusters needs ~16000)',
+              'tokens_abandoned': 'Abandoned show advice'
+            } %}
+            {% for key, label in [('tokens_fast', 'Fast'), ('tokens_intent', 'Intent'), ('tokens_ranking', 'Ranking'), ('tokens_suggestions', 'Suggestions'), ('tokens_profile_batch', 'Profile batch'), ('tokens_profile_merge', 'Profile merge'), ('tokens_abandoned', 'Abandoned')] %}
+            <div class="form-row" style="margin-top:0.5rem;">
+              <label class="form-label">{{ label }}</label>
+              <input type="number" name="llm_{{ key }}" value="{{ cfg.llm[key] }}" class="form-input" style="width:100px;" min="1">
+              <span class="form-hint">{{ token_hints[key] }}</span>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-top:1rem;">
+          <div class="form-row">
+            <label class="form-label">Profile batch size</label>
+            <input type="number" name="llm_profile_batch_size" value="{{ cfg.llm.profile_batch_size }}" class="form-input" style="width:100px;" min="10">
+            <span class="form-hint">Titles per batch during taste profile build</span>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Rate limit wait (s)</label>
+            <input type="number" name="llm_rate_limit_wait" value="{{ cfg.llm.rate_limit_wait }}" class="form-input" style="width:100px;" min="1">
+            <span class="form-hint">Seconds to pause on 429 rate limit errors</span>
+          </div>
+        </div>
+      </fieldset>
+
+      <!-- Scoring -->
+      <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+        <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Scoring</legend>
+        <p class="section-intro">How engagement scores are calculated from your watch history. Weights must sum to 1.0.</p>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem;">
+          <div class="form-row">
+            <label class="form-label">Completion weight</label>
+            <input type="number" name="weight_completion" value="{{ cfg.scoring.weight_completion }}" class="form-input" style="width:80px;" step="0.1" min="0" max="1">
+            <span class="form-hint">How much of the title was watched</span>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Rewatch weight</label>
+            <input type="number" name="weight_rewatch" value="{{ cfg.scoring.weight_rewatch }}" class="form-input" style="width:80px;" step="0.1" min="0" max="1">
+            <span class="form-hint">Bonus for titles watched multiple times</span>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Recency weight</label>
+            <input type="number" name="weight_recency" value="{{ cfg.scoring.weight_recency }}" class="form-input" style="width:80px;" step="0.1" min="0" max="1">
+            <span class="form-hint">Recent watches score higher</span>
+          </div>
+        </div>
+        <p id="weight-warn" class="mono" style="font-size:0.58rem; color:#e85d4a; margin-top:0.5rem; display:none;">Weights must sum to 1.0</p>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem; margin-top:1rem;">
+          <div class="form-row">
+            <label class="form-label">Min TMDB votes</label>
+            <input type="number" name="min_vote_count" value="{{ cfg.min_vote_count }}" class="form-input" style="width:80px;" min="0">
+            <span class="form-hint">Filter out obscure titles with few ratings</span>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Recency half-life (days)</label>
+            <input type="number" name="recency_half_life_days" value="{{ cfg.recency_half_life_days }}" class="form-input" style="width:100px;" min="1">
+            <span class="form-hint">Days until a watch's recency score halves</span>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Rewatch saturation</label>
+            <input type="number" name="rewatch_saturation" value="{{ cfg.scoring.rewatch_saturation }}" class="form-input" style="width:80px;" min="1">
+            <span class="form-hint">Log scale caps at ~N rewatches (diminishing returns)</span>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-top:1rem;">
+          <div class="form-row">
+            <label class="form-label">TV runtime (min)</label>
+            <input type="number" name="default_tv_runtime" value="{{ cfg.scoring.default_tv_runtime }}" class="form-input" style="width:80px;" min="1">
+            <span class="form-hint">Fallback when TMDB has no runtime data</span>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Movie runtime (min)</label>
+            <input type="number" name="default_movie_runtime" value="{{ cfg.scoring.default_movie_runtime }}" class="form-input" style="width:80px;" min="1">
+            <span class="form-hint">Fallback when TMDB has no runtime data</span>
+          </div>
+        </div>
+      </fieldset>
+
+      <!-- Manual titles -->
+      <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+        <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Manual Titles</legend>
+        <p class="section-intro">How manually added titles are scored. They have no real watch data, so synthetic values are used.</p>
+        {% set manual_timestamp_is_now = cfg.manual.timestamp == 'now' %}
+
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem;">
+          <div class="form-row">
+            <label class="form-label">Timestamp</label>
+            <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+              <select id="manual-timestamp-mode" name="manual_timestamp_mode" class="form-input" style="width:120px;">
+                <option value="now" {{ 'selected' if manual_timestamp_is_now }}>now</option>
+                <option value="fixed" {{ 'selected' if not manual_timestamp_is_now }}>fixed date</option>
+              </select>
+              <input
+                id="manual-timestamp-date"
+                type="date"
+                name="manual_timestamp_date"
+                value="{{ cfg.manual.timestamp if not manual_timestamp_is_now else '2022-01-01' }}"
+                class="form-input"
+                style="width:150px;"
+                {{ 'disabled' if manual_timestamp_is_now }}
+              >
+            </div>
+            <span class="form-hint">"now" = competes with recent watches. Fixed = scores lower.</span>
+          </div>
+          <div class="form-row">
+            <label class="form-label">TV duration (min)</label>
+            <input type="number" name="manual_tv_duration" value="{{ cfg.manual.tv_duration_minutes }}" class="form-input" style="width:80px;" min="1">
+            <span class="form-hint">Synthetic watch duration for TV titles</span>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Movie duration (min)</label>
+            <input type="number" name="manual_movie_duration" value="{{ cfg.manual.movie_duration_minutes }}" class="form-input" style="width:80px;" min="1">
+            <span class="form-hint">Synthetic watch duration for movies</span>
+          </div>
+        </div>
+      </fieldset>
+
+    </div>
+  </details>
 
   <div style="display:flex; gap:1rem; align-items:center;">
     <button type="submit" class="btn-primary" style="padding:0.75rem 2rem;">Save &amp; Reload</button>
@@ -304,10 +333,28 @@
   .form-input:focus { border-color: var(--accent); }
   select.form-input { cursor: pointer; }
   select.form-input option { background: var(--surface); color: var(--text); }
+
+  /* Advanced accordion */
+  .advanced-details { margin-top: 0.5rem; }
+  .advanced-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    padding: 0.75rem 0;
+    border-top: 1px solid var(--border);
+  }
+  .advanced-summary::-webkit-details-marker { display: none; }
+  .advanced-summary::marker { content: ''; }
+  .advanced-summary:hover .advanced-arrow path { stroke: var(--accent); }
+  .advanced-summary:hover span { color: var(--text); }
+  .advanced-arrow { flex-shrink: 0; transition: transform 0.2s; }
+  .advanced-details[open] .advanced-arrow { transform: rotate(90deg); }
 </style>
 
 <script>
-  // Live weight validation
   (function() {
     var fields = ['weight_completion', 'weight_rewatch', 'weight_recency'];
     var warn = document.getElementById('weight-warn');
@@ -326,8 +373,7 @@
     }
     function syncManualTimestampInput() {
       if (!manualMode || !manualDate) return;
-      var useFixedDate = manualMode.value === 'fixed';
-      manualDate.disabled = !useFixedDate;
+      manualDate.disabled = manualMode.value !== 'fixed';
     }
     if (manualMode) {
       manualMode.addEventListener('change', syncManualTimestampInput);
