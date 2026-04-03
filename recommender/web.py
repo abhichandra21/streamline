@@ -18,6 +18,7 @@ from recommender.ingestion.manual import parse as parse_manual
 from recommender.tmdb_client import TmdbClient
 from recommender.query_engine import RecommendContext, ask
 from recommender import watch_index as wi
+from recommender import history
 
 log = logging.getLogger("recommender.web")
 
@@ -146,6 +147,7 @@ def dashboard() -> str:
         c["body_html"] = _md_to_html(c["body"].strip())
 
     posters = _get_recent_posters(entries, limit=30)
+    recent_queries = history.load(limit=5)
 
     return render_template(
         "index.html",
@@ -156,6 +158,7 @@ def dashboard() -> str:
         movie_count=movie_count,
         enrichment_count=len(enrichments),
         posters=posters,
+        recent_queries=recent_queries,
     )
 
 
@@ -197,11 +200,14 @@ def recommend() -> str:
         return render_template("recommend.html", results=None, query="")
 
     ctx = _get_context()
+    ctx.llm.usage.reset()
     try:
         results = ask(query, ctx)
     except Exception as exc:
         log.exception("Error during recommendation")
         return render_template("recommend.html", results=None, query=query, error=str(exc))
+
+    history.record(query, results, ctx.llm.provider, ctx.llm.usage.summary())
 
     items = []
     for r in results:

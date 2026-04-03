@@ -15,6 +15,7 @@ from recommender.models import Recommendation
 from recommender.tmdb_client import TmdbClient
 from recommender.query_engine import RecommendContext, ConversationContext, ask
 from recommender import watch_index as wi
+from recommender import history
 
 log = logging.getLogger("recommender")
 
@@ -122,6 +123,23 @@ def _handle_feedback_command(line: str) -> bool:
     return False
 
 
+def _show_history(limit: int | None = None) -> None:
+    """Display recent query history."""
+    entries = history.load(limit=limit or 20)
+    if not entries:
+        console_out.print("[dim]No query history yet.[/dim]")
+        return
+    console_out.print(f"[bold]Recent queries[/bold] ({len(entries)} shown)\n")
+    for e in entries:
+        ts = e["timestamp"][:19].replace("T", " ")
+        n_results = len(e.get("results", []))
+        titles = ", ".join(r["title"] for r in e.get("results", [])[:3])
+        console_out.print(f"[dim]{ts}[/dim]  [bold]{e['query']}[/bold]")
+        if titles:
+            console_out.print(f"  {n_results} results: {titles}")
+        console_out.print(f"  [dim]{e.get('provider', '')} | {e.get('usage', '')}[/dim]\n")
+
+
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Streaming Recommender")
@@ -157,6 +175,11 @@ def main() -> None:
         console_out.print("[dim]Run python -m recommender.setup --refresh-profile to update your taste profile.[/dim]")
         return
 
+    # Handle history command (no API keys needed)
+    if args.query and args.query[0] == "history":
+        _show_history(limit=args.n)
+        return
+
     if not config.TMDB_API_KEY:
         console_err.print("[red]Error: TMDB_API_KEY not set.[/red]")
         sys.exit(1)
@@ -172,6 +195,7 @@ def main() -> None:
             results = ask(query, ctx, top_n_override=args.n)
         print_recommendations(results, query)
         console_err.print(f"[dim]{ctx.llm.usage.summary()}[/dim]")
+        history.record(query, results, ctx.llm.provider, ctx.llm.usage.summary())
         return
 
     console_out.print("Streaming Recommender — ask me anything about what to watch.")
@@ -205,6 +229,7 @@ def main() -> None:
             results = ask(line, ctx, top_n_override=args.n, conv_ctx=conv_ctx)
         print_recommendations(results, line)
         console_err.print(f"[dim]{ctx.llm.usage.summary()}[/dim]")
+        history.record(line, results, ctx.llm.provider, ctx.llm.usage.summary())
         conv_ctx.last_query = line
         conv_ctx.last_results = results
         conv_ctx.excluded_titles.update(r.title for r in results)

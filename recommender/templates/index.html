@@ -43,6 +43,21 @@
   </div>
 </section>
 
+{% if recent_queries %}
+<!-- ════════ RECENT SEARCHES ════════ -->
+<section style="margin-bottom:2.5rem;">
+  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted);">Recent searches</span>
+  <div style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-top:0.6rem;">
+    {% for q in recent_queries %}
+    <button
+      onclick="document.querySelector('[name=query]').value='{{ q.query }}'; document.getElementById('search-form').dispatchEvent(new Event('submit',{bubbles:true}));"
+      class="btn-ghost" style="padding:4px 12px; font-size:0.7rem; cursor:pointer;"
+    >{{ q.query }}</button>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 <div style="height:1px; background:linear-gradient(90deg, var(--accent), var(--lavender), var(--teal)); margin-bottom:3.5rem; opacity:0.4;"></div>
 
 <!-- ════════ TASTE PROFILE ════════ -->

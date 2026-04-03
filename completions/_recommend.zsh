@@ -4,6 +4,7 @@ _recommend() {
     local -a subcommands
     subcommands=(
         'setup:Run offline setup (fetch metadata, build profile)'
+        'history:Show recent query history'
     )
 
     local -a global_opts
