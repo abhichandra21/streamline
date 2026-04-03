@@ -56,7 +56,7 @@ def _merge_profiles(
         "- Be specific about titles, not generic\n\n"
         f"{profiles_str}"
     )
-    return client.generate(prompt, role="reason", max_tokens=1500, timeout=60.0).strip()
+    return client.generate(prompt, role="reason", max_tokens=4000, timeout=60.0).strip()
 
 
 def build(
@@ -104,7 +104,7 @@ def build(
             f"{negative_section}\n\n"
             f"Watch history (sorted by engagement score):\n{history_str}"
         )
-        return client.generate(prompt, role="reason", max_tokens=1500, timeout=60.0).strip()
+        return client.generate(prompt, role="reason", max_tokens=4000, timeout=60.0).strip()
 
     # Multiple batches — build per-batch profiles then merge
     batches = [scored[i:i + BATCH_SIZE] for i in range(0, len(scored), BATCH_SIZE)]
