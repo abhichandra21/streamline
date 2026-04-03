@@ -1,40 +1,89 @@
 <p align="center">
-  <img src="docs/logo.png" width="120" alt="Streamline logo">
+  <img src="docs/logo.png" width="140" alt="Streamline">
 </p>
 
-# Streamline
+<h1 align="center">Streamline</h1>
 
-A personal streaming recommendation engine that knows your actual taste — built on your real watch history from Netflix, Prime Video, and any manually tracked titles. Supports multiple LLM providers (Anthropic Claude, Google Gemini).
+<p align="center">
+  <strong>A personal streaming recommendation engine that knows your actual taste.</strong>
+</p>
 
-![Streamline](docs/screenshot-hero.png)
+<p align="center">
+  <a href="#features">Features</a> &bull;
+  <a href="#how-it-works">How It Works</a> &bull;
+  <a href="#quick-start">Quick Start</a> &bull;
+  <a href="#web-ui">Web UI</a> &bull;
+  <a href="#configuration">Configuration</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.10+-blue?logo=python&logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/LLM-Claude%20%7C%20Gemini-blueviolet" alt="LLM Support">
+  <img src="https://img.shields.io/badge/tests-86%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
+</p>
+
+---
+
+Streamline ingests your real watch history from Netflix, Prime Video, and manual lists, enriches every title via TMDB and LLM, builds a detailed taste profile from *all* your watched content, then answers natural-language queries using hybrid candidate generation. No generic "top 10" lists — recommendations are calibrated to *your* patterns.
+
+<p align="center">
+  <img src="docs/screenshot-hero.png" width="720" alt="Streamline in action">
+</p>
+
+## Features
+
+- **Natural language search** — "paranoid spy thriller like The Night Manager", "feel-good Bollywood comedy", "why not Slow Horses?"
+- **Taste profile** — built from your entire watch history (2000+ titles), organized into 15+ genre clusters with deep analysis
+- **Hybrid candidate generation** — TMDB Discover (structured filters) + LLM semantic suggestions (creative matches)
+- **Multi-provider LLM** — Anthropic (Claude) and Google (Gemini) with role-based model dispatch (fast/reason)
+- **Web UI** — Flask + HTMX with editorial design: search, taste profile dashboard, poster archive, search history, settings
+- **Rich CLI** — interactive REPL, conversational context ("more like that"), feedback system, usage/cost tracking
+- **Streaming availability** — annotated results with platform filtering (Netflix, Prime, etc.)
+- **Quality filters** — configurable minimum rating, release year, and vote count
+- **Title intelligence** — guessit classification, rapidfuzz dedup, manual overrides, IMDB/TMDB links
+- **Fully configurable** — all settings editable from the web UI or `config.yaml`
 
 ## How It Works
 
-Two phases:
+```
+                    OFFLINE (setup)                              ONLINE (query)
+  ┌──────────────────────────────────────┐   ┌─────────────────────────────────────────────┐
+  │                                      │   │                                             │
+  │  Watch History ──> TMDB Metadata     │   │  "spy thriller" ──> Parse Intent             │
+  │       │                │             │   │        │                  │                  │
+  │       └──> Watch Index │             │   │        ├── TMDB Discover ─┤                  │
+  │              │         │             │   │        └── LLM Suggest ───┤                  │
+  │              v         v             │   │                          v                   │
+  │         LLM Enrichment (fast)        │   │                Watch Filter + Quality Filter │
+  │              │                       │   │                          │                   │
+  │              v                       │   │              Streaming Availability           │
+  │         Taste Profile (reason)       │   │                          │                   │
+  │         [15 genre clusters]          │   │              Rank vs Taste Profile            │
+  │                                      │   │                          │                   │
+  └──────────────────────────────────────┘   │              Personalized Results             │
+                                             └─────────────────────────────────────────────┘
+```
 
 1. **Setup (run once)** — parses your watch history, fetches metadata from TMDB, enriches each title with a semantic description (fast model), and builds a full taste profile (reasoning model) from all enriched titles in batches.
-2. **Query (any time)** — ask anything in natural language. The reasoning model parses your intent, finds candidates via TMDB Discover + semantic suggestions (hybrid generation), filters out what you've already watched, annotates streaming availability, and ranks the results against your taste profile.
-
-## Prerequisites
-
-- Python 3.10+
-- TMDB API key (free at themoviedb.org)
-- Anthropic API key and/or Google Gemini API key
+2. **Query (any time)** — ask anything in natural language. The reasoning model parses your intent, finds candidates via TMDB Discover + semantic suggestions, filters out what you've already watched, annotates streaming availability, and ranks results against your taste profile.
 
 ## Quick Start
 
 ```bash
-# 1. Create venv and install dependencies
+# 1. Clone and setup
+git clone https://github.com/abhichandra21/streamline.git
+cd streamline
 python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt
 
 # 2. Add your API keys to .env (gitignored)
 cat > .env << 'EOF'
 TMDB_API_KEY=your_key_here
 ANTHROPIC_API_KEY=your_key_here
-GEMINI_API_KEY=your_key_here
+GEMINI_API_KEY=your_key_here          # optional
 EOF
 
-# 3. Add your watch history under data/ (see below)
+# 3. Add your watch history under data/ (see Watch History Sources below)
 
 # 4. Run offline setup
 ./recommend setup
@@ -84,8 +133,12 @@ Each query prints token usage and estimated cost at the end.
 ./recommend-web logs
 ```
 
-The web UI provides a search interface, taste profile dashboard with expandable clusters, and a watch history archive with list/grid/compact views.
-
+The web UI includes:
+- **Home** — natural language search with HTMX, suggestion pills, recent searches
+- **Searches** — expandable history of past queries with cached results
+- **Archive** — full watch history with poster grid, list, and compact views
+- **Settings** — edit all configuration from the browser with live reload
+- **Help** — built-in usage guide
 
 Port and host are configurable via `STREAMLINE_PORT` and `STREAMLINE_HOST` environment variables.
 
@@ -94,7 +147,7 @@ Port and host are configurable via `STREAMLINE_PORT` and `STREAMLINE_HOST` envir
 Settings live in two places:
 
 - **`.env`** — secrets only (API keys, gitignored)
-- **`config.yaml`** — everything else (models, tunables, data paths)
+- **`config.yaml`** — everything else (editable from the Settings page or by hand)
 
 ### LLM Providers
 
@@ -111,7 +164,15 @@ models:
     reason: gemini-2.5-pro
 ```
 
-Switch providers by changing `provider:` in config.yaml or per-query with `--provider gemini`. Model names are user-configurable — update them when new models are released.
+Switch providers by changing `provider:` in config.yaml or per-query with `--provider gemini`.
+
+### Quality Filters
+
+```yaml
+min_rating: 6.5      # minimum TMDB rating (0 to disable)
+min_year: 2000        # minimum release year (0 to disable)
+min_vote_count: 20    # filter obscure titles
+```
 
 ### Title Overrides
 
@@ -126,11 +187,10 @@ When TMDB can't match a title, create `data/overrides.json`:
 }
 ```
 
-The override file is auto-detected — run `./recommend setup` (no flags needed) and it triggers a rebuild.
+<details>
+<summary><strong>Full Settings Reference</strong></summary>
 
-### Settings Reference
-
-All settings in `config.yaml`. The file is well-commented — see it for full details.
+All settings in `config.yaml`:
 
 **LLM:**
 | Setting | Default | Description |
@@ -138,7 +198,7 @@ All settings in `config.yaml`. The file is well-commented — see it for full de
 | `provider` | anthropic | LLM provider ("anthropic" or "gemini") |
 | `models.*` | (see above) | Model assignments per provider (fast/reason roles) |
 | `llm.timeout_*` | 30-300s | Per-call-type timeouts |
-| `llm.tokens_*` | 200-4000 | Per-call-type max output tokens |
+| `llm.tokens_*` | 200-16000 | Per-call-type max output tokens |
 | `llm.profile_batch_size` | 200 | Titles per taste profile batch |
 | `llm.rate_limit_wait` | 65 | Seconds to wait on rate limit |
 
@@ -150,38 +210,59 @@ All settings in `config.yaml`. The file is well-commented — see it for full de
 | `scoring.weight_recency` | 0.2 | Weight for recency (must sum to 1.0) |
 | `scoring.default_tv_runtime` | 45 | Fallback TV episode runtime (minutes) |
 | `scoring.default_movie_runtime` | 90 | Fallback movie runtime (minutes) |
-| `scoring.rewatch_saturation` | 5 | Log scale saturates at ~N rewatches |
-
-**Manual titles:**
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `manual.timestamp` | now | "now" (competitive) or "2022-01-01" (lower scoring) |
-| `manual.tv_duration_minutes` | 45 | Synthetic watch duration for TV |
-| `manual.movie_duration_minutes` | 120 | Synthetic watch duration for movies |
 
 **Recommendations:**
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `default_top_n` | 3 | Default results per query |
 | `min_vote_count` | 20 | Minimum TMDB votes for discover candidates |
+| `min_rating` | 6.5 | Minimum TMDB rating (0 to disable) |
+| `min_year` | 2000 | Minimum release year (0 to disable) |
 | `recency_half_life_days` | 90 | Days until recency score halves |
-| `watch_region` | US | Region for streaming availability lookup |
-| `streaming_platforms` | [] | Your subscribed platforms (filters results when set) |
+| `watch_region` | US | Region for streaming availability |
+| `streaming_platforms` | [] | Your subscribed platforms |
+
+</details>
 
 ## Watch History Sources
 
 Place exported CSV files under `data/`:
 
-| Platform | Path |
-|----------|------|
-| Netflix | `data/netflix/<account_id>/CONTENT_INTERACTION/ViewingActivity.csv` |
-| Prime Video | `data/prime_video/Your Prime Video Viewing Activity/Viewing History.csv` |
-| Manual list | `data/manual/tv.csv` and `data/manual/movies.csv` |
+| Platform | Path | How to export |
+|----------|------|---------------|
+| Netflix | `data/netflix/.../ViewingActivity.csv` | Account Settings > Download your data |
+| Prime Video | `data/prime_video/.../Viewing History.csv` | Account > Digital content > Request your data |
+| Manual | `data/manual/tv.csv` / `movies.csv` | One title per line |
 
-Netflix and Prime exports are available from their account settings pages. Manual files are plain text, one title per line. Movie titles may include a trailing year (`Zodiac 2007`) which is stripped automatically.
+Movie titles may include a trailing year (`Zodiac 2007`) which is stripped automatically.
+
+## Architecture
+
+Two-phase LLM pipeline with role-based model dispatch:
+
+| Module | Purpose |
+|--------|---------|
+| `recommender/llm.py` | Provider abstraction (Anthropic/Gemini), token tracking, rate limit retry |
+| `recommender/query_engine.py` | Online pipeline: intent parsing, hybrid candidates, ranking |
+| `recommender/taste_profile_builder.py` | Batched profile build with cache, truncation detection |
+| `recommender/tmdb_client.py` | TMDB metadata, discover endpoint, streaming providers |
+| `recommender/enricher.py` | LLM enrichment with caching |
+| `recommender/signals.py` | Engagement scoring (completion, rewatch, recency) |
+| `recommender/web.py` | Flask + HTMX web UI |
+| `recommender/main.py` | Rich CLI |
+
+See [`docs/architecture.md`](docs/architecture.md) for the full design document.
 
 ## Running Tests
 
 ```bash
 python3 -m pytest tests/ -v
 ```
+
+## Contributing
+
+Contributions are welcome! Please open an issue first to discuss what you'd like to change.
+
+## License
+
+[MIT](LICENSE)
