@@ -152,6 +152,7 @@ def main() -> None:
     parser.add_argument("--add", metavar="TITLE", help="Add a title to watch history")
     parser.add_argument("--type", choices=["tv", "movie"], default="tv",
                         help="Content type for --add (default: tv)")
+    parser.add_argument("--history", action="store_true", help="Show recent query history")
     parser.add_argument("--provider", choices=["anthropic", "gemini"],
                         help="LLM provider (default: from config/env)")
     args = parser.parse_args()
@@ -176,7 +177,7 @@ def main() -> None:
         return
 
     # Handle history command (no API keys needed)
-    if args.query and args.query[0] == "history":
+    if args.history:
         _show_history(limit=args.n)
         return
 

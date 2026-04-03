@@ -219,6 +219,17 @@ def searches() -> str:
     return render_template("searches.html", entries=entries)
 
 
+@app.route("/searches/delete", methods=["DELETE"])
+def delete_search():
+    ts = request.args.get("ts", "")
+    if not ts:
+        return "", 400
+    deleted = query_history.delete(ts)
+    if not deleted:
+        return "", 404
+    return "", 200, {"HX-Redirect": "/searches"}
+
+
 @app.route("/recommend", methods=["GET", "POST"])
 def recommend() -> str:
     if request.method == "GET":
@@ -236,7 +247,10 @@ def recommend() -> str:
         log.exception("Error during recommendation")
         return render_template("recommend.html", results=None, query=query, error=str(exc))
 
-    query_history.record(query, results, ctx.llm.provider, ctx.llm.usage.summary())
+    try:
+        query_history.record(query, results, ctx.llm.provider, ctx.llm.usage.summary())
+    except OSError as exc:
+        log.warning("Failed to persist query history for %r: %s", query, exc)
 
     items = []
     for r in results:
