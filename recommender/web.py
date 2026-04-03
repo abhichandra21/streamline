@@ -5,10 +5,13 @@ import logging
 import os
 import re
 import sys
+from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 
+import yaml
 from recommender.llm import create_client
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, url_for
 from markupsafe import Markup, escape
 
 import config
@@ -309,6 +312,344 @@ def title_detail(tmdb_id: int) -> str:
             overview = raw.get("overview", "")
     return render_template("title.html", meta=meta, description=description, overview=overview,
                            tmdb_id=tmdb_id, ct=ct, poster=poster)
+
+
+@app.route("/help")
+def help_page() -> str:
+    return render_template("help.html")
+
+
+_CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
+_SETTINGS_DEFAULTS = {
+    "provider": "anthropic",
+    "models": {
+        "anthropic": {
+            "fast": "claude-haiku-4-5-20251001",
+            "reason": "claude-sonnet-4-6",
+        },
+        "gemini": {
+            "fast": "gemini-2.5-flash",
+            "reason": "gemini-2.5-flash",
+        },
+    },
+    "llm": {
+        "timeout_fast": 30,
+        "timeout_reason": 60,
+        "timeout_profile_batch": 60,
+        "timeout_profile_merge": 300,
+        "tokens_fast": 200,
+        "tokens_intent": 400,
+        "tokens_ranking": 1000,
+        "tokens_suggestions": 300,
+        "tokens_profile_batch": 800,
+        "tokens_profile_merge": 4000,
+        "tokens_abandoned": 300,
+        "profile_batch_size": 200,
+        "rate_limit_wait": 65,
+    },
+    "scoring": {
+        "weight_completion": 0.5,
+        "weight_rewatch": 0.3,
+        "weight_recency": 0.2,
+        "default_tv_runtime": 45,
+        "default_movie_runtime": 90,
+        "rewatch_saturation": 5,
+    },
+    "default_top_n": 3,
+    "min_vote_count": 20,
+    "recency_half_life_days": 90,
+    "watch_region": "US",
+    "streaming_platforms": [],
+    "manual": {
+        "timestamp": "now",
+        "tv_duration_minutes": 45,
+        "movie_duration_minutes": 120,
+    },
+    "log_level": "WARNING",
+}
+
+_PROFILE_REBUILD_LLM_KEYS = (
+    "timeout_profile_batch",
+    "timeout_profile_merge",
+    "tokens_profile_batch",
+    "tokens_profile_merge",
+    "profile_batch_size",
+    "rate_limit_wait",
+)
+_PROFILE_REBUILD_SCORING_KEYS = (
+    "weight_completion",
+    "weight_rewatch",
+    "weight_recency",
+    "default_tv_runtime",
+    "default_movie_runtime",
+    "rewatch_saturation",
+)
+
+
+def _load_config_yaml() -> dict:
+    """Load raw config.yaml as a dict for the settings form."""
+    with open(_CONFIG_PATH) as f:
+        return yaml.safe_load(f) or {}
+
+
+def _save_config_yaml(cfg: dict) -> None:
+    """Write config dict back to config.yaml, preserving comments where possible."""
+    with open(_CONFIG_PATH, "w") as f:
+        f.write("# Streamline configuration\n")
+        f.write("# Secrets (API keys) go in .env, everything else goes here.\n\n")
+        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+
+def _merge_settings_defaults(target: dict, source: dict) -> dict:
+    for key, value in source.items():
+        if isinstance(value, dict):
+            existing = target.get(key)
+            if not isinstance(existing, dict):
+                existing = {}
+            target[key] = _merge_settings_defaults(existing, value)
+            continue
+        target[key] = value
+    return target
+
+
+def _resolve_settings_config(raw_cfg: dict | None = None) -> dict:
+    cfg = deepcopy(_SETTINGS_DEFAULTS)
+    return _merge_settings_defaults(cfg, raw_cfg or {})
+
+
+def _render_settings_page(
+    cfg: dict | None = None,
+    *,
+    saved: str | bool | None = None,
+    error: str | None = None,
+) -> str:
+    resolved_cfg = _resolve_settings_config(cfg if cfg is not None else _load_config_yaml())
+    return render_template("settings.html", cfg=resolved_cfg, saved=saved, error=error)
+
+
+def _reload_app_config() -> None:
+    """Reload config module and rebuild app context."""
+    global _ctx
+    import importlib
+    importlib.reload(config)
+    _ctx = None  # next request will rebuild context
+    log.info("Config reloaded from config.yaml")
+
+
+def _parse_int_field(form, key: str, default: int) -> int:
+    value = (form.get(key) or "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be an integer.") from exc
+
+
+def _parse_float_field(form, key: str, default: float) -> float:
+    value = (form.get(key) or "").strip()
+    if not value:
+        return default
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be a number.") from exc
+
+
+def _parse_manual_timestamp(form, current_cfg: dict) -> str:
+    mode = (form.get("manual_timestamp_mode") or "").strip() or (
+        "now" if current_cfg["manual"]["timestamp"] == "now" else "fixed"
+    )
+    if mode == "now":
+        return "now"
+
+    date_value = (form.get("manual_timestamp_date") or "").strip()
+    if not date_value:
+        fallback = current_cfg["manual"]["timestamp"]
+        date_value = fallback if fallback != "now" else "2022-01-01"
+    try:
+        datetime.strptime(date_value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError("manual_timestamp_date must use YYYY-MM-DD.") from exc
+    return date_value
+
+
+def _settings_refresh_flags(previous_cfg: dict, updated_cfg: dict) -> tuple[bool, bool]:
+    refresh_data = any(
+        previous_cfg["manual"][key] != updated_cfg["manual"][key]
+        for key in ("timestamp", "tv_duration_minutes", "movie_duration_minutes")
+    )
+    refresh_profile = refresh_data
+    refresh_profile = refresh_profile or any(
+        previous_cfg["scoring"][key] != updated_cfg["scoring"][key]
+        for key in _PROFILE_REBUILD_SCORING_KEYS
+    )
+    refresh_profile = refresh_profile or previous_cfg["recency_half_life_days"] != updated_cfg["recency_half_life_days"]
+    refresh_profile = refresh_profile or any(
+        previous_cfg["llm"][key] != updated_cfg["llm"][key]
+        for key in _PROFILE_REBUILD_LLM_KEYS
+    )
+    return refresh_profile, refresh_data
+
+
+def _refresh_derived_data(refresh_profile: bool, refresh_data: bool) -> None:
+    global _ctx
+    if not refresh_profile and not refresh_data:
+        return
+
+    from recommender.setup import run_setup
+
+    run_setup(refresh_profile=refresh_profile, refresh_data=refresh_data)
+    _ctx = None
+    log.info(
+        "Rebuilt derived data after settings save (refresh_profile=%s, refresh_data=%s)",
+        refresh_profile,
+        refresh_data,
+    )
+
+
+@app.route("/settings", methods=["GET"])
+def settings_page() -> str:
+    return _render_settings_page(saved=request.args.get("saved"))
+
+
+@app.route("/settings", methods=["POST"])
+def settings_save() -> str:
+    cfg = _load_config_yaml()
+    current_cfg = _resolve_settings_config(cfg)
+    form = request.form
+
+    try:
+        llm_values = {
+            key: _parse_int_field(form, f"llm_{key}", current_cfg["llm"][key])
+            for key in (
+                "timeout_fast",
+                "timeout_reason",
+                "timeout_profile_batch",
+                "timeout_profile_merge",
+                "tokens_fast",
+                "tokens_intent",
+                "tokens_ranking",
+                "tokens_suggestions",
+                "tokens_profile_batch",
+                "tokens_profile_merge",
+                "tokens_abandoned",
+                "profile_batch_size",
+                "rate_limit_wait",
+            )
+        }
+        scoring_values = {
+            "weight_completion": _parse_float_field(
+                form, "weight_completion", current_cfg["scoring"]["weight_completion"]
+            ),
+            "weight_rewatch": _parse_float_field(
+                form, "weight_rewatch", current_cfg["scoring"]["weight_rewatch"]
+            ),
+            "weight_recency": _parse_float_field(
+                form, "weight_recency", current_cfg["scoring"]["weight_recency"]
+            ),
+            "default_tv_runtime": _parse_int_field(
+                form, "default_tv_runtime", current_cfg["scoring"]["default_tv_runtime"]
+            ),
+            "default_movie_runtime": _parse_int_field(
+                form, "default_movie_runtime", current_cfg["scoring"]["default_movie_runtime"]
+            ),
+            "rewatch_saturation": _parse_int_field(
+                form, "rewatch_saturation", current_cfg["scoring"]["rewatch_saturation"]
+            ),
+        }
+        recommendation_values = {
+            "default_top_n": _parse_int_field(form, "default_top_n", current_cfg["default_top_n"]),
+            "min_vote_count": _parse_int_field(form, "min_vote_count", current_cfg["min_vote_count"]),
+            "recency_half_life_days": _parse_int_field(
+                form, "recency_half_life_days", current_cfg["recency_half_life_days"]
+            ),
+        }
+        manual_values = {
+            "timestamp": _parse_manual_timestamp(form, current_cfg),
+            "tv_duration_minutes": _parse_int_field(
+                form, "manual_tv_duration", current_cfg["manual"]["tv_duration_minutes"]
+            ),
+            "movie_duration_minutes": _parse_int_field(
+                form, "manual_movie_duration", current_cfg["manual"]["movie_duration_minutes"]
+            ),
+        }
+    except ValueError as exc:
+        return _render_settings_page(cfg=current_cfg, saved=False, error=str(exc))
+
+    # Validate scoring weights sum to 1.0
+    w_comp = scoring_values["weight_completion"]
+    w_rew = scoring_values["weight_rewatch"]
+    w_rec = scoring_values["weight_recency"]
+    try:
+        if abs((w_comp + w_rew + w_rec) - 1.0) > 0.01:
+            return _render_settings_page(
+                cfg=current_cfg,
+                saved=False,
+                error=f"Scoring weights must sum to 1.0 (got {w_comp + w_rew + w_rec:.2f})",
+            )
+    except ValueError:
+        return _render_settings_page(cfg=current_cfg, saved=False, error="Invalid scoring weights.")
+
+    # Provider & models
+    cfg["provider"] = form.get("provider", "anthropic")
+    cfg.setdefault("models", {})
+    cfg["models"]["anthropic"] = {
+        "fast": form.get("anthropic_fast", "").strip(),
+        "reason": form.get("anthropic_reason", "").strip(),
+    }
+    cfg["models"]["gemini"] = {
+        "fast": form.get("gemini_fast", "").strip(),
+        "reason": form.get("gemini_reason", "").strip(),
+    }
+
+    # LLM limits
+    llm = cfg.setdefault("llm", {})
+    llm.update(llm_values)
+
+    # Scoring
+    scoring = cfg.setdefault("scoring", {})
+    scoring.update(scoring_values)
+
+    # Recommendations
+    cfg.update(recommendation_values)
+
+    # Streaming
+    cfg["watch_region"] = form.get("watch_region", "US").strip().upper()
+    platforms_str = form.get("streaming_platforms", "").strip()
+    cfg["streaming_platforms"] = [p.strip() for p in platforms_str.split(",") if p.strip()] if platforms_str else []
+
+    # Manual
+    manual = cfg.setdefault("manual", {})
+    manual.update(manual_values)
+
+    # Logging
+    cfg["log_level"] = form.get("log_level", "WARNING")
+
+    updated_cfg = _resolve_settings_config(cfg)
+    refresh_profile, refresh_data = _settings_refresh_flags(current_cfg, updated_cfg)
+
+    _save_config_yaml(cfg)
+    _reload_app_config()
+    try:
+        if refresh_profile or refresh_data:
+            _refresh_derived_data(refresh_profile=refresh_profile, refresh_data=refresh_data)
+    except SystemExit as exc:
+        log.error("Derived data rebuild exited during settings save with status %s", exc.code)
+        return _render_settings_page(
+            cfg=updated_cfg,
+            saved=False,
+            error="Settings were saved, but derived data rebuild failed. Check the server log.",
+        )
+    except Exception as exc:
+        log.exception("Failed to rebuild derived data after settings save")
+        return _render_settings_page(
+            cfg=updated_cfg,
+            saved=False,
+            error=f"Settings were saved, but derived data rebuild failed: {exc}",
+        )
+
+    return redirect(url_for("settings_page", saved="1"))
 
 
 def run() -> None:

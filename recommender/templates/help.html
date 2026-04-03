@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Help{% endblock %}
+{% block content %}
+
+<div style="margin-bottom:2.5rem;">
+  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">Guide</span>
+  <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:0.5rem;">Help</h1>
+  <p style="color:var(--muted); font-size:0.85rem;">Everything you need to know about using Streamline.</p>
+</div>
+
+<div style="display:flex; flex-direction:column; gap:6px;">
+
+  <!-- How it works -->
+  <details class="help-details" open>
+    <summary class="help-summary">
+      <svg class="help-arrow" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1 L7 5 L3 9" stroke="var(--accent)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="help-heading">How it works</span>
+    </summary>
+    <div class="help-body">
+      <p>Streamline is a two-phase recommendation engine built on your real watch history.</p>
+      <p><strong>Setup (offline)</strong> — Parses your Netflix, Prime Video, and manual watch history. Fetches metadata from TMDB, enriches each title with a semantic description, then builds a detailed taste profile from everything you've watched.</p>
+      <p><strong>Search (online)</strong> — Ask anything in natural language. The engine parses your intent, finds candidates via TMDB Discover + AI semantic suggestions, filters out what you've seen, checks streaming availability, and ranks results against your taste profile.</p>
+    </div>
+  </details>
+
+  <!-- Searching -->
+  <details class="help-details">
+    <summary class="help-summary">
+      <svg class="help-arrow" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1 L7 5 L3 9" stroke="var(--teal)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="help-heading">Searching</span>
+    </summary>
+    <div class="help-body">
+      <p>Type anything in the search bar on the <a href="/">home page</a>. Some examples:</p>
+      <ul>
+        <li><strong>Genre + mood</strong> — "gritty British crime drama", "feel-good Bollywood comedy"</li>
+        <li><strong>Similar to</strong> — "spy thriller like Slow Horses", "something like Fleabag but darker"</li>
+        <li><strong>Specific requests</strong> — "give me 5 underrated sci-fi movies", "short documentary series"</li>
+        <li><strong>Language/region</strong> — "Hindi crime thriller", "Korean romance", "French arthouse"</li>
+        <li><strong>Platform</strong> — "what's good on Netflix right now", "best Prime Video originals"</li>
+        <li><strong>Why not?</strong> — "why not The Bear?" explains why a title wasn't recommended</li>
+      </ul>
+      <p>Results show the title, TMDB rating, genres, a personalized explanation of why it matches your taste, and where it's streaming.</p>
+    </div>
+  </details>
+
+  <!-- Taste profile -->
+  <details class="help-details">
+    <summary class="help-summary">
+      <svg class="help-arrow" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1 L7 5 L3 9" stroke="var(--lavender)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="help-heading">Taste profile</span>
+    </summary>
+    <div class="help-body">
+      <p>Your taste profile is built from <strong>all</strong> titles in your watch history, processed in batches and merged into clusters. Each cluster captures a distinct pattern in what you watch — genre preferences, tonal signatures, cultural interests.</p>
+      <p>The profile is rebuilt when you run setup with <code>--refresh-profile</code>. It automatically backs up the previous version.</p>
+      <p>Feedback (liked/disliked titles) influences the profile on the next rebuild — liked titles get a score boost, disliked titles are noted as patterns to avoid.</p>
+    </div>
+  </details>
+
+  <!-- CLI commands -->
+  <details class="help-details">
+    <summary class="help-summary">
+      <svg class="help-arrow" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1 L7 5 L3 9" stroke="var(--accent2)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="help-heading">CLI commands</span>
+    </summary>
+    <div class="help-body">
+      <p>Everything goes through <code>./recommend</code>:</p>
+      <table class="help-table">
+        <tr><td><code>./recommend "query"</code></td><td>Single query</td></tr>
+        <tr><td><code>./recommend</code></td><td>Interactive mode (conversational, supports "more like that")</td></tr>
+        <tr><td><code>./recommend setup</code></td><td>First-time offline setup</td></tr>
+        <tr><td><code>./recommend setup --refresh-data</code></td><td>Re-fetch TMDB metadata + rebuild everything</td></tr>
+        <tr><td><code>./recommend setup --refresh-profile</code></td><td>Rebuild taste profile only</td></tr>
+        <tr><td><code>./recommend --history</code></td><td>Show recent query history</td></tr>
+        <tr><td><code>./recommend --debug "query"</code></td><td>Full pipeline trace</td></tr>
+        <tr><td><code>./recommend -n 5 "query"</code></td><td>Override result count</td></tr>
+        <tr><td><code>./recommend --provider gemini "query"</code></td><td>Use Gemini instead of default</td></tr>
+        <tr><td><code>./recommend --liked "Title"</code></td><td>Mark a title as liked</td></tr>
+        <tr><td><code>./recommend --disliked "Title"</code></td><td>Mark a title as disliked</td></tr>
+        <tr><td><code>./recommend --add "Title" --type tv</code></td><td>Add to watch history</td></tr>
+      </table>
+
+      <p style="margin-top:1rem;">Web server:</p>
+      <table class="help-table">
+        <tr><td><code>./recommend-web start</code></td><td>Start web UI (default port 5050)</td></tr>
+        <tr><td><code>./recommend-web stop</code></td><td>Stop the server</td></tr>
+        <tr><td><code>./recommend-web restart</code></td><td>Restart</td></tr>
+        <tr><td><code>./recommend-web status</code></td><td>Check if running</td></tr>
+        <tr><td><code>./recommend-web logs</code></td><td>View recent logs</td></tr>
+      </table>
+    </div>
+  </details>
+
+  <!-- Configuration -->
+  <details class="help-details">
+    <summary class="help-summary">
+      <svg class="help-arrow" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1 L7 5 L3 9" stroke="var(--accent)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="help-heading">Configuration</span>
+    </summary>
+    <div class="help-body">
+      <p>Settings live in two places:</p>
+      <ul>
+        <li><strong>.env</strong> — API keys only (TMDB, Anthropic, Gemini). Gitignored.</li>
+        <li><strong>config.yaml</strong> — everything else. Editable from the <a href="/settings">Settings</a> page or by hand.</li>
+      </ul>
+      <p>The <a href="/settings">Settings</a> page lets you change provider, models, timeouts, scoring weights, and more — changes take effect immediately without a restart.</p>
+    </div>
+  </details>
+
+  <!-- Title overrides -->
+  <details class="help-details">
+    <summary class="help-summary">
+      <svg class="help-arrow" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1 L7 5 L3 9" stroke="var(--teal)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="help-heading">Title overrides</span>
+    </summary>
+    <div class="help-body">
+      <p>When TMDB can't match a title from your watch history, create <code>data/overrides.json</code>:</p>
+      <pre style="background:var(--bg); padding:0.75rem 1rem; border-radius:4px; font-size:0.78rem; overflow-x:auto;">{
+  "The Matrix III Revolutions": {"title": "The Matrix Revolutions"},
+  "Some Cooking Show Ep 3": {"skip": true},
+  "Delhi Cops Episode": {"title": "Delhi Cops", "content_type": "tv"},
+  "Specific Movie": {"tmdb_id": 12345}
+}</pre>
+      <p>Options: <code>title</code> (search name), <code>content_type</code> (tv/movie), <code>tmdb_id</code> (direct match), <code>skip</code> (exclude entirely). The override file is auto-detected — just run <code>./recommend setup</code>.</p>
+    </div>
+  </details>
+
+  <!-- Watch history -->
+  <details class="help-details">
+    <summary class="help-summary">
+      <svg class="help-arrow" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1 L7 5 L3 9" stroke="var(--lavender)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="help-heading">Adding watch history</span>
+    </summary>
+    <div class="help-body">
+      <p>Place exported CSV files under <code>data/</code>:</p>
+      <table class="help-table">
+        <tr><td><strong>Netflix</strong></td><td>Account Settings > Download your data > ViewingActivity.csv</td></tr>
+        <tr><td><strong>Prime Video</strong></td><td>Account > Digital content > Request your data > Viewing History.csv</td></tr>
+        <tr><td><strong>Manual</strong></td><td><code>data/manual/tv.csv</code> and <code>data/manual/movies.csv</code> — one title per line</td></tr>
+      </table>
+      <p>After adding new data, run <code>./recommend setup --refresh-data</code> to rebuild.</p>
+      <p>You can also add individual titles via CLI: <code>./recommend --add "Shetland" --type tv</code></p>
+    </div>
+  </details>
+
+  <!-- LLM providers -->
+  <details class="help-details">
+    <summary class="help-summary">
+      <svg class="help-arrow" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1 L7 5 L3 9" stroke="var(--accent2)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="help-heading">LLM providers</span>
+    </summary>
+    <div class="help-body">
+      <p>Streamline supports two LLM providers. Each uses two model roles:</p>
+      <ul>
+        <li><strong>Fast</strong> — used for enrichment (high volume, simple task). Default: Haiku / Flash.</li>
+        <li><strong>Reason</strong> — used for intent parsing, ranking, taste profile (complex reasoning). Default: Sonnet / Pro.</li>
+      </ul>
+      <p>Switch providers in <a href="/settings">Settings</a> or per-query with <code>--provider gemini</code>. Token usage and cost estimates are shown after each query.</p>
+    </div>
+  </details>
+
+</div>
+
+<style>
+  .help-details { background: var(--surface); border-radius: 6px; overflow: hidden; }
+  .help-summary {
+    display: flex; align-items: center; gap: 0.75rem;
+    padding: 1rem 1.25rem;
+    cursor: pointer; list-style: none; user-select: none;
+    transition: background 0.15s;
+  }
+  .help-summary::-webkit-details-marker { display: none; }
+  .help-summary::marker { content: ''; }
+  .help-summary:hover { background: var(--surface2); }
+  .help-details[open] .help-arrow { transform: rotate(90deg); }
+  .help-arrow { flex-shrink: 0; transition: transform 0.2s; }
+  .help-heading { font-family: 'DM Serif Display', serif; font-size: 1.05rem; color: var(--text); }
+  .help-body {
+    padding: 0 1.25rem 1.25rem 2.75rem;
+  }
+  .help-body p { font-size: 0.86rem; color: var(--body); line-height: 1.8; margin: 0 0 0.75rem; }
+  .help-body p:last-child { margin-bottom: 0; }
+  .help-body strong { color: var(--text); font-weight: 500; }
+  .help-body code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.76rem;
+    background: var(--bg);
+    padding: 2px 6px;
+    border-radius: 3px;
+    color: var(--text);
+  }
+  .help-body ul { margin: 0 0 0.75rem; padding-left: 1.2rem; }
+  .help-body li { font-size: 0.86rem; color: var(--body); line-height: 1.8; margin-bottom: 0.2rem; }
+  .help-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.5rem 0;
+  }
+  .help-table td {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.82rem;
+    color: var(--body);
+    border-bottom: 1px solid rgba(53,47,64,0.5);
+    vertical-align: top;
+  }
+  .help-table td:first-child { white-space: nowrap; }
+  .help-table tr:last-child td { border-bottom: none; }
+</style>
+
+{% endblock %}

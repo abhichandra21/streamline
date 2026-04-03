@@ -1,0 +1,339 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Settings{% endblock %}
+{% block content %}
+
+<div style="margin-bottom:2rem;">
+  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">Configuration</span>
+  <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:0.5rem;">Settings</h1>
+  <p style="color:var(--muted); font-size:0.85rem;">Changes are saved to config.yaml and take effect on reload.</p>
+</div>
+
+{% if saved %}
+<div style="padding:0.75rem 1.25rem; background:rgba(58,184,160,0.1); border:1px solid rgba(58,184,160,0.25); border-radius:6px; margin-bottom:1.5rem; font-size:0.85rem; color:var(--teal);">
+  Settings saved. <span class="mono" style="font-size:0.7rem;">Config reloaded.</span>
+</div>
+{% endif %}
+
+{% if error %}
+<div style="padding:0.75rem 1.25rem; background:rgba(232,93,74,0.08); border:1px solid rgba(232,93,74,0.2); border-radius:6px; margin-bottom:1.5rem; font-size:0.85rem; color:#e88;">
+  {{ error }}
+</div>
+{% endif %}
+
+<form method="post" action="/settings" style="display:flex; flex-direction:column; gap:1.5rem;">
+
+  <!-- LLM Provider -->
+  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+    <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">LLM Provider</legend>
+    <p class="section-intro">Which AI provider to use and which models for each role.</p>
+
+    <div class="form-row">
+      <label class="form-label">Provider</label>
+      <select name="provider" class="form-input" style="width:200px;">
+        <option value="anthropic" {{ 'selected' if cfg.provider == 'anthropic' }}>Anthropic</option>
+        <option value="gemini" {{ 'selected' if cfg.provider == 'gemini' }}>Gemini</option>
+      </select>
+      <span class="form-hint">Active provider for all LLM calls. Override per-query with --provider.</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-top:1rem;">
+      <div>
+        <span class="mono" style="font-size:0.58rem; color:var(--muted); letter-spacing:0.08em;">ANTHROPIC MODELS</span>
+        <div class="form-row" style="margin-top:0.5rem;">
+          <label class="form-label">Fast</label>
+          <input type="text" name="anthropic_fast" value="{{ cfg.models.anthropic.fast }}" class="form-input">
+          <span class="form-hint">Enrichment, simple tasks (high volume, cheaper)</span>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Reason</label>
+          <input type="text" name="anthropic_reason" value="{{ cfg.models.anthropic.reason }}" class="form-input">
+          <span class="form-hint">Intent parsing, ranking, taste profile (complex reasoning)</span>
+        </div>
+      </div>
+      <div>
+        <span class="mono" style="font-size:0.58rem; color:var(--muted); letter-spacing:0.08em;">GEMINI MODELS</span>
+        <div class="form-row" style="margin-top:0.5rem;">
+          <label class="form-label">Fast</label>
+          <input type="text" name="gemini_fast" value="{{ cfg.models.gemini.fast }}" class="form-input">
+          <span class="form-hint">Enrichment, simple tasks</span>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Reason</label>
+          <input type="text" name="gemini_reason" value="{{ cfg.models.gemini.reason }}" class="form-input">
+          <span class="form-hint">Complex reasoning (Pro needs extended timeouts)</span>
+        </div>
+      </div>
+    </div>
+  </fieldset>
+
+  <!-- LLM Timeouts & Tokens -->
+  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+    <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">LLM Limits</legend>
+    <p class="section-intro">Timeouts and token budgets per call type. Increase if you see truncation or timeout errors.</p>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
+      <div>
+        <span class="mono" style="font-size:0.58rem; color:var(--muted); letter-spacing:0.08em;">TIMEOUTS (seconds)</span>
+        {% set timeout_hints = {
+          'timeout_fast': 'Enrichment calls',
+          'timeout_reason': 'Intent parsing, ranking, suggestions',
+          'timeout_profile_batch': 'Each batch during taste profile build',
+          'timeout_profile_merge': 'Final merge of all batches into profile'
+        } %}
+        {% for key, label in [('timeout_fast', 'Fast'), ('timeout_reason', 'Reason'), ('timeout_profile_batch', 'Profile batch'), ('timeout_profile_merge', 'Profile merge')] %}
+        <div class="form-row" style="margin-top:0.5rem;">
+          <label class="form-label">{{ label }}</label>
+          <input type="number" name="llm_{{ key }}" value="{{ cfg.llm[key] }}" class="form-input" style="width:100px;" min="1">
+          <span class="form-hint">{{ timeout_hints[key] }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      <div>
+        <span class="mono" style="font-size:0.58rem; color:var(--muted); letter-spacing:0.08em;">MAX OUTPUT TOKENS</span>
+        {% set token_hints = {
+          'tokens_fast': 'Enrichment descriptions (~1 paragraph)',
+          'tokens_intent': 'Query intent parsing (JSON)',
+          'tokens_ranking': 'Ranking explanation per result (auto-scales with result count)',
+          'tokens_suggestions': 'AI title suggestions per query',
+          'tokens_profile_batch': 'Per-batch taste analysis (200 titles needs ~4000)',
+          'tokens_profile_merge': 'Final merged profile (15 clusters needs ~16000)',
+          'tokens_abandoned': 'Abandoned show advice'
+        } %}
+        {% for key, label in [('tokens_fast', 'Fast'), ('tokens_intent', 'Intent'), ('tokens_ranking', 'Ranking'), ('tokens_suggestions', 'Suggestions'), ('tokens_profile_batch', 'Profile batch'), ('tokens_profile_merge', 'Profile merge'), ('tokens_abandoned', 'Abandoned')] %}
+        <div class="form-row" style="margin-top:0.5rem;">
+          <label class="form-label">{{ label }}</label>
+          <input type="number" name="llm_{{ key }}" value="{{ cfg.llm[key] }}" class="form-input" style="width:100px;" min="1">
+          <span class="form-hint">{{ token_hints[key] }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-top:1rem;">
+      <div class="form-row">
+        <label class="form-label">Profile batch size</label>
+        <input type="number" name="llm_profile_batch_size" value="{{ cfg.llm.profile_batch_size }}" class="form-input" style="width:100px;" min="10">
+        <span class="form-hint">Titles per batch during taste profile build</span>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Rate limit wait (s)</label>
+        <input type="number" name="llm_rate_limit_wait" value="{{ cfg.llm.rate_limit_wait }}" class="form-input" style="width:100px;" min="1">
+        <span class="form-hint">Seconds to pause on 429 rate limit errors</span>
+      </div>
+    </div>
+  </fieldset>
+
+  <!-- Scoring -->
+  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+    <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Scoring</legend>
+    <p class="section-intro">How engagement scores are calculated from your watch history. Weights must sum to 1.0.</p>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem;">
+      <div class="form-row">
+        <label class="form-label">Completion weight</label>
+        <input type="number" name="weight_completion" value="{{ cfg.scoring.weight_completion }}" class="form-input" style="width:80px;" step="0.1" min="0" max="1">
+        <span class="form-hint">How much of the title was watched</span>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Rewatch weight</label>
+        <input type="number" name="weight_rewatch" value="{{ cfg.scoring.weight_rewatch }}" class="form-input" style="width:80px;" step="0.1" min="0" max="1">
+        <span class="form-hint">Bonus for titles watched multiple times</span>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Recency weight</label>
+        <input type="number" name="weight_recency" value="{{ cfg.scoring.weight_recency }}" class="form-input" style="width:80px;" step="0.1" min="0" max="1">
+        <span class="form-hint">Recent watches score higher</span>
+      </div>
+    </div>
+    <p id="weight-warn" class="mono" style="font-size:0.58rem; color:#e85d4a; margin-top:0.5rem; display:none;">Weights must sum to 1.0</p>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem; margin-top:1rem;">
+      <div class="form-row">
+        <label class="form-label">TV runtime (min)</label>
+        <input type="number" name="default_tv_runtime" value="{{ cfg.scoring.default_tv_runtime }}" class="form-input" style="width:80px;" min="1">
+        <span class="form-hint">Fallback when TMDB has no runtime data</span>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Movie runtime (min)</label>
+        <input type="number" name="default_movie_runtime" value="{{ cfg.scoring.default_movie_runtime }}" class="form-input" style="width:80px;" min="1">
+        <span class="form-hint">Fallback when TMDB has no runtime data</span>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Rewatch saturation</label>
+        <input type="number" name="rewatch_saturation" value="{{ cfg.scoring.rewatch_saturation }}" class="form-input" style="width:80px;" min="1">
+        <span class="form-hint">Log scale caps at ~N rewatches (diminishing returns)</span>
+      </div>
+    </div>
+  </fieldset>
+
+  <!-- Recommendations -->
+  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+    <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Recommendations</legend>
+    <p class="section-intro">Controls for result quality and quantity.</p>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem;">
+      <div class="form-row">
+        <label class="form-label">Default results</label>
+        <input type="number" name="default_top_n" value="{{ cfg.default_top_n }}" class="form-input" style="width:80px;" min="1" max="20">
+        <span class="form-hint">Results per query (override with -n flag)</span>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Min TMDB votes</label>
+        <input type="number" name="min_vote_count" value="{{ cfg.min_vote_count }}" class="form-input" style="width:80px;" min="0">
+        <span class="form-hint">Filter out obscure titles with few ratings</span>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Recency half-life (days)</label>
+        <input type="number" name="recency_half_life_days" value="{{ cfg.recency_half_life_days }}" class="form-input" style="width:100px;" min="1">
+        <span class="form-hint">Days until a watch's recency score halves</span>
+      </div>
+    </div>
+  </fieldset>
+
+  <!-- Streaming -->
+  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+    <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Streaming</legend>
+    <p class="section-intro">Region and platform filtering for streaming availability.</p>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
+      <div class="form-row">
+        <label class="form-label">Watch region</label>
+        <input type="text" name="watch_region" value="{{ cfg.watch_region }}" class="form-input" style="width:80px;" maxlength="2">
+        <span class="form-hint">ISO 3166-1 country code (US, GB, IN, etc.)</span>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Platforms</label>
+        <input type="text" name="streaming_platforms" value="{{ cfg.streaming_platforms | join(', ') }}" class="form-input" placeholder="Netflix, Amazon Prime Video">
+        <span class="form-hint">Comma-separated. Must match TMDB provider names. Empty = show all.</span>
+      </div>
+    </div>
+  </fieldset>
+
+  <!-- Manual titles -->
+  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+    <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Manual Titles</legend>
+    <p class="section-intro">How manually added titles are scored. They have no real watch data, so synthetic values are used.</p>
+    {% set manual_timestamp_is_now = cfg.manual.timestamp == 'now' %}
+
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem;">
+      <div class="form-row">
+        <label class="form-label">Timestamp</label>
+        <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+          <select id="manual-timestamp-mode" name="manual_timestamp_mode" class="form-input" style="width:120px;">
+            <option value="now" {{ 'selected' if manual_timestamp_is_now }}>now</option>
+            <option value="fixed" {{ 'selected' if not manual_timestamp_is_now }}>fixed date</option>
+          </select>
+          <input
+            id="manual-timestamp-date"
+            type="date"
+            name="manual_timestamp_date"
+            value="{{ cfg.manual.timestamp if not manual_timestamp_is_now else '2022-01-01' }}"
+            class="form-input"
+            style="width:150px;"
+            {{ 'disabled' if manual_timestamp_is_now }}
+          >
+        </div>
+        <span class="form-hint">"now" = competes with recent watches. Fixed = scores lower.</span>
+      </div>
+      <div class="form-row">
+        <label class="form-label">TV duration (min)</label>
+        <input type="number" name="manual_tv_duration" value="{{ cfg.manual.tv_duration_minutes }}" class="form-input" style="width:80px;" min="1">
+        <span class="form-hint">Synthetic watch duration for TV titles</span>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Movie duration (min)</label>
+        <input type="number" name="manual_movie_duration" value="{{ cfg.manual.movie_duration_minutes }}" class="form-input" style="width:80px;" min="1">
+        <span class="form-hint">Synthetic watch duration for movies</span>
+      </div>
+    </div>
+  </fieldset>
+
+  <!-- Logging -->
+  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+    <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Logging</legend>
+
+    <div class="form-row">
+      <label class="form-label">Log level</label>
+      <select name="log_level" class="form-input" style="width:150px;">
+        {% for level in ['WARNING', 'INFO', 'DEBUG'] %}
+        <option value="{{ level }}" {{ 'selected' if cfg.log_level == level }}>{{ level }}</option>
+        {% endfor %}
+      </select>
+      <span class="form-hint">WARNING = errors only. INFO = request logs. DEBUG = full pipeline trace.</span>
+    </div>
+  </fieldset>
+
+  <div style="display:flex; gap:1rem; align-items:center;">
+    <button type="submit" class="btn-primary" style="padding:0.75rem 2rem;">Save &amp; Reload</button>
+    <span class="mono" style="font-size:0.58rem; color:var(--muted);">Writes to config.yaml and reloads the application context.</span>
+  </div>
+
+</form>
+
+<style>
+  fieldset { border-color: var(--border); }
+  .section-intro {
+    font-size: 0.82rem;
+    color: var(--muted);
+    margin: 0 0 1rem;
+    line-height: 1.6;
+  }
+  .form-row { display:flex; flex-direction:column; gap:0.25rem; }
+  .form-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.8rem;
+    color: var(--body);
+  }
+  .form-hint {
+    font-size: 0.68rem;
+    color: var(--muted);
+    line-height: 1.4;
+    margin-top: 1px;
+  }
+  .form-input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    padding: 0.45rem 0.65rem;
+    border-radius: 4px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .form-input:focus { border-color: var(--accent); }
+  select.form-input { cursor: pointer; }
+  select.form-input option { background: var(--surface); color: var(--text); }
+</style>
+
+<script>
+  // Live weight validation
+  (function() {
+    var fields = ['weight_completion', 'weight_rewatch', 'weight_recency'];
+    var warn = document.getElementById('weight-warn');
+    var manualMode = document.getElementById('manual-timestamp-mode');
+    var manualDate = document.getElementById('manual-timestamp-date');
+    fields.forEach(function(name) {
+      var el = document.querySelector('[name="' + name + '"]');
+      if (el) el.addEventListener('input', checkWeights);
+    });
+    function checkWeights() {
+      var sum = 0;
+      fields.forEach(function(name) {
+        sum += parseFloat(document.querySelector('[name="' + name + '"]').value) || 0;
+      });
+      warn.style.display = Math.abs(sum - 1.0) > 0.01 ? 'block' : 'none';
+    }
+    function syncManualTimestampInput() {
+      if (!manualMode || !manualDate) return;
+      var useFixedDate = manualMode.value === 'fixed';
+      manualDate.disabled = !useFixedDate;
+    }
+    if (manualMode) {
+      manualMode.addEventListener('change', syncManualTimestampInput);
+      syncManualTimestampInput();
+    }
+  })();
+</script>
+
+{% endblock %}

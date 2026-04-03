@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
 from recommender.models import Recommendation
 
@@ -88,3 +89,142 @@ def test_resolve_platform_path_allows_explicit_disable(monkeypatch):
 
     monkeypatch.setattr(config, '_paths', {'netflix': ''})
     assert config._resolve_platform_path('netflix', 'data/netflix/ViewingActivity.csv') is None
+
+
+def _settings_test_client(tmp_path, monkeypatch, raw_cfg: dict | None = None):
+    from recommender import web
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(raw_cfg or {}, sort_keys=False))
+
+    refresh_calls: list[tuple[bool, bool]] = []
+
+    def record_refresh(*, refresh_profile: bool, refresh_data: bool) -> None:
+        refresh_calls.append((refresh_profile, refresh_data))
+
+    monkeypatch.setattr(web, "_CONFIG_PATH", config_path)
+    monkeypatch.setattr(web, "_reload_app_config", lambda: None)
+    monkeypatch.setattr(web, "_refresh_derived_data", record_refresh)
+    web.app.config.update(TESTING=True)
+    return web.app.test_client(), config_path, refresh_calls, web
+
+
+def _settings_form_data(web, raw_cfg: dict | None = None, **overrides):
+    cfg = web._resolve_settings_config(raw_cfg or {})
+    data = {
+        "provider": cfg["provider"],
+        "anthropic_fast": cfg["models"]["anthropic"]["fast"],
+        "anthropic_reason": cfg["models"]["anthropic"]["reason"],
+        "gemini_fast": cfg["models"]["gemini"]["fast"],
+        "gemini_reason": cfg["models"]["gemini"]["reason"],
+        "llm_timeout_fast": str(cfg["llm"]["timeout_fast"]),
+        "llm_timeout_reason": str(cfg["llm"]["timeout_reason"]),
+        "llm_timeout_profile_batch": str(cfg["llm"]["timeout_profile_batch"]),
+        "llm_timeout_profile_merge": str(cfg["llm"]["timeout_profile_merge"]),
+        "llm_tokens_fast": str(cfg["llm"]["tokens_fast"]),
+        "llm_tokens_intent": str(cfg["llm"]["tokens_intent"]),
+        "llm_tokens_ranking": str(cfg["llm"]["tokens_ranking"]),
+        "llm_tokens_suggestions": str(cfg["llm"]["tokens_suggestions"]),
+        "llm_tokens_profile_batch": str(cfg["llm"]["tokens_profile_batch"]),
+        "llm_tokens_profile_merge": str(cfg["llm"]["tokens_profile_merge"]),
+        "llm_tokens_abandoned": str(cfg["llm"]["tokens_abandoned"]),
+        "llm_profile_batch_size": str(cfg["llm"]["profile_batch_size"]),
+        "llm_rate_limit_wait": str(cfg["llm"]["rate_limit_wait"]),
+        "weight_completion": str(cfg["scoring"]["weight_completion"]),
+        "weight_rewatch": str(cfg["scoring"]["weight_rewatch"]),
+        "weight_recency": str(cfg["scoring"]["weight_recency"]),
+        "default_tv_runtime": str(cfg["scoring"]["default_tv_runtime"]),
+        "default_movie_runtime": str(cfg["scoring"]["default_movie_runtime"]),
+        "rewatch_saturation": str(cfg["scoring"]["rewatch_saturation"]),
+        "default_top_n": str(cfg["default_top_n"]),
+        "min_vote_count": str(cfg["min_vote_count"]),
+        "recency_half_life_days": str(cfg["recency_half_life_days"]),
+        "watch_region": cfg["watch_region"],
+        "streaming_platforms": ", ".join(cfg["streaming_platforms"]),
+        "manual_timestamp_mode": "now" if cfg["manual"]["timestamp"] == "now" else "fixed",
+        "manual_timestamp_date": "2022-01-01" if cfg["manual"]["timestamp"] == "now" else cfg["manual"]["timestamp"],
+        "manual_tv_duration": str(cfg["manual"]["tv_duration_minutes"]),
+        "manual_movie_duration": str(cfg["manual"]["movie_duration_minutes"]),
+        "log_level": cfg["log_level"],
+    }
+    data.update(overrides)
+    return data
+
+
+def test_settings_page_populates_runtime_defaults_and_accepts_blank_numeric_fields(tmp_path, monkeypatch):
+    raw_cfg = {"provider": "gemini"}
+    client, config_path, refresh_calls, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+
+    response = client.get("/settings")
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'name="llm_timeout_fast" value="30"' in body
+    assert 'name="default_tv_runtime" value="45"' in body
+    assert 'name="default_top_n" value="3"' in body
+    assert 'name="recency_half_life_days" value="90"' in body
+
+    post_response = client.post(
+        "/settings",
+        data=_settings_form_data(
+            web,
+            raw_cfg,
+            llm_timeout_fast="",
+            weight_completion="",
+            default_tv_runtime="",
+            default_top_n="",
+            recency_half_life_days="",
+            manual_tv_duration="",
+        ),
+    )
+
+    assert post_response.status_code == 302
+    saved_cfg = yaml.safe_load(config_path.read_text())
+    assert saved_cfg["llm"]["timeout_fast"] == 30
+    assert saved_cfg["scoring"]["weight_completion"] == 0.5
+    assert saved_cfg["scoring"]["default_tv_runtime"] == 45
+    assert saved_cfg["default_top_n"] == 3
+    assert saved_cfg["recency_half_life_days"] == 90
+    assert saved_cfg["manual"]["tv_duration_minutes"] == 45
+    assert refresh_calls == []
+
+
+def test_settings_save_preserves_custom_manual_timestamp(tmp_path, monkeypatch):
+    raw_cfg = {"manual": {"timestamp": "2024-07-01"}}
+    client, config_path, refresh_calls, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+
+    response = client.get("/settings")
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'name="manual_timestamp_date"' in body
+    assert 'value="2024-07-01"' in body
+
+    post_response = client.post(
+        "/settings",
+        data=_settings_form_data(web, raw_cfg, log_level="DEBUG"),
+    )
+
+    assert post_response.status_code == 302
+    saved_cfg = yaml.safe_load(config_path.read_text())
+    assert saved_cfg["manual"]["timestamp"] == "2024-07-01"
+    assert refresh_calls == []
+
+
+def test_settings_save_rebuilds_profile_after_setup_only_change(tmp_path, monkeypatch):
+    raw_cfg = {"provider": "anthropic"}
+    client, _, refresh_calls, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+
+    post_response = client.post(
+        "/settings",
+        data=_settings_form_data(
+            web,
+            raw_cfg,
+            weight_completion="0.6",
+            weight_rewatch="0.2",
+            weight_recency="0.2",
+        ),
+    )
+
+    assert post_response.status_code == 302
+    assert refresh_calls == [(True, False)]
