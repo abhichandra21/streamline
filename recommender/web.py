@@ -269,13 +269,17 @@ def recommend() -> str:
         if meta:
             tmdb_type = "tv" if r.content_type == "tv" else "movie"
             tmdb_url = f"https://www.themoviedb.org/{tmdb_type}/{meta.tmdb_id}"
-            # Movies have imdb_id in the TMDB cache
+            # Try to get direct IMDB link from cached TMDB detail
             cache_path = Path(config.CACHE_DIR) / r.content_type / f"{meta.tmdb_id}.json"
             if cache_path.exists():
                 raw = json.loads(cache_path.read_text())
                 imdb_id = raw.get("imdb_id")
                 if imdb_id:
                     imdb_url = f"https://www.imdb.com/title/{imdb_id}/"
+            # Fallback: IMDB search by title
+            if not imdb_url:
+                from urllib.parse import quote
+                imdb_url = f"https://www.imdb.com/find/?q={quote(r.title)}"
         items.append({
             "title": r.title,
             "content_type": r.content_type,
