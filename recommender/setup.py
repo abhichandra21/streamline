@@ -214,7 +214,7 @@ if __name__ == "__main__":
                         help="Re-fetch TMDB metadata, watch index, and enrichments")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
-    parser.add_argument("--provider", choices=["anthropic", "gemini"],
+    parser.add_argument("--provider", choices=["anthropic", "gemini", "openai"],
                         help="LLM provider (default: from config/env)")
     args = parser.parse_args()
     from recommender.log import setup_logging

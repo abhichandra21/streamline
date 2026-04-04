@@ -153,7 +153,7 @@ def main() -> None:
     parser.add_argument("--type", choices=["tv", "movie"], default="tv",
                         help="Content type for --add (default: tv)")
     parser.add_argument("--history", action="store_true", help="Show recent query history")
-    parser.add_argument("--provider", choices=["anthropic", "gemini"],
+    parser.add_argument("--provider", choices=["anthropic", "gemini", "openai"],
                         help="LLM provider (default: from config/env)")
     args = parser.parse_args()
 
