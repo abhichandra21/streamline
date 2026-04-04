@@ -7,9 +7,16 @@ models:
   anthropic:
     fast: claude-haiku-4-5-20251001
     reason: claude-sonnet-4-6
+    api_key_env: ANTHROPIC_API_KEY
   gemini:
     fast: gemini-2.5-flash
     reason: gemini-2.5-pro
+    api_key_env: GEMINI_API_KEY
+  openai:
+    fast: gpt-4.1-mini
+    reason: gpt-4.1
+    api_key_env: OPENAI_API_KEY
+    base_url:                           # empty = api.openai.com, or custom endpoint
 llm:
   timeout_fast: 30
   timeout_reason: 60

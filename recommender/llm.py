@@ -1,11 +1,12 @@
 """LLM provider abstraction.
 
-Supports Anthropic (Claude) and Google (Gemini) with a unified interface.
-Call sites use roles ("fast" or "reason") instead of model names.
-Model assignments are configured in config.yaml per provider.
+Supports Anthropic (Claude), Google (Gemini), and any OpenAI-compatible API
+with a unified interface. Call sites use roles ("fast" or "reason") instead
+of model names. Model assignments are configured in config.yaml per provider.
 
-Gemini uses the google-genai SDK. API keys starting with 'AQ.' are
-automatically routed to Vertex AI; 'AIza' keys go to the Gemini Developer API.
+The OpenAI provider works with any service implementing the OpenAI chat
+completions API: OpenAI, Ollama, Groq, Together, LM Studio, vLLM, etc.
+Configure base_url and api_key_env in config.yaml models.openai section.
 """
 
 import logging
@@ -21,6 +22,9 @@ _PRICING: dict[str, dict[str, float]] = {
     "claude-sonnet-4-6":          {"input": 3.00, "output": 15.00},
     "gemini-2.5-flash":           {"input": 0.15, "output": 0.60, "thinking": 0.0375},
     "gemini-2.5-pro":             {"input": 1.25, "output": 10.00, "thinking": 0.625},
+    "gpt-4.1":                    {"input": 2.00, "output": 8.00},
+    "gpt-4.1-mini":               {"input": 0.40, "output": 1.60},
+    "gpt-4.1-nano":               {"input": 0.10, "output": 0.40},
 }
 
 
@@ -211,6 +215,64 @@ class GeminiClient(LLMClient):
         raise RuntimeError(f"Gemini response did not include text content (model={model})")
 
 
+class OpenAIClient(LLMClient):
+    """OpenAI-compatible provider. Works with OpenAI, Ollama, Groq, Together, LM Studio, vLLM, etc."""
+
+    provider = "openai"
+
+    def __init__(self, api_key: str, models: dict[str, str], base_url: str | None = None):
+        from openai import OpenAI
+        kwargs: dict = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self._client = OpenAI(**kwargs)
+        self.models = models
+        self.usage = UsageStats()
+        endpoint = base_url or "api.openai.com"
+        log.info("Using OpenAI-compatible provider (endpoint=%s, fast=%s, reason=%s)",
+                 endpoint, models.get("fast"), models.get("reason"))
+
+    def generate(self, prompt: str, role: str = "reason",
+                 max_tokens: int = 1000, timeout: float = 30.0) -> str:
+        model = self.models.get(role, self.models.get("reason", "gpt-4.1-mini"))
+
+        for attempt in range(3):
+            try:
+                response = self._client.chat.completions.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    timeout=timeout,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                break
+            except Exception as exc:
+                err = str(exc)
+                if ("429" in err or "rate" in err.lower() or "timeout" in err.lower()) and attempt < 2:
+                    wait = 30 * (attempt + 1)
+                    log.warning("OpenAI rate limited/timeout, waiting %ds (attempt %d/3)...", wait, attempt + 1)
+                    time.sleep(wait)
+                    continue
+                raise
+
+        choice = response.choices[0]
+        text = choice.message.content or ""
+
+        # Track usage
+        if response.usage:
+            self.usage.record(
+                model=model,
+                input_t=response.usage.prompt_tokens or 0,
+                output_t=response.usage.completion_tokens or 0,
+            )
+
+        self.was_truncated = choice.finish_reason == "length"
+        if self.was_truncated:
+            log.warning("OpenAI response truncated (max_tokens=%d, model=%s). "
+                        "Increase the token limit in config.yaml.", max_tokens, model)
+
+        return text
+
+
 def create_client(provider: str | None = None) -> LLMClient:
     """Create an LLM client from config.
 
@@ -219,19 +281,27 @@ def create_client(provider: str | None = None) -> LLMClient:
     """
     import config
 
+    import os
+
     provider = provider or config.LLM_PROVIDER
     models = config.LLM_MODELS.get(provider, {})
 
     if not models:
         raise ValueError(f"No model config for provider '{provider}' in config.yaml")
 
+    # All providers read their API key from a configurable env var
+    default_key_envs = {"anthropic": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
+    api_key_env = models.get("api_key_env", default_key_envs.get(provider, f"{provider.upper()}_API_KEY"))
+    api_key = os.environ.get(api_key_env, "")
+    if not api_key:
+        raise RuntimeError(f"{api_key_env} not set. Export it or add to .env.")
+
     if provider == "gemini":
-        if not config.GEMINI_API_KEY:
-            raise RuntimeError("GEMINI_API_KEY not set. Export it or add to .env.")
-        return GeminiClient(api_key=config.GEMINI_API_KEY, models=models)
+        return GeminiClient(api_key=api_key, models=models)
     elif provider == "anthropic":
-        if not config.ANTHROPIC_API_KEY:
-            raise RuntimeError("ANTHROPIC_API_KEY not set. Export it or add to .env.")
-        return AnthropicClient(api_key=config.ANTHROPIC_API_KEY, models=models)
+        return AnthropicClient(api_key=api_key, models=models)
+    elif provider == "openai":
+        base_url = models.get("base_url") or None
+        return OpenAIClient(api_key=api_key, models=models, base_url=base_url)
     else:
-        raise ValueError(f"Unknown LLM provider: {provider}. Use 'anthropic' or 'gemini'.")
+        raise ValueError(f"Unknown LLM provider: {provider}. Use 'anthropic', 'gemini', or 'openai'.")

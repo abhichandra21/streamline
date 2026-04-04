@@ -339,10 +339,18 @@ _SETTINGS_DEFAULTS = {
         "anthropic": {
             "fast": "claude-haiku-4-5-20251001",
             "reason": "claude-sonnet-4-6",
+            "api_key_env": "ANTHROPIC_API_KEY",
         },
         "gemini": {
             "fast": "gemini-2.5-flash",
             "reason": "gemini-2.5-flash",
+            "api_key_env": "GEMINI_API_KEY",
+        },
+        "openai": {
+            "fast": "gpt-4.1-mini",
+            "reason": "gpt-4.1",
+            "api_key_env": "OPENAI_API_KEY",
+            "base_url": None,
         },
     },
     "llm": {
@@ -608,17 +616,20 @@ def settings_save() -> str:
     except ValueError:
         return _render_settings_page(cfg=current_cfg, saved=False, error="Invalid scoring weights.")
 
-    # Provider & models
+    # Provider & models — all providers treated the same
     cfg["provider"] = form.get("provider", "anthropic")
     cfg.setdefault("models", {})
-    cfg["models"]["anthropic"] = {
-        "fast": form.get("anthropic_fast", "").strip(),
-        "reason": form.get("anthropic_reason", "").strip(),
-    }
-    cfg["models"]["gemini"] = {
-        "fast": form.get("gemini_fast", "").strip(),
-        "reason": form.get("gemini_reason", "").strip(),
-    }
+    default_key_envs = {"anthropic": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
+    for p in ["anthropic", "gemini", "openai"]:
+        existing = cfg["models"].get(p, {})
+        cfg["models"][p] = {
+            "fast": (form.get(f"{p}_fast") or existing.get("fast", "")).strip(),
+            "reason": (form.get(f"{p}_reason") or existing.get("reason", "")).strip(),
+            "api_key_env": (form.get(f"{p}_api_key_env") or existing.get("api_key_env") or default_key_envs.get(p, "")).strip(),
+        }
+    # base_url only relevant for openai provider
+    base_url = (form.get("openai_base_url") or "").strip()
+    cfg["models"]["openai"]["base_url"] = base_url if base_url else None
 
     # LLM limits
     llm = cfg.setdefault("llm", {})
