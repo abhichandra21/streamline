@@ -43,6 +43,34 @@ wait_for_port() {
     return 1
 }
 
+llm_api_key_env() {
+    python3 - "$SCRIPT_DIR" <<'PY'
+import sys
+import os
+from pathlib import Path
+
+import yaml
+
+script_dir = Path(sys.argv[1])
+cfg_path = script_dir / "config.yaml"
+default_key_envs = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
+
+cfg = {}
+if cfg_path.exists():
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f) or {}
+
+provider = str(os.environ.get("LLM_PROVIDER") or cfg.get("provider", "anthropic")).strip() or "anthropic"
+models = cfg.get("models", {}).get(provider, {})
+configured_env = str(models.get("api_key_env") or "").strip()
+print(configured_env or default_key_envs.get(provider, f"{provider.upper()}_API_KEY"))
+PY
+}
+
 start() {
     if is_running; then
         echo "Already running (PID $(cat "$PIDFILE")). http://$HOST:$PORT"
@@ -56,8 +84,14 @@ start() {
     fi
 
     # Verify API keys
-    if [ -z "${ANTHROPIC_API_KEY:-}" ] || [ -z "${TMDB_API_KEY:-}" ]; then
-        echo "Error: ANTHROPIC_API_KEY and TMDB_API_KEY must be set in .env or environment." >&2
+    local llm_key_env
+    llm_key_env="$(llm_api_key_env)"
+    if [ -z "${TMDB_API_KEY:-}" ]; then
+        echo "Error: TMDB_API_KEY must be set in .env or environment." >&2
+        exit 1
+    fi
+    if [ -z "${!llm_key_env:-}" ]; then
+        echo "Error: $llm_key_env must be set in .env or environment." >&2
         exit 1
     fi
 

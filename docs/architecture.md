@@ -197,12 +197,15 @@ recommender/cache/
 
 ## Configuration
 
-Split across two files:
+Secrets come from the environment. `config.yaml` holds tracked application settings.
 
-**`.env`** — secrets only (gitignored):
+**Environment variables**:
 - `TMDB_API_KEY` — TMDB v3 API key
 - `ANTHROPIC_API_KEY` — Anthropic API key
 - `GEMINI_API_KEY` — Google Gemini API key (AIza* for AI Studio, AQ.* for Vertex AI)
+- `OPENAI_API_KEY` — OpenAI-compatible API key
+
+**`.env`** — optional local convenience for setting those variables (gitignored)
 
 **`config.yaml`** — all settings, organized in sections:
 
@@ -216,7 +219,9 @@ Split across two files:
 | *(top-level)* | `watch_region`, `streaming_platforms` | Streaming availability |
 | *(top-level)* | `platform_paths.*`, `manual_*_path`, `overrides_path` | Data file locations |
 
-`config.py` is a thin loader that reads from both. All values have sensible defaults — a minimal `config.yaml` with just `provider:` works.
+Provider API keys use the standard environment variable names by default. Add `models.<provider>.api_key_env` only when a deployment needs a non-standard variable name.
+
+`config.py` is a thin loader that reads settings from `config.yaml` and secrets from the environment. All values have sensible defaults — a minimal `config.yaml` with just `provider:` works.
 
 ### Taste Profile Batch Caching
 

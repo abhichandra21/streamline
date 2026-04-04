@@ -6,10 +6,12 @@ of model names. Model assignments are configured in config.yaml per provider.
 
 The OpenAI provider works with any service implementing the OpenAI chat
 completions API: OpenAI, Ollama, Groq, Together, LM Studio, vLLM, etc.
-Configure base_url and api_key_env in config.yaml models.openai section.
+Configure base_url in config.yaml models.openai. api_key_env is optional and
+only needed when the deployment uses a non-standard environment variable name.
 """
 
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -291,17 +293,13 @@ def create_client(provider: str | None = None) -> LLMClient:
     """
     import config
 
-    import os
-
     provider = provider or config.LLM_PROVIDER
     models = config.LLM_MODELS.get(provider, {})
 
     if not models:
         raise ValueError(f"No model config for provider '{provider}' in config.yaml")
 
-    # All providers read their API key from a configurable env var
-    default_key_envs = {"anthropic": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
-    api_key_env = models.get("api_key_env", default_key_envs.get(provider, f"{provider.upper()}_API_KEY"))
+    api_key_env = config.get_llm_api_key_env(provider)
     api_key = os.environ.get(api_key_env, "")
     if not api_key:
         raise RuntimeError(f"{api_key_env} not set. Export it or add to .env.")

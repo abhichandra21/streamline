@@ -32,8 +32,8 @@ python3 -m pytest tests/test_query_engine.py -v
 ./recommend-web restart
 ```
 
-Required env vars in `.env`: `TMDB_API_KEY`, plus `ANTHROPIC_API_KEY` and/or `GEMINI_API_KEY`.
-Settings in `config.yaml`: provider, model assignments, tunables, data paths.
+Required environment variables: `TMDB_API_KEY`, plus `ANTHROPIC_API_KEY` and/or `GEMINI_API_KEY` or `OPENAI_API_KEY`.
+`.env` is optional local convenience. Settings in `config.yaml`: provider, model assignments, tunables, data paths.
 
 ## Architecture
 
@@ -68,7 +68,8 @@ All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ index.json), `provide
 
 ## Configuration
 
-- **`.env`** — secrets: `TMDB_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
+- **Environment variables** — secrets: `TMDB_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`
+- **`.env`** — optional local convenience for setting those variables
 - **`config.yaml`** — all settings in sections:
   - `provider`, `models.*` — LLM provider and model assignments
   - `llm.*` — timeouts, token limits, batch sizes, rate limit wait
@@ -76,4 +77,5 @@ All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ index.json), `provide
   - `manual.*` — synthetic timestamp and durations for manual list titles
   - Top-level: `default_top_n`, `min_vote_count`, `recency_half_life_days`, `watch_region`, `streaming_platforms`
   - Data paths: `platform_paths.*`, `overrides_path`
-- **`config.py`** — thin loader, reads from both. All values have sensible defaults.
+- `models.<provider>.api_key_env` is optional. Use it only for non-standard environment variable names.
+- **`config.py`** — thin loader, reads settings from `config.yaml` and secrets from the environment. All values have sensible defaults.
