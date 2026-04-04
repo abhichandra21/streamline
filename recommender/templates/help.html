@@ -99,9 +99,11 @@
     <div class="help-body">
       <p>Settings live in two places:</p>
       <ul>
-        <li><strong>.env</strong> — API keys only (TMDB, Anthropic, Gemini). Gitignored.</li>
+        <li><strong>Environment variables</strong> — API keys only (<code>TMDB_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, <code>GEMINI_API_KEY</code>, <code>OPENAI_API_KEY</code>).</li>
+        <li><strong>.env</strong> — optional local convenience for setting those variables. Gitignored.</li>
         <li><strong>config.yaml</strong> — everything else. Editable from the <a href="/settings">Settings</a> page or by hand.</li>
       </ul>
+      <p>Provider API keys use the standard variable names by default. Only set <span class="mono">api_key_env</span> when you need a custom variable name.</p>
       <p>The <a href="/settings">Settings</a> page lets you change provider, models, timeouts, scoring weights, and more — changes take effect immediately without a restart.</p>
     </div>
   </details>

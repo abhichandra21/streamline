@@ -1,3 +1,6 @@
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -46,6 +49,28 @@ def test_main_exits_without_anthropic_key(monkeypatch):
         assert exc_info.value.code == 1
     finally:
         config.ANTHROPIC_API_KEY = original
+
+
+def test_create_client_reads_configured_api_key_name_only_from_environment(monkeypatch):
+    import config
+    from recommender.llm import create_client
+
+    original_models = config.LLM_MODELS
+    monkeypatch.setattr(
+        config,
+        "LLM_MODELS",
+        {
+            **original_models,
+            "anthropic": {
+                **original_models["anthropic"],
+                "api_key_env": "WATCH_REGION",
+            },
+        },
+    )
+    monkeypatch.delenv("WATCH_REGION", raising=False)
+
+    with pytest.raises(RuntimeError, match="WATCH_REGION not set"):
+        create_client("anthropic")
 
 
 def test_load_context_exits_if_no_watch_index(tmp_path, monkeypatch):
@@ -115,8 +140,14 @@ def _settings_form_data(web, raw_cfg: dict | None = None, **overrides):
         "provider": cfg["provider"],
         "anthropic_fast": cfg["models"]["anthropic"]["fast"],
         "anthropic_reason": cfg["models"]["anthropic"]["reason"],
+        "anthropic_api_key_env": cfg["models"]["anthropic"].get("api_key_env", ""),
         "gemini_fast": cfg["models"]["gemini"]["fast"],
         "gemini_reason": cfg["models"]["gemini"]["reason"],
+        "gemini_api_key_env": cfg["models"]["gemini"].get("api_key_env", ""),
+        "openai_fast": cfg["models"]["openai"]["fast"],
+        "openai_reason": cfg["models"]["openai"]["reason"],
+        "openai_api_key_env": cfg["models"]["openai"].get("api_key_env", ""),
+        "openai_base_url": cfg["models"]["openai"].get("base_url") or "",
         "llm_timeout_fast": str(cfg["llm"]["timeout_fast"]),
         "llm_timeout_reason": str(cfg["llm"]["timeout_reason"]),
         "llm_timeout_profile_batch": str(cfg["llm"]["timeout_profile_batch"]),
@@ -228,3 +259,126 @@ def test_settings_save_rebuilds_profile_after_setup_only_change(tmp_path, monkey
 
     assert post_response.status_code == 302
     assert refresh_calls == [(True, False)]
+
+
+def test_settings_page_shows_default_api_key_env_as_placeholder(tmp_path, monkeypatch):
+    raw_cfg = {"provider": "gemini"}
+    client, _, _, _ = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+
+    response = client.get("/settings")
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'name="gemini_api_key_env"' in body
+    assert 'placeholder="GEMINI_API_KEY"' in body
+    assert 'value="GEMINI_API_KEY"' not in body
+
+
+def test_settings_page_renders_provider_panels_for_client_side_switching(tmp_path, monkeypatch):
+    raw_cfg = {"provider": "anthropic"}
+    client, _, _, _ = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+
+    response = client.get("/settings")
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'data-provider-panel="anthropic"' in body
+    assert 'data-provider-panel="gemini"' in body
+    assert 'data-provider-panel="openai"' in body
+
+
+def test_settings_save_omits_default_api_key_env_names(tmp_path, monkeypatch):
+    raw_cfg = {
+        "provider": "anthropic",
+        "models": {
+            "anthropic": {"api_key_env": "ANTHROPIC_API_KEY"},
+            "gemini": {"api_key_env": "GEMINI_API_KEY"},
+            "openai": {"api_key_env": "OPENAI_API_KEY"},
+        },
+    }
+    client, config_path, _, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+
+    post_response = client.post("/settings", data=_settings_form_data(web, raw_cfg))
+
+    assert post_response.status_code == 302
+    saved_cfg = yaml.safe_load(config_path.read_text())
+    assert "api_key_env" not in saved_cfg["models"]["anthropic"]
+    assert "api_key_env" not in saved_cfg["models"]["gemini"]
+    assert "api_key_env" not in saved_cfg["models"]["openai"]
+
+
+def test_settings_save_preserves_custom_api_key_env_override(tmp_path, monkeypatch):
+    raw_cfg = {
+        "provider": "openai",
+        "models": {
+            "openai": {
+                "fast": "gpt-4.1-mini",
+                "reason": "gpt-4.1",
+                "api_key_env": "STREAMLINE_OPENAI_KEY",
+            },
+        },
+    }
+    client, config_path, _, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+
+    post_response = client.post("/settings", data=_settings_form_data(web, raw_cfg))
+
+    assert post_response.status_code == 302
+    saved_cfg = yaml.safe_load(config_path.read_text())
+    assert saved_cfg["models"]["openai"]["api_key_env"] == "STREAMLINE_OPENAI_KEY"
+
+
+def test_settings_save_clears_custom_api_key_env_override(tmp_path, monkeypatch):
+    raw_cfg = {
+        "provider": "openai",
+        "models": {
+            "openai": {
+                "fast": "gpt-4.1-mini",
+                "reason": "gpt-4.1",
+                "api_key_env": "STREAMLINE_OPENAI_KEY",
+            },
+        },
+    }
+    client, config_path, _, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+
+    post_response = client.post(
+        "/settings",
+        data=_settings_form_data(web, raw_cfg, openai_api_key_env=""),
+    )
+
+    assert post_response.status_code == 302
+    saved_cfg = yaml.safe_load(config_path.read_text())
+    assert "api_key_env" not in saved_cfg["models"]["openai"]
+
+
+def test_recommend_web_uses_runtime_provider_for_api_key_check(tmp_path, monkeypatch):
+    repo_root = Path(__file__).resolve().parent.parent
+    script_path = tmp_path / "recommend-web"
+    shutil.copy(repo_root / "recommend-web", script_path)
+
+    activate_path = tmp_path / "venv" / "bin"
+    activate_path.mkdir(parents=True)
+    (activate_path / "activate").write_text("# recommend-web test activation\n")
+
+    cfg = yaml.safe_load((repo_root / "config.yaml").read_text())
+    cfg["provider"] = "openai"
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+
+    env = os.environ.copy()
+    env["STREAMLINE_PORT"] = "5157"
+    env["TMDB_API_KEY"] = "tmdb"
+    env["ANTHROPIC_API_KEY"] = "anthropic"
+    env["LLM_PROVIDER"] = "anthropic"
+    env.pop("OPENAI_API_KEY", None)
+
+    result = subprocess.run(
+        ["bash", str(script_path), "start"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "taste profile not found" in result.stderr
+    assert "OPENAI_API_KEY" not in result.stderr

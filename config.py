@@ -1,6 +1,6 @@
 """Configuration loader.
 
-Reads secrets from environment (.env) and settings from config.yaml.
+Reads non-secret settings from config.yaml and secrets from the environment.
 All module-level attributes are available as before for backward compat.
 """
 
@@ -22,18 +22,39 @@ else:
 # ── Logging ──
 LOG_LEVEL = os.environ.get("LOG_LEVEL", _cfg.get("log_level", "WARNING")).upper()
 
-# ── Secrets (from .env / environment only) ──
+# ── Secrets (from environment only; .env is an optional launcher convenience) ──
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+
+LLM_DEFAULT_API_KEY_ENVS: dict[str, str] = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
 
 # ── LLM settings ──
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", _cfg.get("provider", "anthropic"))
 LLM_MODELS: dict[str, dict[str, str]] = _cfg.get("models", {
     "anthropic": {"fast": "claude-haiku-4-5-20251001", "reason": "claude-sonnet-4-6"},
     "gemini": {"fast": "gemini-2.5-flash", "reason": "gemini-2.5-flash"},
-    "openai": {"fast": "gpt-4.1-mini", "reason": "gpt-4.1"},
+    "openai": {"fast": "gpt-4.1-mini", "reason": "gpt-4.1", "base_url": None},
 })
+
+
+def get_llm_api_key_env(provider: str) -> str:
+    """Resolve the environment variable name for a provider API key.
+
+    The common case uses provider-specific defaults. config.yaml only needs an
+    api_key_env entry when the deployment uses a non-standard variable name.
+    """
+    configured_models = LLM_MODELS.get(provider, {})
+    configured_env = str(configured_models.get("api_key_env") or "").strip()
+    if configured_env:
+        return configured_env
+
+    return LLM_DEFAULT_API_KEY_ENVS.get(provider, f"{provider.upper()}_API_KEY")
 
 # ── LLM call settings ──
 _llm_cfg = _cfg.get("llm", {})

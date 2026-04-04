@@ -333,23 +333,21 @@ def help_page() -> str:
 
 
 _CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
+_DEFAULT_LLM_API_KEY_ENVS = dict(config.LLM_DEFAULT_API_KEY_ENVS)
 _SETTINGS_DEFAULTS = {
     "provider": "anthropic",
     "models": {
         "anthropic": {
             "fast": "claude-haiku-4-5-20251001",
             "reason": "claude-sonnet-4-6",
-            "api_key_env": "ANTHROPIC_API_KEY",
         },
         "gemini": {
             "fast": "gemini-2.5-flash",
             "reason": "gemini-2.5-flash",
-            "api_key_env": "GEMINI_API_KEY",
         },
         "openai": {
             "fast": "gpt-4.1-mini",
             "reason": "gpt-4.1",
-            "api_key_env": "OPENAI_API_KEY",
             "base_url": None,
         },
     },
@@ -419,7 +417,7 @@ def _save_config_yaml(cfg: dict) -> None:
     """Write config dict back to config.yaml, preserving comments where possible."""
     with open(_CONFIG_PATH, "w") as f:
         f.write("# Streamline configuration\n")
-        f.write("# Secrets (API keys) go in .env, everything else goes here.\n\n")
+        f.write("# Set API keys in the environment. .env is optional local convenience.\n\n")
         yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
@@ -619,14 +617,20 @@ def settings_save() -> str:
     # Provider & models — all providers treated the same
     cfg["provider"] = form.get("provider", "anthropic")
     cfg.setdefault("models", {})
-    default_key_envs = {"anthropic": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
     for p in ["anthropic", "gemini", "openai"]:
         existing = cfg["models"].get(p, {})
-        cfg["models"][p] = {
+        provider_cfg = {
             "fast": (form.get(f"{p}_fast") or existing.get("fast", "")).strip(),
             "reason": (form.get(f"{p}_reason") or existing.get("reason", "")).strip(),
-            "api_key_env": (form.get(f"{p}_api_key_env") or existing.get("api_key_env") or default_key_envs.get(p, "")).strip(),
         }
+        submitted_api_key_env = form.get(f"{p}_api_key_env")
+        if submitted_api_key_env is None:
+            api_key_env = str(existing.get("api_key_env") or "").strip()
+        else:
+            api_key_env = submitted_api_key_env.strip()
+        if api_key_env and api_key_env != _DEFAULT_LLM_API_KEY_ENVS.get(p, ""):
+            provider_cfg["api_key_env"] = api_key_env
+        cfg["models"][p] = provider_cfg
     # base_url only relevant for openai provider
     base_url = (form.get("openai_base_url") or "").strip()
     cfg["models"]["openai"]["base_url"] = base_url if base_url else None

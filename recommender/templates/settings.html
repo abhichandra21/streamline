@@ -39,48 +39,39 @@
       <span class="form-hint">Active provider for all LLM calls. Override per-query with --provider.</span>
     </div>
 
-    <!-- Hidden inputs preserve non-active provider configs -->
-    {% for p in ['anthropic', 'gemini', 'openai'] %}
-    {% if p != cfg.provider %}
-    <input type="hidden" name="{{ p }}_fast" value="{{ cfg.models[p].fast }}">
-    <input type="hidden" name="{{ p }}_reason" value="{{ cfg.models[p].reason }}">
-    <input type="hidden" name="{{ p }}_api_key_env" value="{{ cfg.models[p].api_key_env or '' }}">
-    {% if p == 'openai' %}
-    <input type="hidden" name="openai_base_url" value="{{ cfg.models.openai.base_url or '' }}">
-    {% endif %}
-    {% endif %}
-    {% endfor %}
-
-    <!-- Active provider models -->
-    {% set p = cfg.provider %}
+    {% set default_key_envs = {'anthropic': 'ANTHROPIC_API_KEY', 'gemini': 'GEMINI_API_KEY', 'openai': 'OPENAI_API_KEY'} %}
     <div style="margin-top:1rem;">
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
-        <div class="form-row">
-          <label class="form-label">Fast model</label>
-          <input type="text" name="{{ p }}_fast" value="{{ cfg.models[p].fast }}" class="form-input">
-          <span class="form-hint">Enrichment, simple tasks (high volume, cheaper)</span>
+      {% for p in ['anthropic', 'gemini', 'openai'] %}
+      <div data-provider-panel="{{ p }}" style="display:{{ 'block' if p == cfg.provider else 'none' }};">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
+          <div class="form-row">
+            <label class="form-label">Fast model</label>
+            <input type="text" name="{{ p }}_fast" value="{{ cfg.models[p].fast }}" class="form-input">
+            <span class="form-hint">Enrichment, simple tasks (high volume, cheaper)</span>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Reason model</label>
+            <input type="text" name="{{ p }}_reason" value="{{ cfg.models[p].reason }}" class="form-input">
+            <span class="form-hint">Intent parsing, ranking, taste profile (complex reasoning)</span>
+          </div>
         </div>
-        <div class="form-row">
-          <label class="form-label">Reason model</label>
-          <input type="text" name="{{ p }}_reason" value="{{ cfg.models[p].reason }}" class="form-input">
-          <span class="form-hint">Intent parsing, ranking, taste profile (complex reasoning)</span>
-        </div>
-      </div>
 
-      <div style="display:grid; grid-template-columns:{{ '1fr 1fr' if p == 'openai' else '1fr' }}; gap:1rem; margin-top:0.75rem;">
-        <div class="form-row">
-          <label class="form-label">API key env var</label>
-          <input type="text" name="{{ p }}_api_key_env" value="{{ cfg.models[p].api_key_env or '' }}" class="form-input" style="max-width:280px;">
-          <span class="form-hint">Name of the env var holding the key (not the key itself)</span>
+        <div style="display:grid; grid-template-columns:{{ '1fr 1fr' if p == 'openai' else '1fr' }}; gap:1rem; margin-top:0.75rem;">
+          <div class="form-row">
+            <label class="form-label">API key env var override</label>
+            <input type="text" name="{{ p }}_api_key_env" value="{{ cfg.models[p].api_key_env or '' }}" class="form-input" style="max-width:280px;" placeholder="{{ default_key_envs[p] }}">
+            <span class="form-hint">Optional. Leave empty to use {{ default_key_envs[p] }} from the environment.</span>
+          </div>
+          {% if p == 'openai' %}
+          <div class="form-row">
+            <label class="form-label">Base URL</label>
+            <input type="text" name="openai_base_url" value="{{ cfg.models.openai.base_url or '' }}" class="form-input" placeholder="Leave empty for OpenAI">
+            <span class="form-hint">Custom endpoint: Ollama, Groq, Together, LM Studio, etc.</span>
+          </div>
+          {% endif %}
         </div>
-        {% if p == 'openai' %}
-        <div class="form-row">
-          <label class="form-label">Base URL</label>
-          <input type="text" name="openai_base_url" value="{{ cfg.models.openai.base_url or '' }}" class="form-input" placeholder="Leave empty for OpenAI">
-          <span class="form-hint">Custom endpoint: Ollama, Groq, Together, LM Studio, etc.</span>
-        </div>
-        {% endif %}
       </div>
+      {% endfor %}
     </div>
   </fieldset>
 
@@ -374,6 +365,8 @@
   (function() {
     var fields = ['weight_completion', 'weight_rewatch', 'weight_recency'];
     var warn = document.getElementById('weight-warn');
+    var providerSelect = document.getElementById('provider-select');
+    var providerPanels = document.querySelectorAll('[data-provider-panel]');
     var manualMode = document.getElementById('manual-timestamp-mode');
     var manualDate = document.getElementById('manual-timestamp-date');
     fields.forEach(function(name) {
@@ -390,6 +383,17 @@
     function syncManualTimestampInput() {
       if (!manualMode || !manualDate) return;
       manualDate.disabled = manualMode.value !== 'fixed';
+    }
+    function syncProviderPanels() {
+      if (!providerSelect) return;
+      providerPanels.forEach(function(panel) {
+        var isActive = panel.getAttribute('data-provider-panel') === providerSelect.value;
+        panel.style.display = isActive ? 'block' : 'none';
+      });
+    }
+    if (providerSelect) {
+      providerSelect.addEventListener('change', syncProviderPanels);
+      syncProviderPanels();
     }
     if (manualMode) {
       manualMode.addEventListener('change', syncManualTimestampInput);

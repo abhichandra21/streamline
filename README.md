@@ -76,7 +76,7 @@ git clone https://github.com/abhichandra21/streamline.git
 cd streamline
 python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt
 
-# 2. Add your API keys to .env (gitignored)
+# 2. Set your API keys in the environment (.env is optional local convenience)
 cat > .env << 'EOF'
 TMDB_API_KEY=your_key_here
 ANTHROPIC_API_KEY=your_key_here
@@ -146,7 +146,8 @@ Port and host are configurable via `STREAMLINE_PORT` and `STREAMLINE_HOST` envir
 
 Settings live in two places:
 
-- **`.env`** — secrets only (API keys, gitignored)
+- **Environment variables** — secrets only (`TMDB_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`)
+- **`.env`** — optional local convenience for setting those environment variables (gitignored)
 - **`config.yaml`** — everything else (editable from the Settings page or by hand)
 
 ### LLM Providers
@@ -165,6 +166,14 @@ models:
 ```
 
 Switch providers by changing `provider:` in config.yaml or per-query with `--provider gemini`.
+
+By default, each provider reads its API key from the standard environment variable name:
+
+- Anthropic: `ANTHROPIC_API_KEY`
+- Gemini: `GEMINI_API_KEY`
+- OpenAI / compatible: `OPENAI_API_KEY`
+
+Only add `models.<provider>.api_key_env` in `config.yaml` when you need a non-standard variable name.
 
 ### Quality Filters
 
