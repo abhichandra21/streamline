@@ -228,6 +228,7 @@ class OpenAIClient(LLMClient):
         self._client = OpenAI(**kwargs)
         self.models = models
         self.usage = UsageStats()
+        self._is_thinking_model = False
         endpoint = base_url or "api.openai.com"
         log.info("Using OpenAI-compatible provider (endpoint=%s, fast=%s, reason=%s)",
                  endpoint, models.get("fast"), models.get("reason"))
@@ -236,11 +237,14 @@ class OpenAIClient(LLMClient):
                  max_tokens: int = 1000, timeout: float = 30.0) -> str:
         model = self.models.get(role, self.models.get("reason", "gpt-4.1-mini"))
 
+        # Thinking models (GLM, o-series) need more tokens for reasoning
+        adjusted_tokens = max(max_tokens * 3, 4000) if self._is_thinking_model else max_tokens
+
         for attempt in range(3):
             try:
                 response = self._client.chat.completions.create(
                     model=model,
-                    max_tokens=max_tokens,
+                    max_tokens=adjusted_tokens,
                     timeout=timeout,
                     messages=[{"role": "user", "content": prompt}],
                 )
@@ -265,10 +269,16 @@ class OpenAIClient(LLMClient):
                 output_t=response.usage.completion_tokens or 0,
             )
 
+        # Auto-detect thinking models (GLM, o-series) for future token scaling
+        if hasattr(choice.message, "reasoning_content") and choice.message.reasoning_content:
+            if not self._is_thinking_model:
+                log.info("Detected thinking model (%s), enabling token scaling.", model)
+                self._is_thinking_model = True
+
         self.was_truncated = choice.finish_reason == "length"
         if self.was_truncated:
             log.warning("OpenAI response truncated (max_tokens=%d, model=%s). "
-                        "Increase the token limit in config.yaml.", max_tokens, model)
+                        "Increase the token limit in config.yaml.", adjusted_tokens, model)
 
         return text
 
