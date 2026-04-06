@@ -81,32 +81,36 @@ def _parse_csv(filepath: str) -> list[WatchEvent]:
     return events
 
 
-def parse(zip_path: str) -> list[WatchEvent]:
-    """Parse Prime Video watch history from a data export zip.
+def parse(path: str) -> list[WatchEvent]:
+    """Parse Prime Video watch history from a data export zip or CSV.
 
     Args:
-        zip_path: Path to the Prime Video data export .zip file.
+        path: Path to the Prime Video data export .zip file, or directly to
+              Viewing History.csv for backward compatibility.
 
     Raises:
-        FileNotFoundError: If zip_path does not exist.
-        ValueError: If the file is not a .zip or the expected CSV is missing.
+        FileNotFoundError: If path does not exist.
+        ValueError: If the file type is unsupported or the expected CSV is missing.
     """
-    p = Path(zip_path)
+    p = Path(path)
     if not p.exists():
-        raise FileNotFoundError(f'Prime Video export not found: {zip_path}')
+        raise FileNotFoundError(f'Prime Video export not found: {path}')
+    if p.suffix == '.csv':
+        log.info('Prime Video: reading %s', p)
+        return _parse_csv(str(p))
     if p.suffix != '.zip':
-        raise ValueError(f'Prime Video path must be a .zip file, got: {zip_path}')
+        raise ValueError(f'Prime Video path must be a .zip or .csv file, got: {path}')
 
     with tempfile.TemporaryDirectory(prefix='prime_') as work_dir:
         try:
-            with zipfile.ZipFile(zip_path, 'r') as zf:
+            with zipfile.ZipFile(path, 'r') as zf:
                 zf.extractall(work_dir)
         except zipfile.BadZipFile as exc:
-            raise ValueError(f'Invalid zip file: {zip_path} ({exc})') from exc
+            raise ValueError(f'Invalid zip file: {path} ({exc})') from exc
 
         found = list(Path(work_dir).rglob(_TARGET_CSV))
         if not found:
-            raise ValueError(f'{_TARGET_CSV} not found inside {zip_path}')
+            raise ValueError(f'{_TARGET_CSV} not found inside {path}')
 
         log.info('Prime Video: reading %s', found[0])
         return _parse_csv(str(found[0]))

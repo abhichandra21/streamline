@@ -49,7 +49,7 @@ streaming_platforms: []
 platform_paths:
   netflix: data/netflix/32ff724d-ecfe-44b4-8f11-00113e65599f.zip
   prime: data/prime_video/Prime Video.zip
-  apple_tv: data/AppleTV/Apple Media Services Information Part 1 of 2.zip
+  apple_tv:
 manual_tv_path: data/manual/tv.csv
 manual_movies_path: data/manual/movies.csv
 overrides_path: data/overrides.json
