@@ -2,6 +2,15 @@
 {% block title %}Streamline{% endblock %}
 {% block content %}
 
+{% if ingestion_errors %}
+<div style="padding:0.75rem 1.25rem; background:rgba(232,93,74,0.08); border:1px solid rgba(232,93,74,0.2); border-radius:6px; margin-bottom:1.5rem; font-size:0.85rem; color:#e88;">
+  <strong>Import warnings:</strong>
+  <ul style="margin:0.35rem 0 0 1.25rem; padding:0;">
+    {% for err in ingestion_errors %}<li>{{ err }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 <!-- ════════ DISCOVER ════════ -->
 <section style="margin-bottom:4rem;">
   <h1 style="font-size:clamp(2.4rem, 5.5vw, 4rem); line-height:1.05; letter-spacing:-0.01em; margin-bottom:0.5rem;">

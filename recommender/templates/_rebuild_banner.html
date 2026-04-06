@@ -1,0 +1,19 @@
+{% if job.status in ('pending', 'running') %}
+<div id="rebuild-banner"
+     hx-get="/jobs/{{ job.id }}/rebuild-status"
+     hx-trigger="every 2s"
+     hx-target="#rebuild-banner"
+     hx-swap="outerHTML"
+     style="padding:0.75rem 1.25rem; background:rgba(167,139,250,0.08); border:1px solid rgba(167,139,250,0.2); border-radius:6px; margin-bottom:1.5rem; display:flex; align-items:center; gap:0.6rem;">
+  <div style="width:12px; height:12px; border:2px solid rgba(167,139,250,0.3); border-top-color:var(--lavender); border-radius:50%; animation:spin 0.6s linear infinite; flex-shrink:0;"></div>
+  <span style="font-size:0.85rem; color:var(--lavender);">{{ job.label | capitalize }}… ({{ job.elapsed_seconds | int }}s)</span>
+</div>
+{% elif job.status == 'done' %}
+<div id="rebuild-banner" style="padding:0.75rem 1.25rem; background:rgba(58,184,160,0.1); border:1px solid rgba(58,184,160,0.25); border-radius:6px; margin-bottom:1.5rem; font-size:0.85rem; color:var(--teal);">
+  Settings saved. Rebuilt in {{ job.duration_seconds | int }}s.
+</div>
+{% elif job.status == 'error' %}
+<div id="rebuild-banner" style="padding:0.75rem 1.25rem; background:rgba(232,93,74,0.08); border:1px solid rgba(232,93,74,0.2); border-radius:6px; margin-bottom:1.5rem; font-size:0.85rem; color:#e88;">
+  Settings saved, but rebuild failed: {{ job.error }}
+</div>
+{% endif %}

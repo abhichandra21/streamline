@@ -7,7 +7,11 @@ Type=simple
 User=abhishek
 WorkingDirectory=/home/abhishek/streamline
 EnvironmentFile=/home/abhishek/streamline/.env
-ExecStart=/home/abhishek/streamline/venv/bin/python3 -m recommender.web
+ExecStart=/home/abhishek/streamline/venv/bin/gunicorn \
+    --workers 1 \
+    --bind 127.0.0.1:5050 \
+    --timeout 120 \
+    recommender.web:app
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

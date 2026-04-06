@@ -6,6 +6,12 @@
   <title>{% block title %}Streamline{% endblock %}</title>
   <link rel="icon" type="image/png" href="/static/logo.png">
   <script src="https://unpkg.com/htmx.org@2.0.2" integrity="sha384-Y7hw+L/jvKeWIRRkqWYfPcvVxHzVzn5REgzbawhxAuQGwX1XWe70vji+VSeHOThJ" crossorigin="anonymous"></script>
+  <script>
+    // Inject CSRF token into every HTMX request automatically
+    document.addEventListener('htmx:configRequest', function(evt) {
+      evt.detail.headers['X-CSRF-Token'] = '{{ csrf_token }}';
+    });
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">

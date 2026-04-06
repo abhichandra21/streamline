@@ -1,61 +1,82 @@
 """Flask web UI for Streamline — taste profile dashboard, watch history, and recommendation search."""
 
+import importlib
 import json
 import logging
 import os
 import re
+import secrets
 import sys
-from copy import deepcopy
-from datetime import datetime
+import threading
+from copy import copy, deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from recommender.llm import create_client
-from flask import Flask, jsonify, redirect, render_template, request, url_for
+from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
 from markupsafe import Markup, escape
 
 import config
+from recommender import history as query_history
+from recommender import watch_index as wi
+from recommender.ingestion.manual import parse as parse_manual
 from recommender.ingestion.netflix import parse as parse_netflix
 from recommender.ingestion.prime import parse as parse_prime
-from recommender.ingestion.manual import parse as parse_manual
-from recommender.tmdb_client import TmdbClient
+from recommender.jobs import registry as job_registry
+from recommender.llm import create_client
 from recommender.query_engine import RecommendContext, ask
-from recommender import watch_index as wi
-from recommender import history as query_history
+from recommender.tmdb_client import TmdbClient
 
 log = logging.getLogger("recommender.web")
 
 app = Flask(__name__, template_folder="templates")
+app.secret_key = os.environ.get("STREAMLINE_SECRET_KEY") or secrets.token_hex(32)
 
+# ── Shared context (read-only after build; rebuilt on config change) ──────────
 _ctx: RecommendContext | None = None
+_ctx_lock = threading.Lock()
+
+# Ingestion errors from the last context build, surfaced in /status and UI
+_ingestion_errors: list[str] = []
 
 
 def _get_context() -> RecommendContext:
     global _ctx
-    if _ctx is None:
-        _ctx = _build_context()
+    with _ctx_lock:
+        if _ctx is None:
+            _ctx = _build_context()
     return _ctx
 
 
 def _build_context() -> RecommendContext:
+    global _ingestion_errors
+    errors: list[str] = []
     events = []
+
     for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime)]:
         path = config.PLATFORM_PATHS.get(platform)
-        if path:
-            try:
-                events.extend(parser(path))
-            except Exception:
-                pass
+        if not path:
+            continue
+        try:
+            events.extend(parser(path))
+        except Exception as exc:
+            msg = f"{platform}: {exc}"
+            log.warning("Ingestion error — %s", msg)
+            errors.append(msg)
+
     try:
         events.extend(parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH))
-    except Exception:
-        pass
+    except Exception as exc:
+        msg = f"manual: {exc}"
+        log.warning("Ingestion error — %s", msg)
+        errors.append(msg)
+
+    _ingestion_errors = errors
 
     index_path = Path(config.WATCH_INDEX_PATH)
     profile_path = Path(config.TASTE_PROFILE_PATH)
-
     if not index_path.exists() or not profile_path.exists():
-        raise RuntimeError("Run python -m recommender.setup before starting the web UI.")
+        raise RuntimeError("Run ./recommend setup before starting the web UI.")
 
     return RecommendContext(
         taste_profile=profile_path.read_text(),
@@ -70,6 +91,78 @@ def _build_context() -> RecommendContext:
     )
 
 
+def _get_job_context() -> RecommendContext:
+    """Shallow-copy the shared context with a fresh LLM client per job.
+
+    This gives each background job its own UsageStats without creating a new
+    TMDB client or reloading the watch index.
+    """
+    ctx = copy(_get_context())
+    ctx.llm = create_client()
+    return ctx
+
+
+# ── Background job: recommendation query ─────────────────────────────────────
+
+def _run_recommend_job(query: str) -> dict:
+    ctx = _get_job_context()
+    results = ask(query, ctx)
+
+    try:
+        query_history.record(query, results, ctx.llm.provider, ctx.llm.usage.summary())
+    except OSError as exc:
+        log.warning("Failed to persist query history for %r: %s", query, exc)
+
+    return {"items": _build_result_items(results, ctx), "query": query}
+
+
+def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
+    items = []
+    for r in results:
+        meta = ctx.tmdb_client.get_metadata(r.title, r.content_type)
+        poster = _get_poster_url(meta.tmdb_id, r.content_type) if meta else None
+        tmdb_url = ""
+        imdb_url = ""
+        if meta:
+            tmdb_type = "tv" if r.content_type == "tv" else "movie"
+            tmdb_url = f"https://www.themoviedb.org/{tmdb_type}/{meta.tmdb_id}"
+            cache_path = Path(config.CACHE_DIR) / r.content_type / f"{meta.tmdb_id}.json"
+            if cache_path.exists():
+                raw = json.loads(cache_path.read_text())
+                imdb_id = raw.get("imdb_id")
+                if imdb_id:
+                    imdb_url = f"https://www.imdb.com/title/{imdb_id}/"
+            if not imdb_url:
+                from urllib.parse import quote
+                imdb_url = f"https://www.imdb.com/find/?q={quote(r.title)}"
+        items.append({
+            "title": r.title,
+            "content_type": r.content_type,
+            "score": r.score,
+            "vote_average": r.vote_average,
+            "genres": r.genres[:3],
+            "explanation": r.explanation,
+            "streaming_providers": r.streaming_providers[:4],
+            "poster": poster,
+            "tmdb_url": tmdb_url,
+            "imdb_url": imdb_url,
+        })
+    return items
+
+
+# ── Background job: setup / profile rebuild ───────────────────────────────────
+
+def _run_rebuild_job(refresh_profile: bool, refresh_data: bool) -> None:
+    global _ctx
+    from recommender.setup import run_setup
+    run_setup(refresh_profile=refresh_profile, refresh_data=refresh_data)
+    with _ctx_lock:
+        _ctx = None
+    log.info("Rebuild complete (refresh_profile=%s, refresh_data=%s)", refresh_profile, refresh_data)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def _load_enrichments() -> dict[str, str]:
     index_path = Path(config.ENRICHMENT_CACHE_DIR) / "index.json"
     if index_path.exists():
@@ -78,20 +171,15 @@ def _load_enrichments() -> dict[str, str]:
 
 
 def _md_to_html(text: str) -> str:
-    """Convert basic markdown (bold, italic, em-dash) to HTML. No external deps."""
     html = str(escape(text))
-    # Bold: **text**
     html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html)
-    # Italic: *text*
     html = re.sub(r'\*(.+?)\*', r'<em>\1</em>', html)
-    # Paragraphs: double newline
     paragraphs = re.split(r'\n\s*\n', html)
     html = ''.join(f'<p>{p.strip()}</p>' for p in paragraphs if p.strip())
     return Markup(html)
 
 
 def _get_poster_url(tmdb_id: int, content_type: str, size: str = "w300") -> str | None:
-    """Get poster URL from cached TMDB data."""
     cache_path = Path(config.CACHE_DIR) / content_type / f"{tmdb_id}.json"
     if cache_path.exists():
         data = json.loads(cache_path.read_text())
@@ -102,7 +190,6 @@ def _get_poster_url(tmdb_id: int, content_type: str, size: str = "w300") -> str 
 
 
 def _get_recent_posters(entries: list[dict], limit: int = 24) -> list[dict]:
-    """Get poster URLs for a selection of watched titles."""
     posters = []
     for e in entries:
         tmdb_id = e.get("tmdb_id")
@@ -117,6 +204,71 @@ def _get_recent_posters(entries: list[dict], limit: int = 24) -> list[dict]:
     return posters
 
 
+def _profile_built_at() -> str | None:
+    path = Path(config.TASTE_PROFILE_PATH)
+    if not path.exists():
+        return None
+    mtime = path.stat().st_mtime
+    return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+
+
+# ── CSRF ──────────────────────────────────────────────────────────────────────
+
+def _get_csrf_token() -> str:
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_hex(32)
+    return session["csrf_token"]
+
+
+def _csrf_valid() -> bool:
+    expected = session.get("csrf_token")
+    if not expected:
+        return False
+    submitted = (
+        request.form.get("_csrf_token")
+        or request.headers.get("X-CSRF-Token")
+    )
+    return submitted == expected
+
+
+@app.context_processor
+def _inject_csrf() -> dict:
+    return {"csrf_token": _get_csrf_token()}
+
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+
+@app.before_request
+def _check_auth() -> Response | None:
+    password = os.environ.get("STREAMLINE_PASSWORD", "").strip()
+    if not password:
+        return None
+    if request.path in ("/healthz", "/status"):
+        return None
+    auth = request.authorization
+    if auth and auth.password == password:
+        return None
+    return Response(
+        "Authentication required",
+        401,
+        {"WWW-Authenticate": 'Basic realm="Streamline"'},
+    )
+
+
+# ── CSRF guard ────────────────────────────────────────────────────────────────
+
+@app.before_request
+def _check_csrf() -> tuple | None:
+    if request.method not in ("POST", "DELETE", "PUT", "PATCH"):
+        return None
+    if not _csrf_valid():
+        log.warning("CSRF validation failed for %s %s", request.method, request.path)
+        return "Invalid or missing CSRF token", 403
+    return None
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
 @app.route("/")
 def dashboard() -> str:
     ctx = _get_context()
@@ -125,7 +277,6 @@ def dashboard() -> str:
     tv_count = sum(1 for e in entries if e.get("content_type") == "tv")
     movie_count = sum(1 for e in entries if e.get("content_type") == "movie")
 
-    # Parse profile into clusters
     clusters = []
     current_cluster = None
     for line in ctx.taste_profile.split("\n"):
@@ -133,11 +284,9 @@ def dashboard() -> str:
             if current_cluster:
                 clusters.append(current_cluster)
             heading = line[3:].strip()
-            # Strip "CLUSTER A: " or "CLUSTER B: " prefix
             heading = re.sub(r'^CLUSTER\s+[A-Z0-9]+:\s*', '', heading)
             current_cluster = {"heading": heading, "body": ""}
         elif current_cluster is not None:
-            # Skip standalone --- separators and **Strength:** lines
             stripped = line.strip()
             if stripped == '---' or stripped.startswith('**Strength:'):
                 continue
@@ -145,7 +294,6 @@ def dashboard() -> str:
     if current_cluster:
         clusters.append(current_cluster)
 
-    # Convert markdown in cluster bodies to HTML
     for c in clusters:
         c["body_html"] = _md_to_html(c["body"].strip())
 
@@ -162,6 +310,7 @@ def dashboard() -> str:
         enrichment_count=len(enrichments),
         posters=posters,
         recent_queries=recent_queries,
+        ingestion_errors=_ingestion_errors,
     )
 
 
@@ -172,8 +321,7 @@ def history() -> str:
     q = request.args.get("q", "").lower()
     ct_filter = request.args.get("type", "")
 
-    entries = list(ctx.watch_index.entries)  # list of dicts
-
+    entries = list(ctx.watch_index.entries)
     if q:
         entries = [e for e in entries if q in e["title"].lower()]
     if ct_filter in ("tv", "movie"):
@@ -186,7 +334,8 @@ def history() -> str:
             "content_type": e.get("content_type", ""),
             "tmdb_id": e.get("tmdb_id"),
             "description": enrichments.get(e["title"], ""),
-            "poster": _get_poster_url(e.get("tmdb_id", 0), e.get("content_type", "movie"), "w185") if e.get("tmdb_id") else None,
+            "poster": _get_poster_url(e.get("tmdb_id", 0), e.get("content_type", "movie"), "w185")
+                      if e.get("tmdb_id") else None,
         }
         for e in entries
     ]
@@ -196,11 +345,9 @@ def history() -> str:
 @app.route("/searches")
 def searches() -> str:
     entries = query_history.load()
-    # Format timestamps for display
     for e in entries:
         ts = e.get("timestamp", "")
         try:
-            from datetime import datetime, timezone
             dt = datetime.fromisoformat(ts)
             now = datetime.now(timezone.utc)
             delta = now - dt
@@ -233,71 +380,45 @@ def delete_search():
     return "", 200, {"HX-Redirect": "/searches"}
 
 
-@app.route("/recommend", methods=["GET", "POST"])
-def recommend() -> str:
-    if request.method == "GET":
-        return render_template("recommend.html", results=None, query="")
+@app.route("/recommend", methods=["GET"])
+def recommend_page() -> str:
+    return render_template("recommend.html", query="")
 
+
+@app.route("/recommend", methods=["POST"])
+def recommend_post() -> str:
     query = (request.form.get("query") or "").strip()
     if not query:
-        return render_template("recommend.html", results=None, query="")
+        return render_template("_results.html", results=None, query="", error=None)
 
-    ctx = _get_context()
-    ctx.llm.usage.reset()
-    try:
-        results = ask(query, ctx)
-    except Exception as exc:
-        log.exception("Error during recommendation")
-        return render_template("recommend.html", results=None, query=query, error=str(exc))
+    job_id = job_registry.submit(_run_recommend_job, query, label="recommend")
+    return render_template("_polling.html", job_id=job_id)
 
-    try:
-        query_history.record(query, results, ctx.llm.provider, ctx.llm.usage.summary())
-    except OSError as exc:
-        log.warning("Failed to persist query history for %r: %s", query, exc)
 
-    items = []
-    for r in results:
-        # Look up poster from TMDB cache
-        poster = None
-        cached = ctx.tmdb_client._load_cache(r.content_type, 0)  # won't work, need tmdb_id
-        # Search the candidates for tmdb_id
-        meta = ctx.tmdb_client.get_metadata(r.title, r.content_type)
-        if meta:
-            poster = _get_poster_url(meta.tmdb_id, r.content_type)
-        tmdb_url = ""
-        imdb_url = ""
-        if meta:
-            tmdb_type = "tv" if r.content_type == "tv" else "movie"
-            tmdb_url = f"https://www.themoviedb.org/{tmdb_type}/{meta.tmdb_id}"
-            # Try to get direct IMDB link from cached TMDB detail
-            cache_path = Path(config.CACHE_DIR) / r.content_type / f"{meta.tmdb_id}.json"
-            if cache_path.exists():
-                raw = json.loads(cache_path.read_text())
-                imdb_id = raw.get("imdb_id")
-                if imdb_id:
-                    imdb_url = f"https://www.imdb.com/title/{imdb_id}/"
-            # Fallback: IMDB search by title
-            if not imdb_url:
-                from urllib.parse import quote
-                imdb_url = f"https://www.imdb.com/find/?q={quote(r.title)}"
-        items.append({
-            "title": r.title,
-            "content_type": r.content_type,
-            "score": r.score,
-            "vote_average": r.vote_average,
-            "genres": r.genres[:3],
-            "explanation": r.explanation,
-            "streaming_providers": r.streaming_providers[:4],
-            "poster": poster,
-            "tmdb_url": tmdb_url,
-            "imdb_url": imdb_url,
-        })
+@app.route("/jobs/<job_id>/poll")
+def poll_job(job_id: str) -> str:
+    """HTMX polling endpoint for recommendation jobs."""
+    job = job_registry.get(job_id)
+    if job is None:
+        return render_template("_results.html", results=None, query="", error="Job not found.")
 
-    # HTMX partial — return just the results fragment.
-    if request.headers.get("HX-Request"):
-        return render_template("_results.html", results=items, query=query)
+    if job.status in ("pending", "running"):
+        return render_template("_polling.html", job_id=job_id, elapsed=job.elapsed_seconds)
 
-    return render_template("recommend.html", results=items, query=query)
+    if job.status == "error":
+        return render_template("_results.html", results=None, query="", error=job.error)
+
+    result = job.result
+    return render_template("_results.html", results=result["items"], query=result["query"], error=None)
+
+
+@app.route("/jobs/<job_id>/rebuild-status")
+def rebuild_status(job_id: str) -> str:
+    """HTMX polling endpoint for setup/rebuild jobs."""
+    job = job_registry.get(job_id)
+    if job is None:
+        return ""
+    return render_template("_rebuild_banner.html", job=job)
 
 
 @app.route("/title/<int:tmdb_id>")
@@ -307,7 +428,6 @@ def title_detail(tmdb_id: int) -> str:
     enrichments = _load_enrichments()
     meta = None
     try:
-        from recommender.tmdb_client import TmdbMetadata
         cached = ctx.tmdb_client._load_cache(ct, tmdb_id)
         if cached:
             meta = ctx.tmdb_client._parse_metadata(cached, ct)
@@ -316,15 +436,16 @@ def title_detail(tmdb_id: int) -> str:
 
     description = enrichments.get(meta.title, "") if meta else ""
     poster = _get_poster_url(tmdb_id, ct, "w500") if meta else None
-    # Get overview from cached TMDB data
     overview = ""
     if meta:
         cache_path = Path(config.CACHE_DIR) / ct / f"{tmdb_id}.json"
         if cache_path.exists():
             raw = json.loads(cache_path.read_text())
             overview = raw.get("overview", "")
-    return render_template("title.html", meta=meta, description=description, overview=overview,
-                           tmdb_id=tmdb_id, ct=ct, poster=poster)
+    return render_template(
+        "title.html", meta=meta, description=description, overview=overview,
+        tmdb_id=tmdb_id, ct=ct, poster=poster,
+    )
 
 
 @app.route("/help")
@@ -332,89 +453,104 @@ def help_page() -> str:
     return render_template("help.html")
 
 
+@app.route("/healthz")
+def healthz():
+    index_path = Path(config.WATCH_INDEX_PATH)
+    profile_path = Path(config.TASTE_PROFILE_PATH)
+    if not index_path.exists() or not profile_path.exists():
+        return jsonify({"status": "not ready", "reason": "setup not run"}), 503
+    running = job_registry.running_jobs()
+    if running:
+        return jsonify({"status": "busy", "running_jobs": len(running)}), 200
+    return jsonify({"status": "ok"}), 200
+
+
+@app.route("/status")
+def status():
+    index_entries = 0
+    try:
+        ctx = _get_context()
+        index_entries = len(ctx.watch_index.entries)
+    except Exception:
+        pass
+
+    enrichment_count = 0
+    enrichment_index = Path(config.ENRICHMENT_CACHE_DIR) / "index.json"
+    if enrichment_index.exists():
+        try:
+            enrichment_count = len(json.loads(enrichment_index.read_text()))
+        except Exception:
+            pass
+
+    running = job_registry.running_jobs()
+    return jsonify({
+        "status": "degraded" if _ingestion_errors else "ok",
+        "provider": config.LLM_PROVIDER,
+        "models": config.LLM_MODELS.get(config.LLM_PROVIDER, {}),
+        "watch_index_entries": index_entries,
+        "enrichment_count": enrichment_count,
+        "taste_profile_built_at": _profile_built_at(),
+        "ingestion_errors": _ingestion_errors,
+        "running_jobs": len(running),
+        "jobs": [
+            {
+                "id": j.id,
+                "label": j.label,
+                "status": j.status,
+                "elapsed_seconds": round(j.elapsed_seconds, 1),
+                "error": j.error,
+            }
+            for j in job_registry.recent_jobs(5)
+        ],
+    })
+
+
+# ── Settings ──────────────────────────────────────────────────────────────────
+
 _CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
 _DEFAULT_LLM_API_KEY_ENVS = dict(config.LLM_DEFAULT_API_KEY_ENVS)
 _SETTINGS_DEFAULTS = {
     "provider": "anthropic",
     "models": {
-        "anthropic": {
-            "fast": "claude-haiku-4-5-20251001",
-            "reason": "claude-sonnet-4-6",
-        },
-        "gemini": {
-            "fast": "gemini-2.5-flash",
-            "reason": "gemini-2.5-flash",
-        },
-        "openai": {
-            "fast": "gpt-4.1-mini",
-            "reason": "gpt-4.1",
-            "base_url": None,
-        },
+        "anthropic": {"fast": "claude-haiku-4-5-20251001", "reason": "claude-sonnet-4-6"},
+        "gemini": {"fast": "gemini-2.5-flash", "reason": "gemini-2.5-flash"},
+        "openai": {"fast": "gpt-4.1-mini", "reason": "gpt-4.1", "base_url": None},
     },
     "llm": {
-        "timeout_fast": 30,
-        "timeout_reason": 60,
-        "timeout_profile_batch": 60,
-        "timeout_profile_merge": 300,
-        "tokens_fast": 200,
-        "tokens_intent": 400,
-        "tokens_ranking": 1000,
-        "tokens_suggestions": 300,
-        "tokens_profile_batch": 800,
-        "tokens_profile_merge": 4000,
-        "tokens_abandoned": 300,
-        "profile_batch_size": 200,
-        "rate_limit_wait": 65,
+        "timeout_fast": 30, "timeout_reason": 60,
+        "timeout_profile_batch": 60, "timeout_profile_merge": 300,
+        "tokens_fast": 200, "tokens_intent": 400, "tokens_ranking": 1000,
+        "tokens_suggestions": 300, "tokens_profile_batch": 800,
+        "tokens_profile_merge": 4000, "tokens_abandoned": 300,
+        "profile_batch_size": 200, "rate_limit_wait": 65,
     },
     "scoring": {
-        "weight_completion": 0.5,
-        "weight_rewatch": 0.3,
-        "weight_recency": 0.2,
-        "default_tv_runtime": 45,
-        "default_movie_runtime": 90,
-        "rewatch_saturation": 5,
+        "weight_completion": 0.5, "weight_rewatch": 0.3, "weight_recency": 0.2,
+        "default_tv_runtime": 45, "default_movie_runtime": 90, "rewatch_saturation": 5,
     },
-    "default_top_n": 3,
-    "min_vote_count": 20,
-    "min_rating": 0,
-    "min_year": 0,
-    "recency_half_life_days": 90,
-    "watch_region": "US",
-    "streaming_platforms": [],
-    "manual": {
-        "timestamp": "now",
-        "tv_duration_minutes": 45,
-        "movie_duration_minutes": 120,
-    },
+    "default_top_n": 3, "min_vote_count": 20, "min_rating": 0, "min_year": 0,
+    "recency_half_life_days": 90, "watch_region": "US", "streaming_platforms": [],
+    "manual": {"timestamp": "now", "tv_duration_minutes": 45, "movie_duration_minutes": 120},
     "log_level": "WARNING",
 }
 
 _PROFILE_REBUILD_LLM_KEYS = (
-    "timeout_profile_batch",
-    "timeout_profile_merge",
-    "tokens_profile_batch",
-    "tokens_profile_merge",
-    "profile_batch_size",
-    "rate_limit_wait",
+    "timeout_profile_batch", "timeout_profile_merge",
+    "tokens_profile_batch", "tokens_profile_merge",
+    "profile_batch_size", "rate_limit_wait",
 )
 _PROFILE_REBUILD_SCORING_KEYS = (
-    "weight_completion",
-    "weight_rewatch",
-    "weight_recency",
-    "default_tv_runtime",
-    "default_movie_runtime",
-    "rewatch_saturation",
+    "weight_completion", "weight_rewatch", "weight_recency",
+    "default_tv_runtime", "default_movie_runtime", "rewatch_saturation",
 )
 
 
 def _load_config_yaml() -> dict:
-    """Load raw config.yaml as a dict for the settings form."""
     with open(_CONFIG_PATH) as f:
         return yaml.safe_load(f) or {}
 
 
 def _save_config_yaml(cfg: dict) -> None:
-    """Write config dict back to config.yaml, preserving comments where possible."""
     with open(_CONFIG_PATH, "w") as f:
         f.write("# Streamline configuration\n")
         f.write("# Set API keys in the environment. .env is optional local convenience.\n\n")
@@ -443,17 +579,19 @@ def _render_settings_page(
     *,
     saved: str | bool | None = None,
     error: str | None = None,
+    job_id: str | None = None,
 ) -> str:
     resolved_cfg = _resolve_settings_config(cfg if cfg is not None else _load_config_yaml())
-    return render_template("settings.html", cfg=resolved_cfg, saved=saved, error=error)
+    return render_template(
+        "settings.html", cfg=resolved_cfg, saved=saved, error=error, job_id=job_id,
+    )
 
 
 def _reload_app_config() -> None:
-    """Reload config module and rebuild app context."""
     global _ctx
-    import importlib
-    importlib.reload(config)
-    _ctx = None  # next request will rebuild context
+    with _ctx_lock:
+        importlib.reload(config)
+        _ctx = None
     log.info("Config reloaded from config.yaml")
 
 
@@ -483,7 +621,6 @@ def _parse_manual_timestamp(form, current_cfg: dict) -> str:
     )
     if mode == "now":
         return "now"
-
     date_value = (form.get("manual_timestamp_date") or "").strip()
     if not date_value:
         fallback = current_cfg["manual"]["timestamp"]
@@ -500,12 +637,13 @@ def _settings_refresh_flags(previous_cfg: dict, updated_cfg: dict) -> tuple[bool
         previous_cfg["manual"][key] != updated_cfg["manual"][key]
         for key in ("timestamp", "tv_duration_minutes", "movie_duration_minutes")
     )
-    refresh_profile = refresh_data
-    refresh_profile = refresh_profile or any(
+    refresh_profile = refresh_data or any(
         previous_cfg["scoring"][key] != updated_cfg["scoring"][key]
         for key in _PROFILE_REBUILD_SCORING_KEYS
     )
-    refresh_profile = refresh_profile or previous_cfg["recency_half_life_days"] != updated_cfg["recency_half_life_days"]
+    refresh_profile = refresh_profile or (
+        previous_cfg["recency_half_life_days"] != updated_cfg["recency_half_life_days"]
+    )
     refresh_profile = refresh_profile or any(
         previous_cfg["llm"][key] != updated_cfg["llm"][key]
         for key in _PROFILE_REBUILD_LLM_KEYS
@@ -513,25 +651,11 @@ def _settings_refresh_flags(previous_cfg: dict, updated_cfg: dict) -> tuple[bool
     return refresh_profile, refresh_data
 
 
-def _refresh_derived_data(refresh_profile: bool, refresh_data: bool) -> None:
-    global _ctx
-    if not refresh_profile and not refresh_data:
-        return
-
-    from recommender.setup import run_setup
-
-    run_setup(refresh_profile=refresh_profile, refresh_data=refresh_data)
-    _ctx = None
-    log.info(
-        "Rebuilt derived data after settings save (refresh_profile=%s, refresh_data=%s)",
-        refresh_profile,
-        refresh_data,
-    )
-
-
 @app.route("/settings", methods=["GET"])
 def settings_page() -> str:
-    return _render_settings_page(saved=request.args.get("saved"))
+    job_id = request.args.get("job")
+    saved = request.args.get("saved")
+    return _render_settings_page(saved=saved, job_id=job_id)
 
 
 @app.route("/settings", methods=["POST"])
@@ -544,77 +668,44 @@ def settings_save() -> str:
         llm_values = {
             key: _parse_int_field(form, f"llm_{key}", current_cfg["llm"][key])
             for key in (
-                "timeout_fast",
-                "timeout_reason",
-                "timeout_profile_batch",
-                "timeout_profile_merge",
-                "tokens_fast",
-                "tokens_intent",
-                "tokens_ranking",
-                "tokens_suggestions",
-                "tokens_profile_batch",
-                "tokens_profile_merge",
-                "tokens_abandoned",
-                "profile_batch_size",
-                "rate_limit_wait",
+                "timeout_fast", "timeout_reason", "timeout_profile_batch", "timeout_profile_merge",
+                "tokens_fast", "tokens_intent", "tokens_ranking", "tokens_suggestions",
+                "tokens_profile_batch", "tokens_profile_merge", "tokens_abandoned",
+                "profile_batch_size", "rate_limit_wait",
             )
         }
         scoring_values = {
-            "weight_completion": _parse_float_field(
-                form, "weight_completion", current_cfg["scoring"]["weight_completion"]
-            ),
-            "weight_rewatch": _parse_float_field(
-                form, "weight_rewatch", current_cfg["scoring"]["weight_rewatch"]
-            ),
-            "weight_recency": _parse_float_field(
-                form, "weight_recency", current_cfg["scoring"]["weight_recency"]
-            ),
-            "default_tv_runtime": _parse_int_field(
-                form, "default_tv_runtime", current_cfg["scoring"]["default_tv_runtime"]
-            ),
-            "default_movie_runtime": _parse_int_field(
-                form, "default_movie_runtime", current_cfg["scoring"]["default_movie_runtime"]
-            ),
-            "rewatch_saturation": _parse_int_field(
-                form, "rewatch_saturation", current_cfg["scoring"]["rewatch_saturation"]
-            ),
+            "weight_completion": _parse_float_field(form, "weight_completion", current_cfg["scoring"]["weight_completion"]),
+            "weight_rewatch": _parse_float_field(form, "weight_rewatch", current_cfg["scoring"]["weight_rewatch"]),
+            "weight_recency": _parse_float_field(form, "weight_recency", current_cfg["scoring"]["weight_recency"]),
+            "default_tv_runtime": _parse_int_field(form, "default_tv_runtime", current_cfg["scoring"]["default_tv_runtime"]),
+            "default_movie_runtime": _parse_int_field(form, "default_movie_runtime", current_cfg["scoring"]["default_movie_runtime"]),
+            "rewatch_saturation": _parse_int_field(form, "rewatch_saturation", current_cfg["scoring"]["rewatch_saturation"]),
         }
         recommendation_values = {
             "default_top_n": _parse_int_field(form, "default_top_n", current_cfg["default_top_n"]),
             "min_vote_count": _parse_int_field(form, "min_vote_count", current_cfg["min_vote_count"]),
             "min_rating": _parse_float_field(form, "min_rating", current_cfg["min_rating"]),
             "min_year": _parse_int_field(form, "min_year", current_cfg["min_year"]),
-            "recency_half_life_days": _parse_int_field(
-                form, "recency_half_life_days", current_cfg["recency_half_life_days"]
-            ),
+            "recency_half_life_days": _parse_int_field(form, "recency_half_life_days", current_cfg["recency_half_life_days"]),
         }
         manual_values = {
             "timestamp": _parse_manual_timestamp(form, current_cfg),
-            "tv_duration_minutes": _parse_int_field(
-                form, "manual_tv_duration", current_cfg["manual"]["tv_duration_minutes"]
-            ),
-            "movie_duration_minutes": _parse_int_field(
-                form, "manual_movie_duration", current_cfg["manual"]["movie_duration_minutes"]
-            ),
+            "tv_duration_minutes": _parse_int_field(form, "manual_tv_duration", current_cfg["manual"]["tv_duration_minutes"]),
+            "movie_duration_minutes": _parse_int_field(form, "manual_movie_duration", current_cfg["manual"]["movie_duration_minutes"]),
         }
     except ValueError as exc:
         return _render_settings_page(cfg=current_cfg, saved=False, error=str(exc))
 
-    # Validate scoring weights sum to 1.0
     w_comp = scoring_values["weight_completion"]
     w_rew = scoring_values["weight_rewatch"]
     w_rec = scoring_values["weight_recency"]
-    try:
-        if abs((w_comp + w_rew + w_rec) - 1.0) > 0.01:
-            return _render_settings_page(
-                cfg=current_cfg,
-                saved=False,
-                error=f"Scoring weights must sum to 1.0 (got {w_comp + w_rew + w_rec:.2f})",
-            )
-    except ValueError:
-        return _render_settings_page(cfg=current_cfg, saved=False, error="Invalid scoring weights.")
+    if abs((w_comp + w_rew + w_rec) - 1.0) > 0.01:
+        return _render_settings_page(
+            cfg=current_cfg, saved=False,
+            error=f"Scoring weights must sum to 1.0 (got {w_comp + w_rew + w_rec:.2f})",
+        )
 
-    # Provider & models — all providers treated the same
     cfg["provider"] = form.get("provider", "anthropic")
     cfg.setdefault("models", {})
     for p in ["anthropic", "gemini", "openai"]:
@@ -624,38 +715,27 @@ def settings_save() -> str:
             "reason": (form.get(f"{p}_reason") or existing.get("reason", "")).strip(),
         }
         submitted_api_key_env = form.get(f"{p}_api_key_env")
-        if submitted_api_key_env is None:
-            api_key_env = str(existing.get("api_key_env") or "").strip()
-        else:
-            api_key_env = submitted_api_key_env.strip()
+        api_key_env = (
+            str(existing.get("api_key_env") or "").strip()
+            if submitted_api_key_env is None
+            else submitted_api_key_env.strip()
+        )
         if api_key_env and api_key_env != _DEFAULT_LLM_API_KEY_ENVS.get(p, ""):
             provider_cfg["api_key_env"] = api_key_env
         cfg["models"][p] = provider_cfg
-    # base_url only relevant for openai provider
     base_url = (form.get("openai_base_url") or "").strip()
     cfg["models"]["openai"]["base_url"] = base_url if base_url else None
 
-    # LLM limits
     llm = cfg.setdefault("llm", {})
     llm.update(llm_values)
-
-    # Scoring
     scoring = cfg.setdefault("scoring", {})
     scoring.update(scoring_values)
-
-    # Recommendations
     cfg.update(recommendation_values)
-
-    # Streaming
     cfg["watch_region"] = form.get("watch_region", "US").strip().upper()
     platforms_str = form.get("streaming_platforms", "").strip()
     cfg["streaming_platforms"] = [p.strip() for p in platforms_str.split(",") if p.strip()] if platforms_str else []
-
-    # Manual
     manual = cfg.setdefault("manual", {})
     manual.update(manual_values)
-
-    # Logging
     cfg["log_level"] = form.get("log_level", "WARNING")
 
     updated_cfg = _resolve_settings_config(cfg)
@@ -663,26 +743,20 @@ def settings_save() -> str:
 
     _save_config_yaml(cfg)
     _reload_app_config()
-    try:
-        if refresh_profile or refresh_data:
-            _refresh_derived_data(refresh_profile=refresh_profile, refresh_data=refresh_data)
-    except SystemExit as exc:
-        log.error("Derived data rebuild exited during settings save with status %s", exc.code)
-        return _render_settings_page(
-            cfg=updated_cfg,
-            saved=False,
-            error="Settings were saved, but derived data rebuild failed. Check the server log.",
+
+    if refresh_profile or refresh_data:
+        job_id = job_registry.submit(
+            _run_rebuild_job,
+            refresh_profile=refresh_profile,
+            refresh_data=refresh_data,
+            label="rebuilding taste profile" if refresh_profile else "rebuilding data",
         )
-    except Exception as exc:
-        log.exception("Failed to rebuild derived data after settings save")
-        return _render_settings_page(
-            cfg=updated_cfg,
-            saved=False,
-            error=f"Settings were saved, but derived data rebuild failed: {exc}",
-        )
+        return redirect(url_for("settings_page", job=job_id))
 
     return redirect(url_for("settings_page", saved="1"))
 
+
+# ── Application entry point ───────────────────────────────────────────────────
 
 def run() -> None:
     from recommender.log import setup_logging
@@ -691,6 +765,7 @@ def run() -> None:
         print("Error: TMDB_API_KEY must be set.", file=sys.stderr)
         sys.exit(1)
     try:
+        # Validate only the configured provider's key
         create_client()
     except (RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
