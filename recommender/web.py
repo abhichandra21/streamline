@@ -17,6 +17,7 @@ from markupsafe import Markup, escape
 import config
 from recommender.ingestion.netflix import parse as parse_netflix
 from recommender.ingestion.prime import parse as parse_prime
+from recommender.ingestion.apple_tv import parse as parse_apple_tv
 from recommender.ingestion.manual import parse as parse_manual
 from recommender.tmdb_client import TmdbClient
 from recommender.query_engine import RecommendContext, ask
@@ -39,13 +40,16 @@ def _get_context() -> RecommendContext:
 
 def _build_context() -> RecommendContext:
     events = []
-    for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime)]:
+    for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime), ("apple_tv", parse_apple_tv)]:
         path = config.PLATFORM_PATHS.get(platform)
         if path:
             try:
-                events.extend(parser(path))
-            except Exception:
-                pass
+                platform_events = parser(path)
+            except (FileNotFoundError, ValueError) as exc:
+                raise RuntimeError(f"Invalid {platform} watch history: {exc}") from exc
+            if not platform_events:
+                raise RuntimeError(f"Invalid {platform} watch history: zip parsed but yielded 0 events")
+            events.extend(platform_events)
     try:
         events.extend(parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH))
     except Exception:

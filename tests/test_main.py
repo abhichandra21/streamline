@@ -96,24 +96,77 @@ def test_load_context_exits_if_no_taste_profile(tmp_path, monkeypatch):
         load_context()
 
 
+def test_load_context_exits_on_invalid_configured_provider(monkeypatch, capsys):
+    import config
+
+    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': '/tmp/missing.zip', 'prime': None, 'apple_tv': None})
+    monkeypatch.setattr(config, 'MANUAL_TV_PATH', None)
+    monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', None)
+
+    with pytest.raises(SystemExit) as exc_info:
+        from recommender.main import load_context
+        load_context()
+
+    assert exc_info.value.code == 1
+    assert 'Invalid netflix watch history' in capsys.readouterr().err
+
+
 def test_resolve_platform_path_uses_default_when_key_missing(monkeypatch):
     import config
 
     monkeypatch.setattr(config, '_paths', {})
 
-    resolved = config._resolve_platform_path('netflix', 'data/netflix/ViewingActivity.csv')
+    resolved = config._resolve_platform_path('netflix', 'data/netflix/export.zip')
 
-    assert resolved == str(config._ROOT / 'data/netflix/ViewingActivity.csv')
+    assert resolved == str(config._ROOT / 'data/netflix/export.zip')
 
 
 def test_resolve_platform_path_allows_explicit_disable(monkeypatch):
     import config
 
     monkeypatch.setattr(config, '_paths', {'netflix': None})
-    assert config._resolve_platform_path('netflix', 'data/netflix/ViewingActivity.csv') is None
+    assert config._resolve_platform_path('netflix', 'data/netflix/export.zip') is None
 
     monkeypatch.setattr(config, '_paths', {'netflix': ''})
-    assert config._resolve_platform_path('netflix', 'data/netflix/ViewingActivity.csv') is None
+    assert config._resolve_platform_path('netflix', 'data/netflix/export.zip') is None
+
+
+def test_run_ingest_only_exits_if_no_provider_zips_are_configured(monkeypatch, capsys):
+    import config
+    import recommender.setup as setup
+
+    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': None, 'prime': None, 'apple_tv': None})
+    monkeypatch.setattr(config, 'MANUAL_TV_PATH', 'manual-tv.csv')
+    monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', 'manual-movies.csv')
+    monkeypatch.setattr(setup, 'parse_manual', lambda *_args: [object()])
+
+    with pytest.raises(SystemExit) as exc_info:
+        setup.run_ingest_only()
+
+    assert exc_info.value.code == 1
+    assert 'No providers configured' in capsys.readouterr().err
+
+
+def test_web_build_context_raises_on_invalid_configured_provider(monkeypatch):
+    import config
+    from recommender import web
+
+    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': '/tmp/missing.zip', 'prime': None, 'apple_tv': None})
+    monkeypatch.setattr(config, 'MANUAL_TV_PATH', None)
+    monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', None)
+
+    with pytest.raises(RuntimeError, match='Invalid netflix watch history'):
+        web._build_context()
+
+
+def test_apple_tv_parse_reports_invalid_zip(tmp_path):
+    from recommender.ingestion.apple_tv import parse
+
+    bad_zip = tmp_path / 'bad.zip'
+    bad_zip.write_text('not a zip archive')
+
+    with pytest.raises(ValueError, match='Invalid zip file'):
+        parse(str(bad_zip))
 
 
 def _settings_test_client(tmp_path, monkeypatch, raw_cfg: dict | None = None):

@@ -21,6 +21,7 @@ python3 -m pytest tests/test_query_engine.py -v
 ./recommend setup                              # first-time offline setup
 ./recommend setup --refresh-data               # re-fetch TMDB + rebuild all
 ./recommend setup --refresh-profile            # rebuild taste profile only
+./recommend setup --ingest-only                # validate configured provider zips
 ./recommend --debug "spy thriller"             # full pipeline trace
 ./recommend --provider gemini "spy thriller"   # use Gemini instead of default
 ./recommend --liked "Title"                    # feedback
@@ -76,6 +77,6 @@ All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ index.json), `provide
   - `scoring.*` — engagement weights (completion/rewatch/recency), fallback runtimes
   - `manual.*` — synthetic timestamp and durations for manual list titles
   - Top-level: `default_top_n`, `min_vote_count`, `recency_half_life_days`, `watch_region`, `streaming_platforms`
-  - Data paths: `platform_paths.*`, `overrides_path`
+  - Data paths: `platform_paths.*` (exact `.zip` file paths for netflix/prime/apple_tv; null to disable), `overrides_path`
 - `models.<provider>.api_key_env` is optional. Use it only for non-standard environment variable names.
 - **`config.py`** — thin loader, reads settings from `config.yaml` and secrets from the environment. All values have sensible defaults.

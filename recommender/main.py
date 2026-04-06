@@ -9,6 +9,7 @@ import config
 from recommender import feedback as fb
 from recommender.ingestion.netflix import parse as parse_netflix
 from recommender.ingestion.prime import parse as parse_prime
+from recommender.ingestion.apple_tv import parse as parse_apple_tv
 from recommender.ingestion.manual import parse as parse_manual
 from recommender.llm import create_client
 from recommender.models import Recommendation
@@ -25,10 +26,20 @@ console_out = Console()              # recommendation results
 
 def load_context(provider: str | None = None) -> RecommendContext:
     events = []
-    for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime)]:
+    for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime), ("apple_tv", parse_apple_tv)]:
         path = config.PLATFORM_PATHS.get(platform)
         if path:
-            events.extend(parser(path))
+            try:
+                platform_events = parser(path)
+            except (FileNotFoundError, ValueError) as exc:
+                console_err.print(f"[red]Invalid {platform} watch history:[/red] {exc}")
+                console_err.print("[yellow]Run ./recommend setup --ingest-only to validate configured provider zips.[/yellow]")
+                sys.exit(1)
+            if not platform_events:
+                console_err.print(f"[red]Invalid {platform} watch history:[/red] zip parsed but yielded 0 events")
+                console_err.print("[yellow]Run ./recommend setup --ingest-only to validate configured provider zips.[/yellow]")
+                sys.exit(1)
+            events.extend(platform_events)
     if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
         events.extend(parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH))
 

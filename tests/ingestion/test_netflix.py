@@ -1,6 +1,6 @@
 import os
 from datetime import timedelta, datetime
-from recommender.ingestion.netflix import parse
+from recommender.ingestion.netflix import _parse_csv as parse
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "../fixtures/netflix_sample.csv")
 

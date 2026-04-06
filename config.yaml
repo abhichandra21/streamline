@@ -47,8 +47,9 @@ manual:
 watch_region: US
 streaming_platforms: []
 platform_paths:
-  netflix: data/netflix/2468198246996321264/CONTENT_INTERACTION/ViewingActivity.csv
-  prime: data/prime_video/Your Prime Video Viewing Activity/Viewing History.csv
+  netflix: data/netflix/32ff724d-ecfe-44b4-8f11-00113e65599f.zip
+  prime: data/prime_video/Prime Video.zip
+  apple_tv: data/AppleTV/Apple Media Services Information Part 1 of 2.zip
 manual_tv_path: data/manual/tv.csv
 manual_movies_path: data/manual/movies.csv
 overrides_path: data/overrides.json

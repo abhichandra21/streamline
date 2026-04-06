@@ -133,12 +133,14 @@
       <span class="help-heading">Adding watch history</span>
     </summary>
     <div class="help-body">
-      <p>Place exported CSV files under <code>data/</code>:</p>
+      <p>Set each provider path in <code>config.yaml</code> to the exact raw export zip file:</p>
       <table class="help-table">
-        <tr><td><strong>Netflix</strong></td><td>Account Settings > Download your data > ViewingActivity.csv</td></tr>
-        <tr><td><strong>Prime Video</strong></td><td>Account > Digital content > Request your data > Viewing History.csv</td></tr>
+        <tr><td><strong>Netflix</strong></td><td>Account Settings &gt; Download your data &gt; Netflix export zip</td></tr>
+        <tr><td><strong>Prime Video</strong></td><td>Account &gt; Digital content &gt; Request your data &gt; Prime Video export zip</td></tr>
+        <tr><td><strong>Apple TV</strong></td><td>Apple privacy export &gt; Apple Media Services Information Part 1 of 2.zip</td></tr>
         <tr><td><strong>Manual</strong></td><td><code>data/manual/tv.csv</code> and <code>data/manual/movies.csv</code> — one title per line</td></tr>
       </table>
+      <p>Run <code>./recommend setup --ingest-only</code> to validate the configured provider zips before rebuilding.</p>
       <p>After adding new data, run <code>./recommend setup --refresh-data</code> to rebuild.</p>
       <p>You can also add individual titles via CLI: <code>./recommend --add "Shetland" --type tv</code></p>
     </div>
