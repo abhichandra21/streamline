@@ -42,7 +42,7 @@ Streamline ingests your real watch history from Netflix, Prime Video, and manual
 - **Streaming availability** — annotated results with platform filtering (Netflix, Prime, etc.)
 - **Quality filters** — configurable minimum rating, release year, and vote count
 - **Title intelligence** — guessit classification, rapidfuzz dedup, manual overrides, IMDB/TMDB links
-- **Fully configurable** — all settings editable from the web UI or `config.yaml`
+- **Fully configurable** — shared settings in `config.yaml`, local watch-history overrides in `config.local.yaml`
 
 ## How It Works
 
@@ -83,7 +83,7 @@ ANTHROPIC_API_KEY=your_key_here
 GEMINI_API_KEY=your_key_here          # optional
 EOF
 
-# 3. Add your watch history under data/ (see Watch History Sources below)
+# 3. Copy config.local.example.yaml to config.local.yaml and set provider zip paths
 
 # 4. Run offline setup
 ./recommend setup
@@ -144,11 +144,12 @@ Port and host are configurable via `STREAMLINE_PORT` and `STREAMLINE_HOST` envir
 
 ## Configuration
 
-Settings live in two places:
+Settings live in a few places:
 
 - **Environment variables** — secrets only (`TMDB_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`)
 - **`.env`** — optional local convenience for setting those environment variables (gitignored)
-- **`config.yaml`** — everything else (editable from the Settings page or by hand)
+- **`config.yaml`** — shared repo defaults and app settings
+- **`config.local.yaml`** — local overrides such as watch-history zip paths, loaded after `config.yaml`
 
 ### LLM Providers
 
@@ -165,7 +166,7 @@ models:
     reason: gemini-2.5-pro
 ```
 
-Switch providers by changing `provider:` in config.yaml or per-query with `--provider gemini`.
+Switch providers by changing `provider:` in config or per-query with `--provider gemini`.
 
 By default, each provider reads its API key from the standard environment variable name:
 
@@ -173,7 +174,7 @@ By default, each provider reads its API key from the standard environment variab
 - Gemini: `GEMINI_API_KEY`
 - OpenAI / compatible: `OPENAI_API_KEY`
 
-Only add `models.<provider>.api_key_env` in `config.yaml` when you need a non-standard variable name.
+Only add `models.<provider>.api_key_env` in config when you need a non-standard variable name.
 
 ### Quality Filters
 
@@ -199,7 +200,7 @@ When TMDB can't match a title, create `data/overrides.json`:
 <details>
 <summary><strong>Full Settings Reference</strong></summary>
 
-All settings in `config.yaml`:
+All shared settings in `config.yaml`:
 
 **LLM:**
 | Setting | Default | Description |
@@ -235,13 +236,17 @@ All settings in `config.yaml`:
 
 ## Watch History Sources
 
-Place exported CSV files under `data/`:
+Keep shared settings in `config.yaml` and machine-specific watch-history paths in
+`config.local.yaml`. Start by copying `config.local.example.yaml`.
 
 | Platform | Path | How to export |
 |----------|------|---------------|
-| Netflix | `data/netflix/.../ViewingActivity.csv` | Account Settings > Download your data |
-| Prime Video | `data/prime_video/.../Viewing History.csv` | Account > Digital content > Request your data |
+| Netflix | `platform_paths.netflix: data/netflix/<export>.zip` | Account Settings > Download your data |
+| Prime Video | `platform_paths.prime: data/prime_video/Prime Video.zip` | Account > Digital content > Request your data |
+| Apple TV | `platform_paths.apple_tv: data/AppleTV/Apple Media Services Information Part 1 of 2.zip` | Apple privacy export |
 | Manual | `data/manual/tv.csv` / `movies.csv` | One title per line |
+
+`config.local.yaml` is gitignored and loaded after `config.yaml`, so local provider paths stay out of the shared repo config.
 
 Movie titles may include a trailing year (`Zodiac 2007`) which is stripped automatically.
 

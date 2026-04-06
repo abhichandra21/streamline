@@ -97,11 +97,12 @@
       <span class="help-heading">Configuration</span>
     </summary>
     <div class="help-body">
-      <p>Settings live in two places:</p>
+      <p>Settings live in a few places:</p>
       <ul>
         <li><strong>Environment variables</strong> — API keys only (<code>TMDB_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, <code>GEMINI_API_KEY</code>, <code>OPENAI_API_KEY</code>).</li>
         <li><strong>.env</strong> — optional local convenience for setting those variables. Gitignored.</li>
-        <li><strong>config.yaml</strong> — everything else. Editable from the <a href="/settings">Settings</a> page or by hand.</li>
+        <li><strong>config.yaml</strong> — shared repo defaults and app settings. Editable from the <a href="/settings">Settings</a> page or by hand.</li>
+        <li><strong>config.local.yaml</strong> — local overrides such as watch-history zip paths. Gitignored and loaded after <code>config.yaml</code>.</li>
       </ul>
       <p>Provider API keys use the standard variable names by default. Only set <span class="mono">api_key_env</span> when you need a custom variable name.</p>
       <p>The <a href="/settings">Settings</a> page lets you change provider, models, timeouts, scoring weights, and more — changes take effect immediately without a restart.</p>
@@ -133,7 +134,7 @@
       <span class="help-heading">Adding watch history</span>
     </summary>
     <div class="help-body">
-      <p>Set each provider path in <code>config.yaml</code> to the exact raw export zip file:</p>
+      <p>Set each provider path in <code>config.local.yaml</code> to the exact raw export zip file. Start from <code>config.local.example.yaml</code>:</p>
       <table class="help-table">
         <tr><td><strong>Netflix</strong></td><td>Account Settings &gt; Download your data &gt; Netflix export zip</td></tr>
         <tr><td><strong>Prime Video</strong></td><td>Account &gt; Digital content &gt; Request your data &gt; Prime Video export zip</td></tr>

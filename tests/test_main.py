@@ -131,6 +131,26 @@ def test_resolve_platform_path_allows_explicit_disable(monkeypatch):
     assert config._resolve_platform_path('netflix', 'data/netflix/export.zip') is None
 
 
+def test_merge_dicts_applies_local_overrides_recursively():
+    import config
+
+    base = {
+        "platform_paths": {"netflix": None, "prime": None},
+        "models": {"openai": {"fast": "base-fast"}},
+    }
+    local = {
+        "platform_paths": {"netflix": "data/netflix/export.zip"},
+        "models": {"openai": {"reason": "local-reason"}},
+    }
+
+    merged = config._merge_dicts(base, local)
+
+    assert merged["platform_paths"]["netflix"] == "data/netflix/export.zip"
+    assert merged["platform_paths"]["prime"] is None
+    assert merged["models"]["openai"]["fast"] == "base-fast"
+    assert merged["models"]["openai"]["reason"] == "local-reason"
+
+
 def test_run_ingest_only_exits_if_no_provider_zips_are_configured(monkeypatch, capsys):
     import config
     import recommender.setup as setup

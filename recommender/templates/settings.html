@@ -5,7 +5,7 @@
 <div style="margin-bottom:2rem;">
   <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">Configuration</span>
   <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:0.5rem;">Settings</h1>
-  <p style="color:var(--muted); font-size:0.85rem;">Changes are saved to config.yaml and take effect on reload.</p>
+  <p style="color:var(--muted); font-size:0.85rem;">Changes are saved to config.yaml and take effect on reload. Local watch-history paths belong in config.local.yaml.</p>
 </div>
 
 {% if saved %}
@@ -301,7 +301,7 @@
 
   <div style="display:flex; gap:1rem; align-items:center;">
     <button type="submit" class="btn-primary" style="padding:0.75rem 2rem;">Save &amp; Reload</button>
-    <span class="mono" style="font-size:0.58rem; color:var(--muted);">Writes to config.yaml and reloads the application context.</span>
+    <span class="mono" style="font-size:0.58rem; color:var(--muted);">Writes shared settings to config.yaml. Local provider paths stay in config.local.yaml.</span>
   </div>
 
 </form>

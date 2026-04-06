@@ -422,6 +422,7 @@ def _save_config_yaml(cfg: dict) -> None:
     with open(_CONFIG_PATH, "w") as f:
         f.write("# Streamline configuration\n")
         f.write("# Set API keys in the environment. .env is optional local convenience.\n\n")
+        f.write("# Put machine-specific watch-history paths in config.local.yaml.\n\n")
         yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
@@ -458,7 +459,7 @@ def _reload_app_config() -> None:
     import importlib
     importlib.reload(config)
     _ctx = None  # next request will rebuild context
-    log.info("Config reloaded from config.yaml")
+    log.info("Config reloaded from config.yaml with config.local.yaml overrides if present")
 
 
 def _parse_int_field(form, key: str, default: int) -> int:

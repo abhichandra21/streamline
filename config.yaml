@@ -1,5 +1,6 @@
 # Streamline configuration
 # Set API keys in the environment. .env is optional local convenience.
+# Put machine-specific watch-history paths in config.local.yaml.
 
 log_level: DEBUG
 provider: anthropic
@@ -47,8 +48,8 @@ manual:
 watch_region: US
 streaming_platforms: []
 platform_paths:
-  netflix: data/netflix/32ff724d-ecfe-44b4-8f11-00113e65599f.zip
-  prime: data/prime_video/Prime Video.zip
+  netflix:
+  prime:
   apple_tv:
 manual_tv_path: data/manual/tv.csv
 manual_movies_path: data/manual/movies.csv

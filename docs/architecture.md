@@ -59,8 +59,9 @@ Watch history CSVs                           User query (natural language)
 
 | Module | Source | Key fields |
 |--------|--------|------------|
-| `netflix.py` | `ViewingActivity.csv` | title, duration, timestamp, profile |
-| `prime.py` | `Viewing History.csv` | title, duration, timestamp |
+| `netflix.py` | raw Netflix export zip with `ViewingActivity.csv` inside | title, duration, timestamp, profile |
+| `prime.py` | raw Prime Video export zip with `Viewing History.csv` inside | title, duration, timestamp |
+| `apple_tv.py` | raw Apple privacy export zip with `Video Play Activity.csv` inside | title, duration, timestamp, storefront |
 | `manual.py` | `data/manual/tv.csv` + `movies.csv` | title only; synthetic duration + current timestamp |
 
 All parsers emit `WatchEvent` dataclasses (defined in `base.py`). Manual entries use `datetime.now()` as timestamp so they score competitively with platform data. Each file type deduplicates independently (TV and movie lists use separate seen sets).
@@ -197,7 +198,9 @@ recommender/cache/
 
 ## Configuration
 
-Secrets come from the environment. `config.yaml` holds tracked application settings.
+Secrets come from the environment. Shared application settings live in
+`config.yaml`, and optional machine-specific overrides live in
+`config.local.yaml`.
 
 **Environment variables**:
 - `TMDB_API_KEY` — TMDB v3 API key
@@ -207,7 +210,7 @@ Secrets come from the environment. `config.yaml` holds tracked application setti
 
 **`.env`** — optional local convenience for setting those variables (gitignored)
 
-**`config.yaml`** — all settings, organized in sections:
+**`config.yaml`** — tracked shared settings, organized in sections:
 
 | Section | Keys | Description |
 |---------|------|-------------|
@@ -219,9 +222,17 @@ Secrets come from the environment. `config.yaml` holds tracked application setti
 | *(top-level)* | `watch_region`, `streaming_platforms` | Streaming availability |
 | *(top-level)* | `platform_paths.*`, `manual_*_path`, `overrides_path` | Data file locations |
 
+**`config.local.yaml`** — optional local overrides loaded after `config.yaml`.
+Use this for machine-specific values such as `platform_paths.*` for personal
+watch-history export zips. `config.local.yaml` is gitignored; start from
+`config.local.example.yaml`.
+
 Provider API keys use the standard environment variable names by default. Add `models.<provider>.api_key_env` only when a deployment needs a non-standard variable name.
 
-`config.py` is a thin loader that reads settings from `config.yaml` and secrets from the environment. All values have sensible defaults — a minimal `config.yaml` with just `provider:` works.
+`config.py` is a thin loader that reads `config.yaml`, applies
+`config.local.yaml` overrides when present, and reads secrets from the
+environment. All values have sensible defaults — a minimal `config.yaml` with
+just `provider:` works.
 
 ### Taste Profile Batch Caching
 
