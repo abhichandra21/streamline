@@ -32,13 +32,12 @@ def load_context(provider: str | None = None) -> RecommendContext:
             try:
                 platform_events = parser(path)
             except (FileNotFoundError, ValueError) as exc:
-                console_err.print(f"[red]Invalid {platform} watch history:[/red] {exc}")
-                console_err.print("[yellow]Run ./recommend setup --ingest-only to validate configured provider zips.[/yellow]")
-                sys.exit(1)
-            if not platform_events:
-                console_err.print(f"[red]Invalid {platform} watch history:[/red] zip parsed but yielded 0 events")
-                console_err.print("[yellow]Run ./recommend setup --ingest-only to validate configured provider zips.[/yellow]")
-                sys.exit(1)
+                # Runtime recommendations can rely on cached watch_index/profile even
+                # when the original provider export is unavailable. Only abandoned-title
+                # queries depend on raw watch events.
+                console_err.print(f"[yellow]Skipping {platform} watch history for runtime context:[/yellow] {exc}")
+                console_err.print("[dim]Ordinary recommendations still use the cached watch index and taste profile.[/dim]")
+                continue
             events.extend(platform_events)
     if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
         events.extend(parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH))

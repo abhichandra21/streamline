@@ -36,8 +36,8 @@ def _load_all_events(strict: bool = False) -> tuple[list, bool]:
     """Load watch events from all configured platforms.
 
     Args:
-        strict: If True, any configured provider that fails or yields zero
-                events causes overall failure. If False, failures are warnings.
+        strict: If True, any configured provider that fails validation causes
+                overall failure. Empty-but-valid exports remain acceptable.
 
     Returns:
         (events, ok) — ok is False if strict=True and any provider failed.
@@ -58,8 +58,7 @@ def _load_all_events(strict: bool = False) -> tuple[list, bool]:
             ok = False
             continue
         if not platform_events:
-            console.print(f"  {platform}: [red]FAIL[/red] zip parsed but yielded 0 events")
-            ok = False
+            console.print(f"  {platform}: [green]ok[/green] 0 events (no qualifying watch activity)")
             continue
         dates = [e.timestamp for e in platform_events]
         console.print(f"  {platform}: [green]ok[/green] {len(platform_events)} events "
@@ -123,6 +122,9 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
     events, ok = _load_all_events(strict=True)
     if not ok:
         console.print("[red]Aborting setup: one or more configured providers failed.[/red]")
+        sys.exit(1)
+    if not events:
+        console.print("[red]No watch events found. Add manual titles or provider exports with qualifying watch activity.[/red]")
         sys.exit(1)
     console.print(f"  Total: {len(events)} events")
 

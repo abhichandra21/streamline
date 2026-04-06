@@ -46,9 +46,11 @@ def _build_context() -> RecommendContext:
             try:
                 platform_events = parser(path)
             except (FileNotFoundError, ValueError) as exc:
-                raise RuntimeError(f"Invalid {platform} watch history: {exc}") from exc
-            if not platform_events:
-                raise RuntimeError(f"Invalid {platform} watch history: zip parsed but yielded 0 events")
+                # The dashboard can render from cached artifacts after setup. Missing
+                # provider exports should only reduce abandoned-title context, not
+                # block the entire UI.
+                log.warning("Skipping %s watch history for runtime context: %s", platform, exc)
+                continue
             events.extend(platform_events)
     try:
         events.extend(parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH))

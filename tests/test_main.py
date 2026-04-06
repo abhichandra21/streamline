@@ -96,19 +96,28 @@ def test_load_context_exits_if_no_taste_profile(tmp_path, monkeypatch):
         load_context()
 
 
-def test_load_context_exits_on_invalid_configured_provider(monkeypatch, capsys):
+def test_load_context_skips_invalid_configured_provider(monkeypatch, capsys, tmp_path):
     import config
+    import json
+    from recommender import main as main_module
+
+    index_path = tmp_path / 'watch_index.json'
+    index_path.write_text(json.dumps([{"tmdb_id": 0, "title": "downton abbey", "content_type": "tv"}]))
+    profile_path = tmp_path / 'profile.txt'
+    profile_path.write_text('taste profile')
 
     monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': '/tmp/missing.zip', 'prime': None, 'apple_tv': None})
     monkeypatch.setattr(config, 'MANUAL_TV_PATH', None)
     monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', None)
+    monkeypatch.setattr(config, 'WATCH_INDEX_PATH', str(index_path))
+    monkeypatch.setattr(config, 'TASTE_PROFILE_PATH', str(profile_path))
+    monkeypatch.setattr(config, 'TMDB_API_KEY', 'tmdb')
+    monkeypatch.setattr(main_module, 'create_client', lambda _provider=None: object())
 
-    with pytest.raises(SystemExit) as exc_info:
-        from recommender.main import load_context
-        load_context()
+    ctx = main_module.load_context()
 
-    assert exc_info.value.code == 1
-    assert 'Invalid netflix watch history' in capsys.readouterr().err
+    assert ctx.events == []
+    assert 'Skipping netflix watch history for runtime context' in capsys.readouterr().err
 
 
 def test_resolve_platform_path_uses_default_when_key_missing(monkeypatch):
@@ -167,16 +176,44 @@ def test_run_ingest_only_exits_if_no_provider_zips_are_configured(monkeypatch, c
     assert 'No providers configured' in capsys.readouterr().err
 
 
-def test_web_build_context_raises_on_invalid_configured_provider(monkeypatch):
+def test_web_build_context_skips_invalid_configured_provider(monkeypatch, tmp_path):
     import config
     from recommender import web
+    import json
+
+    index_path = tmp_path / 'watch_index.json'
+    index_path.write_text(json.dumps([{"tmdb_id": 0, "title": "downton abbey", "content_type": "tv"}]))
+    profile_path = tmp_path / 'profile.txt'
+    profile_path.write_text('taste profile')
 
     monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': '/tmp/missing.zip', 'prime': None, 'apple_tv': None})
     monkeypatch.setattr(config, 'MANUAL_TV_PATH', None)
     monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', None)
+    monkeypatch.setattr(config, 'WATCH_INDEX_PATH', str(index_path))
+    monkeypatch.setattr(config, 'TASTE_PROFILE_PATH', str(profile_path))
+    monkeypatch.setattr(config, 'TMDB_API_KEY', 'tmdb')
+    monkeypatch.setattr(web, 'create_client', lambda: object())
+    warnings = []
+    monkeypatch.setattr(web.log, 'warning', lambda message, *args: warnings.append(message % args))
 
-    with pytest.raises(RuntimeError, match='Invalid netflix watch history'):
-        web._build_context()
+    ctx = web._build_context()
+
+    assert ctx.events == []
+    assert any('Skipping netflix watch history for runtime context' in message for message in warnings)
+
+
+def test_run_ingest_only_accepts_empty_provider_export(monkeypatch, capsys):
+    import config
+    import recommender.setup as setup
+
+    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': '/tmp/export.zip', 'prime': None, 'apple_tv': None})
+    monkeypatch.setattr(config, 'MANUAL_TV_PATH', None)
+    monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', None)
+    monkeypatch.setattr(setup, '_PLATFORM_PARSERS', [('netflix', lambda _path: [])])
+
+    setup.run_ingest_only()
+
+    assert 'netflix:' in capsys.readouterr().err
 
 
 def test_apple_tv_parse_reports_invalid_zip(tmp_path):
