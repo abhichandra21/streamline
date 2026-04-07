@@ -349,7 +349,7 @@ def test_settings_save_preserves_custom_manual_timestamp(tmp_path, monkeypatch):
     assert saved_cfg["manual"]["timestamp"] == "2024-07-01"
 
 
-def test_settings_save_flags_rebuild_required_after_scoring_change(tmp_path, monkeypatch):
+def test_settings_save_shows_rebuild_command_after_scoring_change(tmp_path, monkeypatch):
     raw_cfg = {"provider": "anthropic"}
     client, _, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
 
@@ -365,8 +365,10 @@ def test_settings_save_flags_rebuild_required_after_scoring_change(tmp_path, mon
     )
 
     assert post_response.status_code == 302
-    assert "rebuild_required=1" in post_response.headers["Location"]
-    assert "saved=1" in post_response.headers["Location"]
+    location = post_response.headers["Location"]
+    assert "saved=1" in location
+    assert "rebuild_command" in location
+    assert "refresh-profile" in location
 
 
 def test_settings_page_shows_default_api_key_env_as_placeholder(tmp_path, monkeypatch):
@@ -456,6 +458,23 @@ def test_settings_save_clears_custom_api_key_env_override(tmp_path, monkeypatch)
     assert post_response.status_code == 302
     saved_cfg = yaml.safe_load(config_path.read_text())
     assert "api_key_env" not in saved_cfg["models"]["openai"]
+
+
+def test_settings_save_omits_empty_platform_path_placeholders(tmp_path, monkeypatch):
+    raw_cfg = {
+        "platform_paths": {
+            "netflix": "data/netflix/export.zip",
+            "prime": None,
+            "apple_tv": "",
+        }
+    }
+    client, config_path, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+
+    post_response = client.post("/settings", data=_settings_form_data(web, raw_cfg))
+
+    assert post_response.status_code == 302
+    saved_cfg = yaml.safe_load(config_path.read_text())
+    assert saved_cfg["platform_paths"] == {"netflix": "data/netflix/export.zip"}
 
 
 def test_recommend_web_uses_runtime_provider_for_api_key_check(tmp_path, monkeypatch):

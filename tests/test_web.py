@@ -209,15 +209,16 @@ class TestSettingsSaveRebuild:
             # Should redirect to saved, no rebuild
             assert resp.status_code == 302
             assert "saved=1" in resp.headers["Location"]
-            assert "rebuild_required" not in resp.headers["Location"]
+            assert "refresh-profile" not in resp.headers["Location"]
+            assert "refresh-data" not in resp.headers["Location"]
             # No jobs submitted
             mock_jobs.submit.assert_not_called()
 
     @patch("recommender.web._reload_app_config")
     @patch("recommender.web._save_config_yaml")
     @patch("recommender.web._load_config_yaml")
-    def test_save_rebuild_required_settings_flags_rebuild(self, mock_load, mock_save, mock_reload, client):
-        """Changing scoring weights should flag rebuild_required without starting one."""
+    def test_save_rebuild_required_settings_shows_cli_command(self, mock_load, mock_save, mock_reload, client):
+        """Changing scoring weights should show the profile rebuild CLI command."""
         mock_reload.return_value = True
         mock_load.return_value = {
             "provider": "anthropic",
@@ -259,16 +260,18 @@ class TestSettingsSaveRebuild:
             ))
 
             assert resp.status_code == 302
-            assert "rebuild_required=1" in resp.headers["Location"]
-            assert "saved=1" in resp.headers["Location"]
-            # Still no rebuild job auto-submitted
+            location = resp.headers["Location"]
+            assert "saved=1" in location
+            assert "rebuild_command" in location
+            assert "refresh-profile" in location
+            # No rebuild job auto-submitted
             mock_jobs.submit.assert_not_called()
 
     @patch("recommender.web._reload_app_config")
     @patch("recommender.web._save_config_yaml")
     @patch("recommender.web._load_config_yaml")
-    def test_save_manual_settings_flags_data_rebuild(self, mock_load, mock_save, mock_reload, client):
-        """Changing manual-title scoring inputs should preserve refresh_data for the rebuild action."""
+    def test_save_manual_settings_shows_data_rebuild_command(self, mock_load, mock_save, mock_reload, client):
+        """Changing manual-title scoring inputs should show the data rebuild CLI command."""
         mock_reload.return_value = True
         mock_load.return_value = {
             "provider": "anthropic",
@@ -310,9 +313,10 @@ class TestSettingsSaveRebuild:
             ))
 
             assert resp.status_code == 302
-            assert "rebuild_required=1" in resp.headers["Location"]
-            assert "refresh_profile=1" in resp.headers["Location"]
-            assert "refresh_data=1" in resp.headers["Location"]
+            location = resp.headers["Location"]
+            assert "saved=1" in location
+            assert "rebuild_command" in location
+            assert "refresh-data" in location
             mock_jobs.submit.assert_not_called()
 
     @patch("recommender.web._reload_app_config")
@@ -362,41 +366,13 @@ class TestSettingsSaveRebuild:
         assert "reload_deferred=1" in resp.headers["Location"]
 
 
-# ── Explicit rebuild ───────────────────────────────────────────────────────────
+# ── Browser rebuild route removed ─────────────────────────────────────────────
 
-class TestExplicitRebuild:
-    @patch("recommender.web._run_rebuild_job")
-    @patch("recommender.web.job_registry")
-    def test_rebuild_post_submits_job(self, mock_registry, mock_run, client):
-        """POST /rebuild should submit a rebuild job and redirect."""
-        mock_registry.submit.return_value = "rebuild-job-123"
+class TestRebuildRouteRemoved:
+    def test_rebuild_route_returns_404_or_405(self, client):
+        """POST /rebuild should no longer exist."""
         resp = client.post("/rebuild", data=_csrf_form(refresh_profile="1"))
-        assert resp.status_code == 302
-        assert "rebuild_job=rebuild-job-123" in resp.headers["Location"]
-        mock_registry.submit.assert_called_once()
-
-    @patch("recommender.web._run_rebuild_job")
-    @patch("recommender.web.job_registry")
-    def test_rebuild_defaults_to_profile(self, mock_registry, mock_run, client):
-        """POST /rebuild with no flags should default to refresh_profile=True."""
-        mock_registry.submit.return_value = "rebuild-job-456"
-        resp = client.post("/rebuild", data=_csrf_form())
-        assert resp.status_code == 302
-        mock_registry.submit.assert_called_once()
-        call_kwargs = mock_registry.submit.call_args
-        assert call_kwargs.kwargs["refresh_profile"] is True
-
-    @patch("recommender.web._run_rebuild_job")
-    @patch("recommender.web.job_registry")
-    def test_rebuild_accepts_profile_and_data_flags(self, mock_registry, mock_run, client):
-        """POST /rebuild should preserve both flags for full data rebuilds."""
-        mock_registry.submit.return_value = "rebuild-job-789"
-        resp = client.post("/rebuild", data=_csrf_form(refresh_profile="1", refresh_data="1"))
-        assert resp.status_code == 302
-        mock_registry.submit.assert_called_once()
-        call_kwargs = mock_registry.submit.call_args
-        assert call_kwargs.kwargs["refresh_profile"] is True
-        assert call_kwargs.kwargs["refresh_data"] is True
+        assert resp.status_code in (404, 405)
 
 
 # ── CSRF enforcement ──────────────────────────────────────────────────────────

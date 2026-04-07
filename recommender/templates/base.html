@@ -226,5 +226,21 @@
     {% block content %}{% endblock %}
   </main>
 
+  <footer style="border-top:1px solid var(--border); padding:1.5rem 2rem; display:flex; align-items:center; justify-content:center; gap:1.5rem; flex-wrap:wrap;">
+    <span class="mono" style="font-size:0.58rem; letter-spacing:0.08em; color:var(--muted);">
+      {{ footer_provider }} / {{ footer_model }}
+    </span>
+    {% if footer_profile_built_at %}
+    <span style="color:var(--border);">·</span>
+    <span class="mono" style="font-size:0.58rem; letter-spacing:0.08em; color:var(--muted);">
+      profile built {{ footer_profile_built_at[:10] }}
+    </span>
+    {% endif %}
+    <span style="color:var(--border);">·</span>
+    <a href="/status" class="mono" style="font-size:0.58rem; letter-spacing:0.08em; color:var(--muted); text-decoration:none;">status</a>
+    <span style="color:var(--border);">·</span>
+    <a href="https://github.com/abhichandra21/streamline" target="_blank" rel="noopener" class="mono" style="font-size:0.58rem; letter-spacing:0.08em; color:var(--muted); text-decoration:none;">github</a>
+  </footer>
+
 </body>
 </html>

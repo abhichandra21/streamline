@@ -8,31 +8,14 @@
   <p style="color:var(--muted); font-size:0.85rem;">Runtime settings take effect on save unless a background job is still running. Scoring, manual title, and profile-related changes require a rebuild. Local watch-history paths belong in config.local.yaml.</p>
 </div>
 
-{% if rebuild_job_id %}
-<div id="rebuild-banner"
-     hx-get="/jobs/{{ rebuild_job_id }}/rebuild-status"
-     hx-trigger="load, every 2s"
-     hx-target="#rebuild-banner"
-     hx-swap="outerHTML"
-     style="padding:0.75rem 1.25rem; background:rgba(167,139,250,0.08); border:1px solid rgba(167,139,250,0.2); border-radius:6px; margin-bottom:1.5rem; display:flex; align-items:center; gap:0.6rem;">
-  <div style="width:12px; height:12px; border:2px solid rgba(167,139,250,0.3); border-top-color:var(--lavender); border-radius:50%; animation:spin 0.6s linear infinite; flex-shrink:0;"></div>
-  <span style="font-size:0.85rem; color:var(--lavender);">Rebuilding...</span>
-</div>
-{% endif %}
-
-{% if saved and rebuild_required %}
-<div style="padding:0.75rem 1.25rem; background:rgba(240,160,64,0.1); border:1px solid rgba(240,160,64,0.25); border-radius:6px; margin-bottom:1.5rem; font-size:0.85rem; display:flex; align-items:center; justify-content:space-between;">
+{% if saved and rebuild_command %}
+<div style="padding:0.75rem 1.25rem; background:rgba(240,160,64,0.1); border:1px solid rgba(240,160,64,0.25); border-radius:6px; margin-bottom:1.5rem; font-size:0.85rem;">
   <span style="color:var(--accent2);">
     Settings saved.
     {% if reload_deferred %}Runtime reload will apply after current background jobs finish.{% endif %}
-    Some changes affect the taste profile and require a rebuild to take effect.
+    Some changes require a rebuild to take effect. Run:
   </span>
-  <form method="post" action="/rebuild" style="margin:0; flex-shrink:0;">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="refresh_profile" value="{{ '1' if rebuild_refresh_profile else '0' }}">
-    <input type="hidden" name="refresh_data" value="{{ '1' if rebuild_refresh_data else '0' }}">
-    <button type="submit" class="btn-ghost" style="padding:4px 14px; font-size:0.6rem; border-color:var(--accent2); color:var(--accent2);">Rebuild Now</button>
-  </form>
+  <pre style="margin:0.5rem 0 0; padding:0.5rem 0.75rem; background:var(--bg); border:1px solid var(--border); border-radius:4px; font-family:'JetBrains Mono', monospace; font-size:0.8rem; color:var(--text); user-select:all;">{{ rebuild_command }}</pre>
 </div>
 {% elif saved and reload_deferred %}
 <div style="padding:0.75rem 1.25rem; background:rgba(240,160,64,0.1); border:1px solid rgba(240,160,64,0.25); border-radius:6px; margin-bottom:1.5rem; font-size:0.85rem; color:var(--accent2);">

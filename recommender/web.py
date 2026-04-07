@@ -149,17 +149,6 @@ def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
     return items
 
 
-# ── Background job: setup / profile rebuild ───────────────────────────────────
-
-def _run_rebuild_job(refresh_profile: bool, refresh_data: bool) -> None:
-    global _ctx
-    from recommender.setup import run_setup
-    run_setup(refresh_profile=refresh_profile, refresh_data=refresh_data)
-    with _ctx_lock:
-        _ctx = None
-    log.info("Rebuild complete (refresh_profile=%s, refresh_data=%s)", refresh_profile, refresh_data)
-
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _load_enrichments() -> dict[str, str]:
@@ -233,6 +222,18 @@ def _csrf_valid() -> bool:
 @app.context_processor
 def _inject_csrf() -> dict:
     return {"csrf_token": _get_csrf_token()}
+
+
+@app.context_processor
+def _inject_footer() -> dict:
+    provider = config.LLM_PROVIDER
+    models = config.LLM_MODELS.get(provider, {})
+    reason_model = models.get("reason", "")
+    return {
+        "footer_provider": provider,
+        "footer_model": reason_model,
+        "footer_profile_built_at": _profile_built_at(),
+    }
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -430,15 +431,6 @@ def poll_job(job_id: str) -> str:
     return render_template("_results.html", results=result["items"], query=result["query"], error=None)
 
 
-@app.route("/jobs/<job_id>/rebuild-status")
-def rebuild_status(job_id: str) -> str:
-    """HTMX polling endpoint for setup/rebuild jobs."""
-    job = job_registry.get(job_id)
-    if job is None:
-        return ""
-    return render_template("_rebuild_banner.html", job=job)
-
-
 @app.route("/title/<int:tmdb_id>")
 def title_detail(tmdb_id: int) -> str:
     ct = request.args.get("type", "tv")
@@ -569,11 +561,21 @@ def _load_config_yaml() -> dict:
 
 
 def _save_config_yaml(cfg: dict) -> None:
+    saved_cfg = deepcopy(cfg)
+    platform_paths = saved_cfg.get("platform_paths")
+    if isinstance(platform_paths, dict):
+        saved_cfg["platform_paths"] = {
+            platform: value
+            for platform, value in platform_paths.items()
+            if not (value is None or (isinstance(value, str) and not value.strip()))
+        }
+        if not saved_cfg["platform_paths"]:
+            saved_cfg.pop("platform_paths", None)
     with open(_CONFIG_PATH, "w") as f:
         f.write("# Streamline configuration\n")
         f.write("# Set API keys in the environment. .env is optional local convenience.\n\n")
         f.write("# Put machine-specific watch-history paths in config.local.yaml.\n\n")
-        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        yaml.dump(saved_cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
 def _merge_settings_defaults(target: dict, source: dict) -> dict:
@@ -598,18 +600,13 @@ def _render_settings_page(
     *,
     saved: str | bool | None = None,
     error: str | None = None,
-    rebuild_required: bool = False,
-    rebuild_job_id: str | None = None,
-    rebuild_refresh_profile: bool = False,
-    rebuild_refresh_data: bool = False,
+    rebuild_command: str | None = None,
     reload_deferred: bool = False,
 ) -> str:
     resolved_cfg = _resolve_settings_config(cfg if cfg is not None else _load_config_yaml())
     return render_template(
         "settings.html", cfg=resolved_cfg, saved=saved, error=error,
-        rebuild_required=rebuild_required, rebuild_job_id=rebuild_job_id,
-        rebuild_refresh_profile=rebuild_refresh_profile,
-        rebuild_refresh_data=rebuild_refresh_data,
+        rebuild_command=rebuild_command,
         reload_deferred=reload_deferred,
     )
 
@@ -710,16 +707,10 @@ def _settings_refresh_flags(previous_cfg: dict, updated_cfg: dict) -> tuple[bool
 @app.route("/settings", methods=["GET"])
 def settings_page() -> str:
     saved = request.args.get("saved")
-    rebuild_required = request.args.get("rebuild_required") == "1"
-    rebuild_job_id = request.args.get("rebuild_job")
-    rebuild_refresh_profile = request.args.get("refresh_profile") == "1"
-    rebuild_refresh_data = request.args.get("refresh_data") == "1"
+    rebuild_command = request.args.get("rebuild_command")
     reload_deferred = request.args.get("reload_deferred") == "1"
     return _render_settings_page(
-        saved=saved, rebuild_required=rebuild_required,
-        rebuild_job_id=rebuild_job_id,
-        rebuild_refresh_profile=rebuild_refresh_profile,
-        rebuild_refresh_data=rebuild_refresh_data,
+        saved=saved, rebuild_command=rebuild_command,
         reload_deferred=reload_deferred,
     )
 
@@ -810,32 +801,18 @@ def settings_save() -> str:
     _save_config_yaml(cfg)
     reload_applied = _reload_app_config()
 
-    if refresh_profile or refresh_data:
-        return redirect(url_for(
-            "settings_page",
-            saved="1",
-            rebuild_required="1",
-            refresh_profile="1" if refresh_profile else "0",
-            refresh_data="1" if refresh_data else "0",
-            reload_deferred="1" if not reload_applied else "0",
-        ))
+    rebuild_command = None
+    if refresh_data:
+        rebuild_command = "./recommend setup --refresh-data"
+    elif refresh_profile:
+        rebuild_command = "./recommend setup --refresh-profile"
 
-    return redirect(url_for("settings_page", saved="1", reload_deferred="1" if not reload_applied else "0"))
-
-
-@app.route("/rebuild", methods=["POST"])
-def rebuild():
-    refresh_profile = request.form.get("refresh_profile") == "1"
-    refresh_data = request.form.get("refresh_data") == "1"
-    if not refresh_profile and not refresh_data:
-        refresh_profile = True
-    job_id = job_registry.submit(
-        _run_rebuild_job,
-        refresh_profile=refresh_profile,
-        refresh_data=refresh_data,
-        label="rebuilding taste profile" if refresh_profile else "rebuilding data",
-    )
-    return redirect(url_for("settings_page", rebuild_job=job_id))
+    return redirect(url_for(
+        "settings_page",
+        saved="1",
+        rebuild_command=rebuild_command or "",
+        reload_deferred="1" if not reload_applied else "0",
+    ))
 
 
 # ── Startup validation ─────────────────────────────────────────────────────────
