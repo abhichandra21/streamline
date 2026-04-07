@@ -1,8 +1,14 @@
 import csv
+import logging
 import re
+import tempfile
+import zipfile
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from .base import WatchEvent
+
+log = logging.getLogger("recommender.ingestion.prime")
 
 MIN_WATCH_SECONDS = 20 * 60  # 20 minutes — filters abandoned/skimmed content
 
@@ -15,6 +21,8 @@ _SEASON_RE = re.compile(
 
 _KEEP_MATERIAL = {'Feature', 'Full'}
 
+_TARGET_CSV = 'Viewing History.csv'
+
 
 def _classify(title: str) -> tuple[str, str]:
     """Return (content_type, series_name) for a Prime title.
@@ -26,9 +34,7 @@ def _classify(title: str) -> tuple[str, str]:
     """
     base = _SEASON_RE.sub('', title)
     if base == title:
-        # No season marker found — treat as movie
         return 'movie', title
-    # Season marker was present → it's a TV episode or season entry
     if '-' in base:
         series_name = base.rsplit('-', 1)[1].strip().rstrip(',')
     else:
@@ -40,7 +46,7 @@ def _clean(s: str) -> str:
     return s.strip().strip('"')
 
 
-def parse(filepath: str) -> list[WatchEvent]:
+def _parse_csv(filepath: str) -> list[WatchEvent]:
     """Parse Prime Video Viewing History CSV into WatchEvents."""
     events = []
     with open(filepath, newline='', encoding='utf-8') as f:
@@ -73,3 +79,34 @@ def parse(filepath: str) -> list[WatchEvent]:
                 profile=_clean(row['Profile Type']),
             ))
     return events
+
+
+def parse(path: str) -> list[WatchEvent]:
+    """Parse Prime Video watch history from a data export zip.
+
+    Args:
+        path: Path to the Prime Video data export .zip file.
+
+    Raises:
+        FileNotFoundError: If path does not exist.
+        ValueError: If the file type is unsupported or the expected CSV is missing.
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f'Prime Video export not found: {path}')
+    if p.suffix != '.zip':
+        raise ValueError(f'Prime Video path must be a .zip file, got: {path}')
+
+    with tempfile.TemporaryDirectory(prefix='prime_') as work_dir:
+        try:
+            with zipfile.ZipFile(path, 'r') as zf:
+                zf.extractall(work_dir)
+        except zipfile.BadZipFile as exc:
+            raise ValueError(f'Invalid zip file: {path} ({exc})') from exc
+
+        found = list(Path(work_dir).rglob(_TARGET_CSV))
+        if not found:
+            raise ValueError(f'{_TARGET_CSV} not found inside {path}')
+
+        log.info('Prime Video: reading %s', found[0])
+        return _parse_csv(str(found[0]))

@@ -22,6 +22,7 @@ from recommender import watch_index as wi
 from recommender.ingestion.manual import parse as parse_manual
 from recommender.ingestion.netflix import parse as parse_netflix
 from recommender.ingestion.prime import parse as parse_prime
+from recommender.ingestion.apple_tv import parse as parse_apple_tv
 from recommender.jobs import registry as job_registry
 from recommender.llm import create_client
 from recommender.query_engine import RecommendContext, ask
@@ -52,18 +53,15 @@ def _build_context() -> RecommendContext:
     global _ingestion_errors
     errors: list[str] = []
     events = []
-
-    for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime)]:
+    for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime), ("apple_tv", parse_apple_tv)]:
         path = config.PLATFORM_PATHS.get(platform)
-        if not path:
-            continue
-        try:
-            events.extend(parser(path))
-        except Exception as exc:
-            msg = f"{platform}: {exc}"
-            log.warning("Ingestion error — %s", msg)
-            errors.append(msg)
-
+        if path:
+            try:
+                platform_events = parser(path)
+            except (FileNotFoundError, ValueError) as exc:
+                log.warning("Skipping %s watch history for runtime context: %s", platform, exc)
+                continue
+            events.extend(platform_events)
     try:
         events.extend(parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH))
     except Exception as exc:
@@ -554,6 +552,7 @@ def _save_config_yaml(cfg: dict) -> None:
     with open(_CONFIG_PATH, "w") as f:
         f.write("# Streamline configuration\n")
         f.write("# Set API keys in the environment. .env is optional local convenience.\n\n")
+        f.write("# Put machine-specific watch-history paths in config.local.yaml.\n\n")
         yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
@@ -591,8 +590,8 @@ def _reload_app_config() -> None:
     global _ctx
     with _ctx_lock:
         importlib.reload(config)
-        _ctx = None
-    log.info("Config reloaded from config.yaml")
+        _ctx = None  # next request will rebuild context
+    log.info("Config reloaded from config.yaml with config.local.yaml overrides if present")
 
 
 def _parse_int_field(form, key: str, default: int) -> int:

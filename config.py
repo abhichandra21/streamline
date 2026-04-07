@@ -1,7 +1,8 @@
 """Configuration loader.
 
-Reads non-secret settings from config.yaml and secrets from the environment.
-All module-level attributes are available as before for backward compat.
+Reads non-secret settings from config.yaml plus optional local overrides from
+config.local.yaml. Secrets continue to come from the environment. All
+module-level attributes are available as before for backward compat.
 """
 
 import os
@@ -11,13 +12,28 @@ import yaml
 
 _ROOT = Path(__file__).parent
 
-# Load config.yaml
 _CONFIG_PATH = _ROOT / "config.yaml"
-if _CONFIG_PATH.exists():
-    with open(_CONFIG_PATH) as f:
-        _cfg = yaml.safe_load(f) or {}
-else:
-    _cfg = {}
+_LOCAL_CONFIG_PATH = _ROOT / "config.local.yaml"
+
+
+def _load_yaml(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        return yaml.safe_load(f) or {}
+
+
+def _merge_dicts(base: dict, override: dict) -> dict:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(merged.get(key), dict) and isinstance(value, dict):
+            merged[key] = _merge_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+_cfg = _merge_dicts(_load_yaml(_CONFIG_PATH), _load_yaml(_LOCAL_CONFIG_PATH))
 
 # ── Logging ──
 LOG_LEVEL = os.environ.get("LOG_LEVEL", _cfg.get("log_level", "WARNING")).upper()
@@ -122,8 +138,9 @@ def _resolve_platform_path(platform: str, default: str | None) -> str | None:
 
 
 PLATFORM_PATHS = {
-    "netflix": _resolve_platform_path("netflix", "data/netflix/ViewingActivity.csv"),
-    "prime": _resolve_platform_path("prime", "data/prime_video/Viewing History.csv"),
+    "netflix": _resolve_platform_path("netflix", "data/netflix/export.zip"),
+    "prime": _resolve_platform_path("prime", "data/prime_video/Prime Video.zip"),
+    "apple_tv": _resolve_platform_path("apple_tv", "data/AppleTV/Apple Media Services Information Part 1 of 2.zip"),
     "disney": None,
     "hbo": None,
 }
