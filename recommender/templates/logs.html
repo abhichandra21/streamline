@@ -2,40 +2,314 @@
 {% block title %}Streamline — App Logs{% endblock %}
 {% block content %}
 
-<div style="margin-bottom:2rem;">
-  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">Diagnostics</span>
-  <h1 style="font-size:clamp(1.8rem, 4vw, 2.6rem); margin-top:0.2rem; margin-bottom:0.4rem;">App Logs</h1>
-  <p style="color:var(--muted); font-size:0.85rem;">
-    Recent entries from <code class="mono" style="font-size:0.78rem; color:var(--body);">{{ log_path }}</code>.
-    Showing last 200 lines. Read-only.
+<style>
+  /* ── Log line colors ─────────────────────────────────────────────────────── */
+  .log-error  { color: #f87171; }
+  .log-warn   { color: var(--accent2); }
+  .log-debug  { color: var(--muted); }
+  .log-info   { color: var(--body); }
+
+  .log-line.log-hidden { display: none; }
+  .log-line.log-highlight { background: rgba(232,93,74,0.12); border-radius: 2px; }
+
+  /* ── Log container ───────────────────────────────────────────────────────── */
+  #log-container {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  /* ── Toolbar ─────────────────────────────────────────────────────────────── */
+  .log-toolbar {
+    padding: 0.5rem 0.8rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--surface2);
+  }
+  .log-toolbar-left  { display: flex; align-items: center; gap: 0.4rem; }
+  .log-toolbar-right { display: flex; align-items: center; gap: 0.4rem; margin-left: auto; }
+
+  /* ── Toolbar icon buttons ────────────────────────────────────────────────── */
+  .tb-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    background: transparent;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .tb-btn:hover { border-color: var(--muted); color: var(--body); }
+  .tb-btn[data-active="true"] { background: var(--surface); border-color: var(--muted); color: var(--text); }
+
+  /* Tail active state */
+  #log-tail-toggle[data-active="true"] {
+    background: rgba(58,184,160,0.1);
+    border-color: var(--teal);
+    color: var(--teal);
+  }
+
+  /* Level pill colors when active */
+  .tb-btn[data-level="error"][data-active="true"] { border-color: #f87171; color: #f87171; background: rgba(248,113,113,0.07); }
+  .tb-btn[data-level="warn"][data-active="true"]  { border-color: var(--accent2); color: var(--accent2); background: rgba(240,160,64,0.07); }
+  .tb-btn[data-level="debug"][data-active="true"] { border-color: var(--muted); color: var(--muted); background: rgba(126,118,144,0.08); }
+
+  /* ── Search input ────────────────────────────────────────────────────────── */
+  #log-search {
+    height: 26px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    padding: 0 8px;
+    outline: none;
+    width: 120px;
+    transition: border-color 0.2s, width 0.25s;
+  }
+  #log-search::placeholder { color: var(--muted); font-size: 0.6rem; }
+  #log-search:focus { border-color: var(--accent); width: 180px; }
+
+  /* ── Line count select ───────────────────────────────────────────────────── */
+  #n-select {
+    height: 26px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--body);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    padding: 0 6px;
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%237e7690'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 6px center;
+    padding-right: 18px;
+  }
+  #n-select:hover { border-color: var(--muted); }
+  #n-select:focus { border-color: var(--accent); }
+  #n-select option { background: var(--surface); color: var(--body); }
+
+  /* ── Footer ──────────────────────────────────────────────────────────────── */
+  .log-footer {
+    padding: 0.35rem 0.8rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--surface2);
+  }
+
+  .scroll-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px; height: 24px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    cursor: pointer;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.7rem;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .scroll-btn:hover { border-color: var(--muted); color: var(--text); }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+
+<!-- ── Header ──────────────────────────────────────────────────────────────── -->
+<div style="margin-bottom:1.2rem;">
+  <span class="mono" style="font-size:0.6rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">Diagnostics</span>
+  <h1 style="font-size:clamp(1.5rem, 3vw, 2rem); margin-top:0.15rem; margin-bottom:0.15rem;">App Logs</h1>
+  <p style="color:var(--muted); font-size:0.78rem; margin:0;">
+    <code class="mono" style="font-size:0.7rem; color:var(--body);">{{ log_path }}</code>
   </p>
 </div>
 
-{% if not lines %}
-<div style="background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:2rem; text-align:center;">
-  <p class="mono" style="font-size:0.78rem; color:var(--muted);">No log entries yet. Run a setup or search to generate logs.</p>
-</div>
-{% else %}
-<div style="background:var(--surface); border:1px solid var(--border); border-radius:6px; overflow:hidden;">
-  <div style="padding:0.6rem 1rem; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between;">
-    <span class="mono" style="font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted);">{{ lines|length }} lines</span>
-    <span class="mono" style="font-size:0.62rem; color:var(--muted);">newest at bottom</span>
-  </div>
-  <pre style="margin:0; padding:1rem; overflow-x:auto; font-family:'JetBrains Mono',monospace; font-size:0.72rem; line-height:1.6; color:var(--body); max-height:70vh; overflow-y:auto;" id="log-pre">{% for line in lines %}<span class="log-line{% if ' ERROR' in line or ' CRITICAL' in line %} log-error{% elif ' WARNING' in line %} log-warn{% elif ' INFO' in line %} log-info{% endif %}">{{ line }}</span>
-{% endfor %}</pre>
-</div>
+<!-- ── Log viewer ──────────────────────────────────────────────────────────── -->
+<div id="log-container">
 
-<style>
-  .log-error { color: #f87171; }
-  .log-warn  { color: var(--accent2); }
-  .log-info  { color: var(--body); }
-</style>
+  <!-- Toolbar: one compact row -->
+  <div class="log-toolbar">
+    <div class="log-toolbar-left">
+      <button class="tb-btn" id="log-refresh-btn"
+        hx-get="/logs/lines?n={{ n }}"
+        hx-target="#log-lines-wrap"
+        hx-swap="innerHTML"
+        title="Reload log (R)">&#8635; Refresh</button>
+      <button class="tb-btn" id="log-tail-toggle" data-active="false"
+        title="Auto-refresh every 5s">&#9654; Tail</button>
+      <button class="tb-btn" data-level="error" data-active="false" title="Errors only">Err</button>
+      <button class="tb-btn" data-level="warn"  data-active="false" title="Warnings only">Warn</button>
+      <button class="tb-btn" data-level="debug" data-active="false" title="Debug only">Dbg</button>
+    </div>
+    <div class="log-toolbar-right">
+      <input id="log-search" type="search" placeholder="search..." autocomplete="off" spellcheck="false">
+      <select id="n-select" title="Lines to show">
+        {% for count in [50, 100, 200, 500] %}
+        <option value="{{ count }}" {{ 'selected' if n == count else '' }}>{{ count }} lines</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+
+  <!-- Log content -->
+  <div id="log-lines-wrap">
+    {% include "_log_lines.html" %}
+  </div>
+
+  <!-- Footer -->
+  <div class="log-footer">
+    <span class="mono" style="font-size:0.58rem; color:var(--muted);" id="log-line-count">{{ lines|length }} lines</span>
+    <div style="display:flex; gap:0.3rem;">
+      <button class="scroll-btn" id="scroll-top-btn" title="Scroll to top">&#8679;</button>
+      <button class="scroll-btn" id="scroll-bot-btn" title="Scroll to bottom">&#8681;</button>
+    </div>
+  </div>
+
+</div>
 
 <script>
-  // Scroll log to bottom on load
-  const pre = document.getElementById('log-pre');
-  if (pre) pre.scrollTop = pre.scrollHeight;
+(function () {
+  const refreshBtn = document.getElementById('log-refresh-btn');
+  const tailBtn    = document.getElementById('log-tail-toggle');
+  const searchBox  = document.getElementById('log-search');
+  const nSelect    = document.getElementById('n-select');
+  const lineCount  = document.getElementById('log-line-count');
+  const topBtn     = document.getElementById('scroll-top-btn');
+  const botBtn     = document.getElementById('scroll-bot-btn');
+  const levelBtns  = document.querySelectorAll('.tb-btn[data-level]');
+
+  let currentN    = {{ n }};
+  let tailTimer   = null;
+  let tailActive  = false;
+  let activeLevel = null;
+  let searchTerm  = '';
+
+  function getPre()  { return document.getElementById('log-pre'); }
+  function scrollBottom() { const p = getPre(); if (p) p.scrollTop = p.scrollHeight; }
+  function scrollTop()    { const p = getPre(); if (p) p.scrollTop = 0; }
+
+  function updateLineCount() {
+    const p = getPre();
+    if (!p) { lineCount.textContent = '0 lines'; return; }
+    const total   = p.querySelectorAll('.log-line').length;
+    const visible = p.querySelectorAll('.log-line:not(.log-hidden)').length;
+    lineCount.textContent = total === visible
+      ? total + ' lines'
+      : visible + ' / ' + total + ' lines';
+  }
+
+  function applyFilters() {
+    const p = getPre();
+    if (!p) return;
+    p.querySelectorAll('.log-line').forEach(function (line) {
+      var show = true;
+      if (activeLevel) show = line.classList.contains('log-' + activeLevel);
+      if (show && searchTerm) {
+        show = line.textContent.toLowerCase().indexOf(searchTerm) !== -1;
+        line.classList.toggle('log-highlight', show);
+      } else {
+        line.classList.remove('log-highlight');
+      }
+      line.classList.toggle('log-hidden', !show);
+    });
+    updateLineCount();
+  }
+
+  // Initial scroll
+  scrollBottom();
+
+  // After HTMX swap: re-apply filters, scroll, count
+  document.body.addEventListener('htmx:afterSwap', function (e) {
+    if (e.detail.target && e.detail.target.id === 'log-lines-wrap') {
+      applyFilters();
+      if (tailActive) scrollBottom();
+      updateLineCount();
+    }
+  });
+
+  // Level filter toggles
+  levelBtns.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var level = this.dataset.level;
+      if (activeLevel === level) {
+        activeLevel = null;
+        this.dataset.active = 'false';
+      } else {
+        levelBtns.forEach(function (b) { b.dataset.active = 'false'; });
+        activeLevel = level;
+        this.dataset.active = 'true';
+      }
+      applyFilters();
+    });
+  });
+
+  // Inline search
+  searchBox.addEventListener('input', function () {
+    searchTerm = this.value.toLowerCase().trim();
+    applyFilters();
+  });
+
+  // Line count dropdown
+  nSelect.addEventListener('change', function () {
+    currentN = parseInt(this.value);
+    var url = '/logs/lines?n=' + currentN;
+    // Update the refresh button target too
+    refreshBtn.setAttribute('hx-get', url);
+    htmx.process(refreshBtn);
+    htmx.ajax('GET', url, { target: '#log-lines-wrap', swap: 'innerHTML' });
+  });
+
+  // Tail toggle
+  tailBtn.addEventListener('click', function () {
+    tailActive = !tailActive;
+    this.dataset.active = tailActive ? 'true' : 'false';
+    this.innerHTML = tailActive ? '&#9632; Tail' : '&#9654; Tail';
+    if (tailActive) { startTail(); scrollBottom(); }
+    else stopTail();
+  });
+
+  function startTail() {
+    if (tailTimer) return;
+    tailTimer = setInterval(function () {
+      htmx.ajax('GET', '/logs/lines?n=' + currentN, {
+        target: '#log-lines-wrap', swap: 'innerHTML'
+      });
+    }, 5000);
+  }
+  function stopTail() { clearInterval(tailTimer); tailTimer = null; }
+
+  // Scroll buttons
+  topBtn.addEventListener('click', scrollTop);
+  botBtn.addEventListener('click', scrollBottom);
+
+  // Keyboard: R to refresh
+  document.addEventListener('keydown', function (e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === 'r' || e.key === 'R') htmx.trigger(refreshBtn, 'click');
+  });
+
+  updateLineCount();
+})();
 </script>
-{% endif %}
 
 {% endblock %}

@@ -1,0 +1,8 @@
+{% if not lines %}
+<div class="log-empty" style="padding:2rem; text-align:center;">
+  <p class="mono" style="font-size:0.78rem; color:var(--muted);">No log entries yet. Run a setup or search to generate logs.</p>
+</div>
+{% else %}
+<pre id="log-pre" style="margin:0; padding:1rem 1.2rem; overflow-x:auto; font-family:'JetBrains Mono',monospace; font-size:0.72rem; line-height:1.65; color:var(--body); max-height:65vh; overflow-y:auto; scroll-behavior:smooth;">{% for line in lines %}<span class="log-line{% if ' ERROR' in line or ' CRITICAL' in line %} log-error{% elif ' WARNING' in line %} log-warn{% elif ' DEBUG' in line %} log-debug{% else %} log-info{% endif %}">{{ line }}</span>
+{% endfor %}</pre>
+{% endif %}
