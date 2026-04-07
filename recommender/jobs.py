@@ -56,6 +56,10 @@ class JobRegistry:
             try:
                 job.result = fn(*args, **kwargs)
                 job.status = "done"
+            except SystemExit as exc:
+                log.error("Job %s (%s) exited with status %s", job_id[:8], label, exc.code)
+                job.error = f"Process exited with status {exc.code}"
+                job.status = "error"
             except Exception as exc:
                 log.exception("Job %s (%s) failed", job_id[:8], label)
                 job.error = str(exc)

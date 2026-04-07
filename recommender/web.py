@@ -386,11 +386,30 @@ def recommend_page() -> str:
 @app.route("/recommend", methods=["POST"])
 def recommend_post() -> str:
     query = (request.form.get("query") or "").strip()
-    if not query:
-        return render_template("_results.html", results=None, query="", error=None)
+    is_htmx = request.headers.get("HX-Request") == "true"
 
-    job_id = job_registry.submit(_run_recommend_job, query, label="recommend")
-    return render_template("_polling.html", job_id=job_id)
+    if not query:
+        if is_htmx:
+            return render_template("_results.html", results=None, query="", error=None)
+        return render_template("recommend.html", query="")
+
+    if is_htmx:
+        job_id = job_registry.submit(_run_recommend_job, query, label="recommend")
+        return render_template("_polling.html", job_id=job_id)
+
+    # Non-HTMX: run synchronously and return full page
+    try:
+        ctx = _get_job_context()
+        results = ask(query, ctx)
+        try:
+            query_history.record(query, results, ctx.llm.provider, ctx.llm.usage.summary())
+        except OSError as exc:
+            log.warning("Failed to persist query history for %r: %s", query, exc)
+        items = _build_result_items(results, ctx)
+        return render_template("recommend.html", query=query, results=items)
+    except Exception as exc:
+        log.exception("Error during recommendation")
+        return render_template("recommend.html", query=query, results=None, error=str(exc))
 
 
 @app.route("/jobs/<job_id>/poll")
@@ -578,11 +597,17 @@ def _render_settings_page(
     *,
     saved: str | bool | None = None,
     error: str | None = None,
-    job_id: str | None = None,
+    rebuild_required: bool = False,
+    rebuild_job_id: str | None = None,
+    rebuild_refresh_profile: bool = False,
+    rebuild_refresh_data: bool = False,
 ) -> str:
     resolved_cfg = _resolve_settings_config(cfg if cfg is not None else _load_config_yaml())
     return render_template(
-        "settings.html", cfg=resolved_cfg, saved=saved, error=error, job_id=job_id,
+        "settings.html", cfg=resolved_cfg, saved=saved, error=error,
+        rebuild_required=rebuild_required, rebuild_job_id=rebuild_job_id,
+        rebuild_refresh_profile=rebuild_refresh_profile,
+        rebuild_refresh_data=rebuild_refresh_data,
     )
 
 
@@ -652,9 +677,17 @@ def _settings_refresh_flags(previous_cfg: dict, updated_cfg: dict) -> tuple[bool
 
 @app.route("/settings", methods=["GET"])
 def settings_page() -> str:
-    job_id = request.args.get("job")
     saved = request.args.get("saved")
-    return _render_settings_page(saved=saved, job_id=job_id)
+    rebuild_required = request.args.get("rebuild_required") == "1"
+    rebuild_job_id = request.args.get("rebuild_job")
+    rebuild_refresh_profile = request.args.get("refresh_profile") == "1"
+    rebuild_refresh_data = request.args.get("refresh_data") == "1"
+    return _render_settings_page(
+        saved=saved, rebuild_required=rebuild_required,
+        rebuild_job_id=rebuild_job_id,
+        rebuild_refresh_profile=rebuild_refresh_profile,
+        rebuild_refresh_data=rebuild_refresh_data,
+    )
 
 
 @app.route("/settings", methods=["POST"])
@@ -744,15 +777,30 @@ def settings_save() -> str:
     _reload_app_config()
 
     if refresh_profile or refresh_data:
-        job_id = job_registry.submit(
-            _run_rebuild_job,
-            refresh_profile=refresh_profile,
-            refresh_data=refresh_data,
-            label="rebuilding taste profile" if refresh_profile else "rebuilding data",
-        )
-        return redirect(url_for("settings_page", job=job_id))
+        return redirect(url_for(
+            "settings_page",
+            saved="1",
+            rebuild_required="1",
+            refresh_profile="1" if refresh_profile else "0",
+            refresh_data="1" if refresh_data else "0",
+        ))
 
     return redirect(url_for("settings_page", saved="1"))
+
+
+@app.route("/rebuild", methods=["POST"])
+def rebuild():
+    refresh_profile = request.form.get("refresh_profile") == "1"
+    refresh_data = request.form.get("refresh_data") == "1"
+    if not refresh_profile and not refresh_data:
+        refresh_profile = True
+    job_id = job_registry.submit(
+        _run_rebuild_job,
+        refresh_profile=refresh_profile,
+        refresh_data=refresh_data,
+        label="rebuilding taste profile" if refresh_profile else "rebuilding data",
+    )
+    return redirect(url_for("settings_page", rebuild_job=job_id))
 
 
 # ── Application entry point ───────────────────────────────────────────────────
