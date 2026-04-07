@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Streamline — App Logs{% endblock %}
+{% block content %}
+
+<div style="margin-bottom:2rem;">
+  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">Diagnostics</span>
+  <h1 style="font-size:clamp(1.8rem, 4vw, 2.6rem); margin-top:0.2rem; margin-bottom:0.4rem;">App Logs</h1>
+  <p style="color:var(--muted); font-size:0.85rem;">
+    Recent entries from <code class="mono" style="font-size:0.78rem; color:var(--body);">{{ log_path }}</code>.
+    Showing last 200 lines. Read-only.
+  </p>
+</div>
+
+{% if not lines %}
+<div style="background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:2rem; text-align:center;">
+  <p class="mono" style="font-size:0.78rem; color:var(--muted);">No log entries yet. Run a setup or search to generate logs.</p>
+</div>
+{% else %}
+<div style="background:var(--surface); border:1px solid var(--border); border-radius:6px; overflow:hidden;">
+  <div style="padding:0.6rem 1rem; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between;">
+    <span class="mono" style="font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted);">{{ lines|length }} lines</span>
+    <span class="mono" style="font-size:0.62rem; color:var(--muted);">newest at bottom</span>
+  </div>
+  <pre style="margin:0; padding:1rem; overflow-x:auto; font-family:'JetBrains Mono',monospace; font-size:0.72rem; line-height:1.6; color:var(--body); max-height:70vh; overflow-y:auto;" id="log-pre">{% for line in lines %}<span class="log-line{% if ' ERROR' in line or ' CRITICAL' in line %} log-error{% elif ' WARNING' in line %} log-warn{% elif ' INFO' in line %} log-info{% endif %}">{{ line }}</span>
+{% endfor %}</pre>
+</div>
+
+<style>
+  .log-error { color: #f87171; }
+  .log-warn  { color: var(--accent2); }
+  .log-info  { color: var(--body); }
+</style>
+
+<script>
+  // Scroll log to bottom on load
+  const pre = document.getElementById('log-pre');
+  if (pre) pre.scrollTop = pre.scrollHeight;
+</script>
+{% endif %}
+
+{% endblock %}

@@ -478,6 +478,19 @@ def healthz():
     return jsonify({"status": "ok"}), 200
 
 
+@app.route("/logs")
+def logs_page() -> str:
+    log_path = Path(config.APP_LOG_PATH)
+    lines: list[str] = []
+    if log_path.exists():
+        try:
+            raw = log_path.read_text(encoding="utf-8", errors="replace")
+            lines = raw.splitlines()[-200:]
+        except OSError:
+            pass
+    return render_template("logs.html", lines=lines, log_path=str(log_path))
+
+
 @app.route("/status")
 def status():
     index_entries = 0
