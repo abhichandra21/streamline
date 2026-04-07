@@ -7,6 +7,7 @@ Type=simple
 User=abhishek
 WorkingDirectory=/home/abhishek/streamline
 EnvironmentFile=/home/abhishek/streamline/.env
+ExecStartPre=/home/abhishek/streamline/venv/bin/python3 -c "from recommender.web import validate_config; validate_config()"
 ExecStart=/home/abhishek/streamline/venv/bin/gunicorn \
     --workers 1 \
     --bind 127.0.0.1:5050 \

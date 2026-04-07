@@ -43,6 +43,7 @@ class JobRegistry:
     def __init__(self) -> None:
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
+        self._completion_callbacks: list[Callable[[Job], None]] = []
 
     def submit(self, fn: Callable[..., Any], *args: Any, label: str = "job", **kwargs: Any) -> str:
         job_id = str(uuid.uuid4())
@@ -53,6 +54,7 @@ class JobRegistry:
 
         def _run() -> None:
             job.status = "running"
+            callbacks: list[Callable[[Job], None]] = []
             try:
                 job.result = fn(*args, **kwargs)
                 job.status = "done"
@@ -66,6 +68,14 @@ class JobRegistry:
                 job.status = "error"
             finally:
                 job.finished_at = time.time()
+                with self._lock:
+                    callbacks = list(self._completion_callbacks)
+
+            for callback in callbacks:
+                try:
+                    callback(job)
+                except Exception:
+                    log.exception("Job completion callback failed for %s (%s)", job_id[:8], label)
 
         t = threading.Thread(target=_run, daemon=True, name=f"job-{job_id[:8]}")
         t.start()
@@ -82,6 +92,10 @@ class JobRegistry:
     def recent_jobs(self, n: int = 10) -> list[Job]:
         with self._lock:
             return sorted(self._jobs.values(), key=lambda j: j.started_at, reverse=True)[:n]
+
+    def add_completion_callback(self, callback: Callable[[Job], None]) -> None:
+        with self._lock:
+            self._completion_callbacks.append(callback)
 
     def _trim(self) -> None:
         """Keep only the most recent completed jobs to prevent unbounded growth."""

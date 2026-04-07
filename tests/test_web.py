@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from recommender import web
 from recommender.jobs import Job, JobRegistry
 from recommender.web import app
 
@@ -18,6 +19,13 @@ def client():
         with c.session_transaction() as sess:
             sess["csrf_token"] = "test-csrf-token"
         yield c
+
+
+@pytest.fixture(autouse=True)
+def reset_reload_state():
+    web._config_reload_pending = False
+    yield
+    web._config_reload_pending = False
 
 
 def _csrf_form(**kwargs):
@@ -79,6 +87,30 @@ class TestJobRegistry:
         assert registry.get("nonexistent") is None
 
 
+class TestDeferredConfigReload:
+    @patch("recommender.web.importlib.reload")
+    @patch("recommender.web.job_registry.running_jobs")
+    def test_reload_defers_while_jobs_running(self, mock_running_jobs, mock_reload):
+        mock_running_jobs.return_value = [MagicMock(label="rebuilding taste profile")]
+
+        applied = web._reload_app_config()
+
+        assert applied is False
+        assert web._config_reload_pending is True
+        mock_reload.assert_not_called()
+
+    @patch("recommender.web.importlib.reload")
+    @patch("recommender.web.job_registry.running_jobs")
+    def test_deferred_reload_applies_after_jobs_finish(self, mock_running_jobs, mock_reload):
+        web._config_reload_pending = True
+        mock_running_jobs.return_value = []
+
+        web._maybe_apply_deferred_reload()
+
+        mock_reload.assert_called_once_with(web.config)
+        assert web._config_reload_pending is False
+
+
 # ── /recommend progressive enhancement ────────────────────────────────────────
 
 class TestRecommendProgressive:
@@ -135,6 +167,7 @@ class TestSettingsSaveRebuild:
     @patch("recommender.web._load_config_yaml")
     def test_save_settings_does_not_trigger_rebuild(self, mock_load, mock_save, mock_reload, client):
         """Saving settings should never auto-trigger a rebuild job."""
+        mock_reload.return_value = True
         mock_load.return_value = {
             "provider": "anthropic",
             "models": {
@@ -185,6 +218,7 @@ class TestSettingsSaveRebuild:
     @patch("recommender.web._load_config_yaml")
     def test_save_rebuild_required_settings_flags_rebuild(self, mock_load, mock_save, mock_reload, client):
         """Changing scoring weights should flag rebuild_required without starting one."""
+        mock_reload.return_value = True
         mock_load.return_value = {
             "provider": "anthropic",
             "models": {
@@ -235,6 +269,7 @@ class TestSettingsSaveRebuild:
     @patch("recommender.web._load_config_yaml")
     def test_save_manual_settings_flags_data_rebuild(self, mock_load, mock_save, mock_reload, client):
         """Changing manual-title scoring inputs should preserve refresh_data for the rebuild action."""
+        mock_reload.return_value = True
         mock_load.return_value = {
             "provider": "anthropic",
             "models": {
@@ -279,6 +314,52 @@ class TestSettingsSaveRebuild:
             assert "refresh_profile=1" in resp.headers["Location"]
             assert "refresh_data=1" in resp.headers["Location"]
             mock_jobs.submit.assert_not_called()
+
+    @patch("recommender.web._reload_app_config")
+    @patch("recommender.web._save_config_yaml")
+    @patch("recommender.web._load_config_yaml")
+    def test_save_marks_reload_deferred_when_jobs_are_running(self, mock_load, mock_save, mock_reload, client):
+        """Saving while a background job is running should defer the runtime reload explicitly."""
+        mock_reload.return_value = False
+        mock_load.return_value = {
+            "provider": "anthropic",
+            "models": {
+                "anthropic": {"fast": "claude-haiku-4-5-20251001", "reason": "claude-sonnet-4-6"},
+                "gemini": {"fast": "gemini-2.5-flash", "reason": "gemini-2.5-flash"},
+                "openai": {"fast": "gpt-4.1-mini", "reason": "gpt-4.1", "base_url": None},
+            },
+            "llm": {
+                "timeout_fast": 30, "timeout_reason": 60,
+                "timeout_profile_batch": 60, "timeout_profile_merge": 300,
+                "tokens_fast": 200, "tokens_intent": 400, "tokens_ranking": 1000,
+                "tokens_suggestions": 300, "tokens_profile_batch": 800,
+                "tokens_profile_merge": 4000, "tokens_abandoned": 300,
+                "profile_batch_size": 200, "rate_limit_wait": 65,
+            },
+            "scoring": {
+                "weight_completion": 0.5, "weight_rewatch": 0.3, "weight_recency": 0.2,
+                "default_tv_runtime": 45, "default_movie_runtime": 90, "rewatch_saturation": 5,
+            },
+            "default_top_n": 3, "min_vote_count": 20, "min_rating": 0, "min_year": 0,
+            "recency_half_life_days": 90, "watch_region": "US", "streaming_platforms": [],
+            "manual": {"timestamp": "now", "tv_duration_minutes": 45, "movie_duration_minutes": 120},
+            "log_level": "WARNING",
+        }
+
+        resp = client.post("/settings", data=_csrf_form(
+            provider="gemini",
+            weight_completion="0.5", weight_rewatch="0.3", weight_recency="0.2",
+            default_top_n="3", min_vote_count="20", min_rating="0", min_year="0",
+            recency_half_life_days="90",
+            watch_region="US", streaming_platforms="",
+            log_level="WARNING",
+            manual_timestamp_mode="now",
+            manual_tv_duration="45", manual_movie_duration="120",
+        ))
+
+        assert resp.status_code == 302
+        assert "saved=1" in resp.headers["Location"]
+        assert "reload_deferred=1" in resp.headers["Location"]
 
 
 # ── Explicit rebuild ───────────────────────────────────────────────────────────

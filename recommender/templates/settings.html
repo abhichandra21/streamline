@@ -5,7 +5,7 @@
 <div style="margin-bottom:2rem;">
   <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">Configuration</span>
   <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:0.5rem;">Settings</h1>
-  <p style="color:var(--muted); font-size:0.85rem;">Runtime settings take effect immediately on save. Scoring, manual title, and profile-related changes require a rebuild. Local watch-history paths belong in config.local.yaml.</p>
+  <p style="color:var(--muted); font-size:0.85rem;">Runtime settings take effect on save unless a background job is still running. Scoring, manual title, and profile-related changes require a rebuild. Local watch-history paths belong in config.local.yaml.</p>
 </div>
 
 {% if rebuild_job_id %}
@@ -22,13 +22,21 @@
 
 {% if saved and rebuild_required %}
 <div style="padding:0.75rem 1.25rem; background:rgba(240,160,64,0.1); border:1px solid rgba(240,160,64,0.25); border-radius:6px; margin-bottom:1.5rem; font-size:0.85rem; display:flex; align-items:center; justify-content:space-between;">
-  <span style="color:var(--accent2);">Settings saved. Some changes affect the taste profile and require a rebuild to take effect.</span>
+  <span style="color:var(--accent2);">
+    Settings saved.
+    {% if reload_deferred %}Runtime reload will apply after current background jobs finish.{% endif %}
+    Some changes affect the taste profile and require a rebuild to take effect.
+  </span>
   <form method="post" action="/rebuild" style="margin:0; flex-shrink:0;">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="refresh_profile" value="{{ '1' if rebuild_refresh_profile else '0' }}">
     <input type="hidden" name="refresh_data" value="{{ '1' if rebuild_refresh_data else '0' }}">
     <button type="submit" class="btn-ghost" style="padding:4px 14px; font-size:0.6rem; border-color:var(--accent2); color:var(--accent2);">Rebuild Now</button>
   </form>
+</div>
+{% elif saved and reload_deferred %}
+<div style="padding:0.75rem 1.25rem; background:rgba(240,160,64,0.1); border:1px solid rgba(240,160,64,0.25); border-radius:6px; margin-bottom:1.5rem; font-size:0.85rem; color:var(--accent2);">
+  Settings saved. Runtime reload will apply after current background jobs finish.
 </div>
 {% elif saved %}
 <div style="padding:0.75rem 1.25rem; background:rgba(58,184,160,0.1); border:1px solid rgba(58,184,160,0.25); border-radius:6px; margin-bottom:1.5rem; font-size:0.85rem; color:var(--teal);">

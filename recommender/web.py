@@ -36,6 +36,7 @@ app.secret_key = os.environ.get("STREAMLINE_SECRET_KEY") or secrets.token_hex(32
 # ── Shared context (read-only after build; rebuilt on config change) ──────────
 _ctx: RecommendContext | None = None
 _ctx_lock = threading.Lock()
+_config_reload_pending = False
 
 # Ingestion errors from the last context build, surfaced in /status and UI
 _ingestion_errors: list[str] = []
@@ -241,7 +242,7 @@ def _check_auth() -> Response | None:
     password = os.environ.get("STREAMLINE_PASSWORD", "").strip()
     if not password:
         return None
-    if request.path in ("/healthz", "/status"):
+    if request.path == "/healthz":
         return None
     auth = request.authorization
     if auth and auth.password == password:
@@ -601,6 +602,7 @@ def _render_settings_page(
     rebuild_job_id: str | None = None,
     rebuild_refresh_profile: bool = False,
     rebuild_refresh_data: bool = False,
+    reload_deferred: bool = False,
 ) -> str:
     resolved_cfg = _resolve_settings_config(cfg if cfg is not None else _load_config_yaml())
     return render_template(
@@ -608,15 +610,45 @@ def _render_settings_page(
         rebuild_required=rebuild_required, rebuild_job_id=rebuild_job_id,
         rebuild_refresh_profile=rebuild_refresh_profile,
         rebuild_refresh_data=rebuild_refresh_data,
+        reload_deferred=reload_deferred,
     )
 
 
-def _reload_app_config() -> None:
-    global _ctx
+def _apply_runtime_config_reload_locked() -> None:
+    global _ctx, _config_reload_pending
+    importlib.reload(config)
+    _ctx = None  # next request will rebuild context
+    _config_reload_pending = False
+
+
+def _reload_app_config() -> bool:
+    global _config_reload_pending
     with _ctx_lock:
-        importlib.reload(config)
-        _ctx = None  # next request will rebuild context
+        running = job_registry.running_jobs()
+        if running:
+            _config_reload_pending = True
+            log.warning(
+                "Deferring config reload — %d job(s) still running: %s",
+                len(running),
+                ", ".join(j.label for j in running),
+            )
+            return False
+        _apply_runtime_config_reload_locked()
     log.info("Config reloaded from config.yaml with config.local.yaml overrides if present")
+    return True
+
+
+def _maybe_apply_deferred_reload(_job=None) -> None:
+    with _ctx_lock:
+        if not _config_reload_pending:
+            return
+        if job_registry.running_jobs():
+            return
+        _apply_runtime_config_reload_locked()
+    log.info("Applied deferred config reload after background jobs finished")
+
+
+job_registry.add_completion_callback(_maybe_apply_deferred_reload)
 
 
 def _parse_int_field(form, key: str, default: int) -> int:
@@ -682,11 +714,13 @@ def settings_page() -> str:
     rebuild_job_id = request.args.get("rebuild_job")
     rebuild_refresh_profile = request.args.get("refresh_profile") == "1"
     rebuild_refresh_data = request.args.get("refresh_data") == "1"
+    reload_deferred = request.args.get("reload_deferred") == "1"
     return _render_settings_page(
         saved=saved, rebuild_required=rebuild_required,
         rebuild_job_id=rebuild_job_id,
         rebuild_refresh_profile=rebuild_refresh_profile,
         rebuild_refresh_data=rebuild_refresh_data,
+        reload_deferred=reload_deferred,
     )
 
 
@@ -774,7 +808,7 @@ def settings_save() -> str:
     refresh_profile, refresh_data = _settings_refresh_flags(current_cfg, updated_cfg)
 
     _save_config_yaml(cfg)
-    _reload_app_config()
+    reload_applied = _reload_app_config()
 
     if refresh_profile or refresh_data:
         return redirect(url_for(
@@ -783,9 +817,10 @@ def settings_save() -> str:
             rebuild_required="1",
             refresh_profile="1" if refresh_profile else "0",
             refresh_data="1" if refresh_data else "0",
+            reload_deferred="1" if not reload_applied else "0",
         ))
 
-    return redirect(url_for("settings_page", saved="1"))
+    return redirect(url_for("settings_page", saved="1", reload_deferred="1" if not reload_applied else "0"))
 
 
 @app.route("/rebuild", methods=["POST"])
@@ -803,18 +838,26 @@ def rebuild():
     return redirect(url_for("settings_page", rebuild_job=job_id))
 
 
+# ── Startup validation ─────────────────────────────────────────────────────────
+
+def validate_config() -> None:
+    """Check required config. Called by run() and the systemd preflight check."""
+    if not config.TMDB_API_KEY:
+        raise RuntimeError("TMDB_API_KEY must be set.")
+    try:
+        create_client()
+    except (RuntimeError, ValueError) as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
 # ── Application entry point ───────────────────────────────────────────────────
 
 def run() -> None:
     from recommender.log import setup_logging
     setup_logging()
-    if not config.TMDB_API_KEY:
-        print("Error: TMDB_API_KEY must be set.", file=sys.stderr)
-        sys.exit(1)
     try:
-        # Validate only the configured provider's key
-        create_client()
-    except (RuntimeError, ValueError) as exc:
+        validate_config()
+    except RuntimeError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     host = os.environ.get("STREAMLINE_HOST", "127.0.0.1")
