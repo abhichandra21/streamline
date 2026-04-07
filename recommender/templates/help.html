@@ -23,22 +23,39 @@
     </div>
   </details>
 
-  <!-- Searching -->
-  <details class="help-details">
+  <!-- Query guide -->
+  <details class="help-details" id="query-guide" open>
     <summary class="help-summary">
       <svg class="help-arrow" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1 L7 5 L3 9" stroke="var(--teal)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      <span class="help-heading">Searching</span>
+      <span class="help-heading">Query guide</span>
     </summary>
     <div class="help-body">
-      <p>Type anything in the search bar on the <a href="/">home page</a>. Some examples:</p>
+      <p>This is the canonical guide to what you can ask Streamline. These examples match the current code paths.</p>
+      <p><strong>Standard recommendation queries</strong></p>
       <ul>
         <li><strong>Genre + mood</strong> — "gritty British crime drama", "feel-good Bollywood comedy"</li>
         <li><strong>Similar to</strong> — "spy thriller like Slow Horses", "something like Fleabag but darker"</li>
-        <li><strong>Specific requests</strong> — "give me 5 underrated sci-fi movies", "short documentary series"</li>
+        <li><strong>Runtime + count</strong> — "give me 5 underrated sci-fi movies", "90-minute thriller", "short documentary series"</li>
         <li><strong>Language/region</strong> — "Hindi crime thriller", "Korean romance", "French arthouse"</li>
-        <li><strong>Platform</strong> — "what's good on Netflix right now", "best Prime Video originals"</li>
-        <li><strong>Why not?</strong> — "why not The Bear?" explains why a title wasn't recommended</li>
+        <li><strong>Platform</strong> — "what's good on Netflix right now", "best Prime Video originals", "Apple TV+ sci-fi"</li>
       </ul>
+      <p><strong>Special query modes</strong></p>
+      <ul>
+        <li><strong>Why not?</strong> — "why not Slow Horses?" explains why a title was filtered out or never surfaced.</li>
+        <li><strong>Abandoned-watch advice</strong> — "I started Severance and stopped. Should I keep going?" or "I dropped The Boys after a few episodes. Worth finishing?"</li>
+      </ul>
+      <p><strong>Interactive refinements</strong> in <code>./recommend</code></p>
+      <ul>
+        <li><strong>More options</strong> — "what else?" or "anything else?" reruns the last query without repeating prior results.</li>
+        <li><strong>Pick from a prior result</strong> — "more like #2" uses the second result from the previous turn as the new anchor title.</li>
+        <li><strong>Refine the last request</strong> — "but something British", "something lighter", "make it a movie".</li>
+      </ul>
+      <p><strong>Command-style inputs</strong> are not recommendation queries.</p>
+      <ul>
+        <li><code>+liked Title</code>, <code>+disliked Title</code>, <code>+add Title tv|movie</code> work inside interactive mode.</li>
+        <li><code>./recommend --liked "Title"</code>, <code>--disliked</code>, <code>--add</code>, and <code>--history</code> are CLI commands.</li>
+      </ul>
+      <p><strong>Runtime note</strong> — ordinary recommendations run from the cached watch index and taste profile after setup. Abandoned-watch queries depend on raw watch events, so they are less useful if your provider zips are no longer available at runtime.</p>
       <p>Results show the title, TMDB rating, genres, a personalized explanation of why it matches your taste, and where it's streaming.</p>
     </div>
   </details>
@@ -66,7 +83,7 @@
       <p>Everything goes through <code>./recommend</code>:</p>
       <table class="help-table">
         <tr><td><code>./recommend "query"</code></td><td>Single query</td></tr>
-        <tr><td><code>./recommend</code></td><td>Interactive mode (conversational, supports "more like that")</td></tr>
+        <tr><td><code>./recommend</code></td><td>Interactive mode with refinements like "what else?", "more like #2", and follow-up edits</td></tr>
         <tr><td><code>./recommend setup</code></td><td>First-time offline setup</td></tr>
         <tr><td><code>./recommend setup --refresh-data</code></td><td>Re-fetch TMDB metadata + rebuild everything</td></tr>
         <tr><td><code>./recommend setup --refresh-profile</code></td><td>Rebuild taste profile only</td></tr>
@@ -78,6 +95,7 @@
         <tr><td><code>./recommend --disliked "Title"</code></td><td>Mark a title as disliked</td></tr>
         <tr><td><code>./recommend --add "Title" --type tv</code></td><td>Add to watch history</td></tr>
       </table>
+      <p style="margin-top:1rem;">Inside interactive mode, you can also type <code>+liked Title</code>, <code>+disliked Title</code>, or <code>+add Title tv|movie</code>.</p>
 
       <p style="margin-top:1rem;">Web server:</p>
       <table class="help-table">

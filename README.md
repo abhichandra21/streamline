@@ -101,8 +101,9 @@ Everything goes through `./recommend`:
 ./recommend "paranoid spy thriller like The Night Manager"
 ./recommend "give me 5 feel-good Bollywood comedies"
 ./recommend "why not Slow Horses?"              # explains why a title wasn't recommended
+./recommend "I started Severance and stopped. Should I keep going?"
 
-# Interactive mode (conversational — supports "more like that", refinements)
+# Interactive mode (supports "what else?", "more like #2", and follow-up refinements)
 ./recommend
 
 # Setup
@@ -120,6 +121,8 @@ Everything goes through `./recommend`:
 ./recommend -n 5 "dark thriller"                # override result count
 ./recommend --provider gemini "spy thriller"     # use Gemini instead of default
 ```
+
+The built-in Help page is the canonical query guide. After starting the web UI, see `/help#query-guide` for supported recommendation queries, abandoned-watch queries, conversational refinements, and command-style inputs.
 
 Each query prints token usage and estimated cost at the end.
 
