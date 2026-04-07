@@ -12,8 +12,10 @@
     hx-post="/recommend" hx-target="#results" hx-swap="innerHTML" hx-indicator="#spinner"
     style="display:flex; gap:0; max-width:680px;"
   >
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
     <input
       type="text" name="query" value="{{ query }}"
+      id="query-input"
       placeholder="slow-burn British crime drama..."
       class="input-field"
       style="padding:0.85rem 1.25rem; flex:1; border-radius:4px 0 0 4px; border-right:none;"
@@ -27,6 +29,12 @@
     <span class="mono" style="font-size:0.65rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">Finding matches...</span>
   </div>
 </div>
+
+{% if error %}
+<div style="padding:1rem 1.25rem; background:rgba(232,93,74,0.08); border:1px solid rgba(232,93,74,0.2); border-radius:6px; font-size:0.88rem; color:#e88; margin-bottom:1.5rem;">
+  {{ error }}
+</div>
+{% endif %}
 
 <div id="results">
   {% if results is not none %}

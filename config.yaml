@@ -47,10 +47,6 @@ manual:
   movie_duration_minutes: 120
 watch_region: US
 streaming_platforms: []
-platform_paths:
-  netflix:
-  prime:
-  apple_tv:
 manual_tv_path: data/manual/tv.csv
 manual_movies_path: data/manual/movies.csv
 overrides_path: data/overrides.json

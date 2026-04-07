@@ -105,10 +105,22 @@ start() {
         exit 1
     fi
 
+    # Preflight: validate API keys and provider config before backgrounding
+    if ! "$VENV/bin/python3" -c "from recommender.web import validate_config; validate_config()" 2>&1; then
+        echo "Error: config validation failed. Check API keys and provider settings." >&2
+        exit 1
+    fi
+
     echo "Starting Streamline web UI on http://$HOST:$PORT ..."
     export STREAMLINE_HOST="$HOST"
     export STREAMLINE_PORT="$PORT"
-    nohup python3 -m recommender.web >> "$LOGFILE" 2>&1 &
+    nohup "$VENV/bin/gunicorn" \
+        --workers 1 \
+        --bind "$HOST:$PORT" \
+        --timeout 120 \
+        --access-logfile - \
+        --error-logfile - \
+        'recommender.web:app' >> "$LOGFILE" 2>&1 &
     echo $! > "$PIDFILE"
 
     if wait_for_port; then

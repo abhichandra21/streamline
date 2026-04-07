@@ -6,6 +6,12 @@
   <title>{% block title %}Streamline{% endblock %}</title>
   <link rel="icon" type="image/png" href="/static/logo.png">
   <script src="https://unpkg.com/htmx.org@2.0.2" integrity="sha384-Y7hw+L/jvKeWIRRkqWYfPcvVxHzVzn5REgzbawhxAuQGwX1XWe70vji+VSeHOThJ" crossorigin="anonymous"></script>
+  <script>
+    // Inject CSRF token into every HTMX request automatically
+    document.addEventListener('htmx:configRequest', function(evt) {
+      evt.detail.headers['X-CSRF-Token'] = '{{ csrf_token }}';
+    });
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -219,6 +225,22 @@
   <main style="max-width:54rem; margin:0 auto; padding:2.5rem 2rem 5rem;">
     {% block content %}{% endblock %}
   </main>
+
+  <footer style="border-top:1px solid var(--border); padding:1.5rem 2rem; display:flex; align-items:center; justify-content:center; gap:1.5rem; flex-wrap:wrap;">
+    <span class="mono" style="font-size:0.58rem; letter-spacing:0.08em; color:var(--muted);">
+      {{ footer_provider }} / {{ footer_model }}
+    </span>
+    {% if footer_profile_built_at %}
+    <span style="color:var(--border);">·</span>
+    <span class="mono" style="font-size:0.58rem; letter-spacing:0.08em; color:var(--muted);">
+      profile built {{ footer_profile_built_at[:10] }}
+    </span>
+    {% endif %}
+    <span style="color:var(--border);">·</span>
+    <a href="/status" class="mono" style="font-size:0.58rem; letter-spacing:0.08em; color:var(--muted); text-decoration:none;">status</a>
+    <span style="color:var(--border);">·</span>
+    <a href="https://github.com/abhichandra21/streamline" target="_blank" rel="noopener" class="mono" style="font-size:0.58rem; letter-spacing:0.08em; color:var(--muted); text-decoration:none;">github</a>
+  </footer>
 
 </body>
 </html>

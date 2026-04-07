@@ -1,5 +1,21 @@
 # Repository Guidelines
 
+## Product Philosophy
+
+Streamline is a personal media system for one owner. Optimize for trust, clarity, and low operational burden over scale, abstraction, or SaaS-style architecture.
+
+The product is the local library, profile, and recommendation quality. Every interface should strengthen that core model rather than compete with it or hide it behind unnecessary automation.
+
+The CLI and web UI are both valid interfaces to the same system. Put each task in the interface that makes it clearer and safer, not the one that looks more "production". Browser-based settings are acceptable when they remain understandable and recoverable.
+
+State-changing or expensive operations must be explicit, observable, and recoverable. Saving a setting, rebuilding derived data, and ingesting watch history are different actions and should not be blurred together.
+
+Convenience features are welcome, but they must not remove the simple fallback path. A user should always be able to understand what happened, inspect the local state, and recover with a direct command.
+
+Use progressive enhancement, not dependency layering. HTMX, JavaScript, background jobs, and deployment packaging may improve the experience, but core workflows must continue to work when optional layers fail.
+
+Do not add infrastructure or complexity unless it materially improves the single-user experience. Prefer the simplest design that keeps behavior predictable and the system easy to operate.
+
 ## Project Structure & Module Organization
 
 Core application code lives in `recommender/`. Key areas:

@@ -1,3 +1,4 @@
+import importlib
 import os
 import shutil
 import subprocess
@@ -232,16 +233,14 @@ def _settings_test_client(tmp_path, monkeypatch, raw_cfg: dict | None = None):
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(raw_cfg or {}, sort_keys=False))
 
-    refresh_calls: list[tuple[bool, bool]] = []
-
-    def record_refresh(*, refresh_profile: bool, refresh_data: bool) -> None:
-        refresh_calls.append((refresh_profile, refresh_data))
-
     monkeypatch.setattr(web, "_CONFIG_PATH", config_path)
     monkeypatch.setattr(web, "_reload_app_config", lambda: None)
-    monkeypatch.setattr(web, "_refresh_derived_data", record_refresh)
-    web.app.config.update(TESTING=True)
-    return web.app.test_client(), config_path, refresh_calls, web
+    web.app.config.update(TESTING=True, SECRET_KEY="test-secret")
+    client = web.app.test_client()
+    # Set up a CSRF token in the session
+    with client.session_transaction() as sess:
+        sess["csrf_token"] = "test-csrf-token"
+    return client, config_path, web
 
 
 def _settings_form_data(web, raw_cfg: dict | None = None, **overrides):
@@ -288,13 +287,14 @@ def _settings_form_data(web, raw_cfg: dict | None = None, **overrides):
         "manual_movie_duration": str(cfg["manual"]["movie_duration_minutes"]),
         "log_level": cfg["log_level"],
     }
+    data["_csrf_token"] = "test-csrf-token"
     data.update(overrides)
     return data
 
 
 def test_settings_page_populates_runtime_defaults_and_accepts_blank_numeric_fields(tmp_path, monkeypatch):
     raw_cfg = {"provider": "gemini"}
-    client, config_path, refresh_calls, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+    client, config_path, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
 
     response = client.get("/settings")
     body = response.get_data(as_text=True)
@@ -327,12 +327,11 @@ def test_settings_page_populates_runtime_defaults_and_accepts_blank_numeric_fiel
     assert saved_cfg["default_top_n"] == 3
     assert saved_cfg["recency_half_life_days"] == 90
     assert saved_cfg["manual"]["tv_duration_minutes"] == 45
-    assert refresh_calls == []
 
 
 def test_settings_save_preserves_custom_manual_timestamp(tmp_path, monkeypatch):
     raw_cfg = {"manual": {"timestamp": "2024-07-01"}}
-    client, config_path, refresh_calls, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+    client, config_path, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
 
     response = client.get("/settings")
     body = response.get_data(as_text=True)
@@ -349,12 +348,11 @@ def test_settings_save_preserves_custom_manual_timestamp(tmp_path, monkeypatch):
     assert post_response.status_code == 302
     saved_cfg = yaml.safe_load(config_path.read_text())
     assert saved_cfg["manual"]["timestamp"] == "2024-07-01"
-    assert refresh_calls == []
 
 
-def test_settings_save_rebuilds_profile_after_setup_only_change(tmp_path, monkeypatch):
+def test_settings_save_shows_rebuild_command_after_scoring_change(tmp_path, monkeypatch):
     raw_cfg = {"provider": "anthropic"}
-    client, _, refresh_calls, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+    client, _, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
 
     post_response = client.post(
         "/settings",
@@ -368,12 +366,15 @@ def test_settings_save_rebuilds_profile_after_setup_only_change(tmp_path, monkey
     )
 
     assert post_response.status_code == 302
-    assert refresh_calls == [(True, False)]
+    location = post_response.headers["Location"]
+    assert "saved=1" in location
+    assert "rebuild_command" in location
+    assert "refresh-profile" in location
 
 
 def test_settings_page_shows_default_api_key_env_as_placeholder(tmp_path, monkeypatch):
     raw_cfg = {"provider": "gemini"}
-    client, _, _, _ = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+    client, _, _ = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
 
     response = client.get("/settings")
     body = response.get_data(as_text=True)
@@ -386,7 +387,7 @@ def test_settings_page_shows_default_api_key_env_as_placeholder(tmp_path, monkey
 
 def test_settings_page_renders_provider_panels_for_client_side_switching(tmp_path, monkeypatch):
     raw_cfg = {"provider": "anthropic"}
-    client, _, _, _ = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+    client, _, _ = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
 
     response = client.get("/settings")
     body = response.get_data(as_text=True)
@@ -406,7 +407,7 @@ def test_settings_save_omits_default_api_key_env_names(tmp_path, monkeypatch):
             "openai": {"api_key_env": "OPENAI_API_KEY"},
         },
     }
-    client, config_path, _, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+    client, config_path, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
 
     post_response = client.post("/settings", data=_settings_form_data(web, raw_cfg))
 
@@ -428,7 +429,7 @@ def test_settings_save_preserves_custom_api_key_env_override(tmp_path, monkeypat
             },
         },
     }
-    client, config_path, _, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+    client, config_path, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
 
     post_response = client.post("/settings", data=_settings_form_data(web, raw_cfg))
 
@@ -448,7 +449,7 @@ def test_settings_save_clears_custom_api_key_env_override(tmp_path, monkeypatch)
             },
         },
     }
-    client, config_path, _, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+    client, config_path, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
 
     post_response = client.post(
         "/settings",
@@ -458,6 +459,46 @@ def test_settings_save_clears_custom_api_key_env_override(tmp_path, monkeypatch)
     assert post_response.status_code == 302
     saved_cfg = yaml.safe_load(config_path.read_text())
     assert "api_key_env" not in saved_cfg["models"]["openai"]
+
+
+def test_settings_save_preserves_explicit_platform_path_disables(tmp_path, monkeypatch):
+    raw_cfg = {
+        "platform_paths": {
+            "netflix": None,
+            "prime": "",
+            "apple_tv": "data/AppleTV/export.zip",
+        }
+    }
+    client, config_path, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+
+    post_response = client.post("/settings", data=_settings_form_data(web, raw_cfg))
+
+    assert post_response.status_code == 302
+    saved_cfg = yaml.safe_load(config_path.read_text())
+    assert saved_cfg["platform_paths"] == {
+        "netflix": None,
+        "prime": "",
+        "apple_tv": "data/AppleTV/export.zip",
+    }
+
+
+def test_web_module_initializes_logging_on_import():
+    import recommender.log as log_module
+    import recommender.web as web_module
+
+    original_setup_logging = log_module.setup_logging
+    calls: list[str | None] = []
+
+    def fake_setup_logging(level_override: str | None = None) -> None:
+        calls.append(level_override)
+
+    try:
+        log_module.setup_logging = fake_setup_logging
+        importlib.reload(web_module)
+        assert calls == [None]
+    finally:
+        log_module.setup_logging = original_setup_logging
+        importlib.reload(web_module)
 
 
 def test_recommend_web_uses_runtime_provider_for_api_key_check(tmp_path, monkeypatch):
