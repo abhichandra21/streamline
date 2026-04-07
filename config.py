@@ -138,9 +138,9 @@ def _resolve_platform_path(platform: str, default: str | None) -> str | None:
 
 
 PLATFORM_PATHS = {
-    "netflix": _resolve_platform_path("netflix", "data/netflix/ViewingActivity.csv"),
-    "prime": _resolve_platform_path("prime", "data/prime_video/Viewing History.csv"),
-    "apple_tv": _resolve_platform_path("apple_tv", None),
+    "netflix": _resolve_platform_path("netflix", "data/netflix/export.zip"),
+    "prime": _resolve_platform_path("prime", "data/prime_video/Prime Video.zip"),
+    "apple_tv": _resolve_platform_path("apple_tv", "data/AppleTV/Apple Media Services Information Part 1 of 2.zip"),
     "disney": None,
     "hbo": None,
 }

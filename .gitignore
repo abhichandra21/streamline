@@ -1,4 +1,4 @@
-data/
+data*
 recommender/cache/
 __pycache__/
 *.pyc

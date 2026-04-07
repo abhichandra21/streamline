@@ -82,11 +82,10 @@ def _parse_csv(filepath: str) -> list[WatchEvent]:
 
 
 def parse(path: str) -> list[WatchEvent]:
-    """Parse Prime Video watch history from a data export zip or CSV.
+    """Parse Prime Video watch history from a data export zip.
 
     Args:
-        path: Path to the Prime Video data export .zip file, or directly to
-              Viewing History.csv for backward compatibility.
+        path: Path to the Prime Video data export .zip file.
 
     Raises:
         FileNotFoundError: If path does not exist.
@@ -95,11 +94,8 @@ def parse(path: str) -> list[WatchEvent]:
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f'Prime Video export not found: {path}')
-    if p.suffix == '.csv':
-        log.info('Prime Video: reading %s', p)
-        return _parse_csv(str(p))
     if p.suffix != '.zip':
-        raise ValueError(f'Prime Video path must be a .zip or .csv file, got: {path}')
+        raise ValueError(f'Prime Video path must be a .zip file, got: {path}')
 
     with tempfile.TemporaryDirectory(prefix='prime_') as work_dir:
         try:

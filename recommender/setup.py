@@ -86,7 +86,7 @@ def run_ingest_only() -> None:
 
     configured = sum(1 for p in _PLATFORM_PARSERS if config.PLATFORM_PATHS.get(p[0]))
     if configured == 0:
-        console.print("\n[yellow]No providers configured. Set platform_paths in config.yaml.[/yellow]")
+        console.print("\n[yellow]No providers configured. Set platform_paths in config.local.yaml or config.yaml.[/yellow]")
         sys.exit(1)
 
     console.print(f"\n  Total: {len(events)} events")
