@@ -24,8 +24,10 @@ def client():
 @pytest.fixture(autouse=True)
 def reset_reload_state():
     web._config_reload_pending = False
+    web._ingestion_errors = []
     yield
     web._config_reload_pending = False
+    web._ingestion_errors = []
 
 
 def _csrf_form(**kwargs):
@@ -109,6 +111,55 @@ class TestDeferredConfigReload:
 
         mock_reload.assert_called_once_with(web.config)
         assert web._config_reload_pending is False
+
+
+class TestStatusObservability:
+    def test_build_context_records_provider_parse_failures(self, tmp_path, monkeypatch):
+        index_path = tmp_path / "watch_index.json"
+        profile_path = tmp_path / "profile.txt"
+        index_path.write_text("[]")
+        profile_path.write_text("taste profile")
+
+        monkeypatch.setattr(web.config, "PLATFORM_PATHS", {
+            "netflix": "/tmp/missing-export.zip",
+            "prime": None,
+            "apple_tv": None,
+        })
+        monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(index_path))
+        monkeypatch.setattr(web.config, "TASTE_PROFILE_PATH", str(profile_path))
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "tmdb")
+        monkeypatch.setattr(web.config, "CACHE_DIR", str(tmp_path / "cache"))
+        monkeypatch.setattr(web.config, "ENRICHMENT_CACHE_DIR", str(tmp_path / "enrich"))
+        monkeypatch.setattr(web.config, "PROVIDERS_CACHE_DIR", str(tmp_path / "providers"))
+        monkeypatch.setattr(web.config, "WATCH_REGION", "US")
+        monkeypatch.setattr(web.config, "STREAMING_PLATFORMS", [])
+
+        monkeypatch.setattr(web, "parse_netflix", lambda _path: (_ for _ in ()).throw(FileNotFoundError("missing export")))
+        monkeypatch.setattr(web, "parse_prime", lambda _path: [])
+        monkeypatch.setattr(web, "parse_apple_tv", lambda _path: [])
+        monkeypatch.setattr(web, "parse_manual", lambda *_args: [])
+        monkeypatch.setattr(web.wi, "load", lambda _path: MagicMock(entries=[]))
+        monkeypatch.setattr(web, "TmdbClient", lambda **_kwargs: object())
+        monkeypatch.setattr(web, "create_client", lambda: object())
+
+        web._build_context()
+
+        assert web._ingestion_errors == ["netflix: missing export"]
+
+    @patch("recommender.web.job_registry")
+    @patch("recommender.web._get_context")
+    def test_status_reports_degraded_when_ingestion_errors_exist(self, mock_get_context, mock_jobs, client):
+        mock_get_context.return_value = MagicMock(watch_index=MagicMock(entries=[]))
+        mock_jobs.running_jobs.return_value = []
+        mock_jobs.recent_jobs.return_value = []
+        web._ingestion_errors = ["netflix: missing export"]
+
+        resp = client.get("/status")
+
+        assert resp.status_code == 200
+        payload = resp.get_json()
+        assert payload["status"] == "degraded"
+        assert payload["ingestion_errors"] == ["netflix: missing export"]
 
 
 # ── /recommend progressive enhancement ────────────────────────────────────────

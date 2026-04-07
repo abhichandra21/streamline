@@ -25,6 +25,7 @@ from recommender.ingestion.prime import parse as parse_prime
 from recommender.ingestion.apple_tv import parse as parse_apple_tv
 from recommender.jobs import registry as job_registry
 from recommender.llm import create_client
+from recommender.log import setup_logging
 from recommender.query_engine import RecommendContext, ask
 from recommender.tmdb_client import TmdbClient
 
@@ -32,6 +33,7 @@ log = logging.getLogger("recommender.web")
 
 app = Flask(__name__, template_folder="templates")
 app.secret_key = os.environ.get("STREAMLINE_SECRET_KEY") or secrets.token_hex(32)
+setup_logging()
 
 # ── Shared context (read-only after build; rebuilt on config change) ──────────
 _ctx: RecommendContext | None = None
@@ -61,6 +63,7 @@ def _build_context() -> RecommendContext:
                 platform_events = parser(path)
             except (FileNotFoundError, ValueError) as exc:
                 log.warning("Skipping %s watch history for runtime context: %s", platform, exc)
+                errors.append(f"{platform}: {exc}")
                 continue
             events.extend(platform_events)
     try:
@@ -561,21 +564,11 @@ def _load_config_yaml() -> dict:
 
 
 def _save_config_yaml(cfg: dict) -> None:
-    saved_cfg = deepcopy(cfg)
-    platform_paths = saved_cfg.get("platform_paths")
-    if isinstance(platform_paths, dict):
-        saved_cfg["platform_paths"] = {
-            platform: value
-            for platform, value in platform_paths.items()
-            if not (value is None or (isinstance(value, str) and not value.strip()))
-        }
-        if not saved_cfg["platform_paths"]:
-            saved_cfg.pop("platform_paths", None)
     with open(_CONFIG_PATH, "w") as f:
         f.write("# Streamline configuration\n")
         f.write("# Set API keys in the environment. .env is optional local convenience.\n\n")
         f.write("# Put machine-specific watch-history paths in config.local.yaml.\n\n")
-        yaml.dump(saved_cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
 def _merge_settings_defaults(target: dict, source: dict) -> dict:

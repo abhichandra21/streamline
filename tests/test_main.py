@@ -1,3 +1,4 @@
+import importlib
 import os
 import shutil
 import subprocess
@@ -460,12 +461,12 @@ def test_settings_save_clears_custom_api_key_env_override(tmp_path, monkeypatch)
     assert "api_key_env" not in saved_cfg["models"]["openai"]
 
 
-def test_settings_save_omits_empty_platform_path_placeholders(tmp_path, monkeypatch):
+def test_settings_save_preserves_explicit_platform_path_disables(tmp_path, monkeypatch):
     raw_cfg = {
         "platform_paths": {
-            "netflix": "data/netflix/export.zip",
-            "prime": None,
-            "apple_tv": "",
+            "netflix": None,
+            "prime": "",
+            "apple_tv": "data/AppleTV/export.zip",
         }
     }
     client, config_path, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
@@ -474,7 +475,30 @@ def test_settings_save_omits_empty_platform_path_placeholders(tmp_path, monkeypa
 
     assert post_response.status_code == 302
     saved_cfg = yaml.safe_load(config_path.read_text())
-    assert saved_cfg["platform_paths"] == {"netflix": "data/netflix/export.zip"}
+    assert saved_cfg["platform_paths"] == {
+        "netflix": None,
+        "prime": "",
+        "apple_tv": "data/AppleTV/export.zip",
+    }
+
+
+def test_web_module_initializes_logging_on_import():
+    import recommender.log as log_module
+    import recommender.web as web_module
+
+    original_setup_logging = log_module.setup_logging
+    calls: list[str | None] = []
+
+    def fake_setup_logging(level_override: str | None = None) -> None:
+        calls.append(level_override)
+
+    try:
+        log_module.setup_logging = fake_setup_logging
+        importlib.reload(web_module)
+        assert calls == [None]
+    finally:
+        log_module.setup_logging = original_setup_logging
+        importlib.reload(web_module)
 
 
 def test_recommend_web_uses_runtime_provider_for_api_key_check(tmp_path, monkeypatch):

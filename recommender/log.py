@@ -10,6 +10,21 @@ import sys
 import config
 
 
+def _configure_named_handler(logger: logging.Logger, level: int, formatter: logging.Formatter) -> None:
+    handler = next(
+        (existing for existing in logger.handlers if getattr(existing, "_streamline_handler", False)),
+        None,
+    )
+    if handler is None:
+        handler = logging.StreamHandler(sys.stdout)
+        handler._streamline_handler = True
+        logger.addHandler(handler)
+
+    handler.setFormatter(formatter)
+    logger.setLevel(level)
+    logger.propagate = False
+
+
 def setup_logging(level_override: str | None = None) -> None:
     """Configure logging for all recommender modules.
 
@@ -19,19 +34,14 @@ def setup_logging(level_override: str | None = None) -> None:
     level_name = level_override or config.LOG_LEVEL
     level = getattr(logging, level_name, logging.WARNING)
 
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter(
+    formatter = logging.Formatter(
         "%(asctime)s %(name)s %(levelname)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
-    ))
+    )
 
     root = logging.getLogger("recommender")
-    root.setLevel(level)
-    root.addHandler(handler)
-    root.propagate = False
+    _configure_named_handler(root, level, formatter)
 
     # Route Werkzeug request logs through the same handler
     werkzeug_log = logging.getLogger("werkzeug")
-    werkzeug_log.setLevel(level)
-    werkzeug_log.addHandler(handler)
-    werkzeug_log.propagate = False
+    _configure_named_handler(werkzeug_log, level, formatter)
