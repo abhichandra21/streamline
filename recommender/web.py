@@ -17,6 +17,7 @@ from markupsafe import Markup, escape
 import config
 from recommender.ingestion.netflix import parse as parse_netflix
 from recommender.ingestion.prime import parse as parse_prime
+from recommender.ingestion.apple_tv import parse as parse_apple_tv
 from recommender.ingestion.manual import parse as parse_manual
 from recommender.tmdb_client import TmdbClient
 from recommender.query_engine import RecommendContext, ask
@@ -39,13 +40,18 @@ def _get_context() -> RecommendContext:
 
 def _build_context() -> RecommendContext:
     events = []
-    for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime)]:
+    for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime), ("apple_tv", parse_apple_tv)]:
         path = config.PLATFORM_PATHS.get(platform)
         if path:
             try:
-                events.extend(parser(path))
-            except Exception:
-                pass
+                platform_events = parser(path)
+            except (FileNotFoundError, ValueError) as exc:
+                # The dashboard can render from cached artifacts after setup. Missing
+                # provider exports should only reduce abandoned-title context, not
+                # block the entire UI.
+                log.warning("Skipping %s watch history for runtime context: %s", platform, exc)
+                continue
+            events.extend(platform_events)
     try:
         events.extend(parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH))
     except Exception:
@@ -418,6 +424,7 @@ def _save_config_yaml(cfg: dict) -> None:
     with open(_CONFIG_PATH, "w") as f:
         f.write("# Streamline configuration\n")
         f.write("# Set API keys in the environment. .env is optional local convenience.\n\n")
+        f.write("# Put machine-specific watch-history paths in config.local.yaml.\n\n")
         yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
@@ -454,7 +461,7 @@ def _reload_app_config() -> None:
     import importlib
     importlib.reload(config)
     _ctx = None  # next request will rebuild context
-    log.info("Config reloaded from config.yaml")
+    log.info("Config reloaded from config.yaml with config.local.yaml overrides if present")
 
 
 def _parse_int_field(form, key: str, default: int) -> int:

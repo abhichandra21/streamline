@@ -1,0 +1,8 @@
+# Local Streamline overrides.
+# Copy this file to config.local.yaml and update the provider paths for your machine.
+# config.local.yaml is gitignored and loaded after config.yaml.
+
+platform_paths:
+  netflix: data/netflix/export.zip
+  prime: data/prime_video/Prime Video.zip
+  apple_tv: data/AppleTV/Apple Media Services Information Part 1 of 2.zip

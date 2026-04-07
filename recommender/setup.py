@@ -11,6 +11,7 @@ log = logging.getLogger("recommender.setup")
 import config
 from recommender.ingestion.netflix import parse as parse_netflix
 from recommender.ingestion.prime import parse as parse_prime
+from recommender.ingestion.apple_tv import parse as parse_apple_tv
 from recommender.ingestion.manual import parse as parse_manual
 from recommender.signals import compute_scores
 from recommender.tmdb_client import TmdbClient
@@ -22,6 +23,88 @@ from recommender import feedback as fb
 from recommender import overrides as ov
 
 console = Console(stderr=True)
+
+
+_PLATFORM_PARSERS = [
+    ("netflix", parse_netflix),
+    ("prime", parse_prime),
+    ("apple_tv", parse_apple_tv),
+]
+
+
+def _load_all_events(strict: bool = False) -> tuple[list, bool]:
+    """Load watch events from all configured platforms.
+
+    Args:
+        strict: If True, any configured provider that fails validation causes
+                overall failure. Empty-but-valid exports remain acceptable.
+
+    Returns:
+        (events, ok) — ok is False if strict=True and any provider failed.
+    """
+    events = []
+    ok = True
+
+    for platform, parser in _PLATFORM_PARSERS:
+        path = config.PLATFORM_PATHS.get(platform)
+        if not path:
+            if strict:
+                console.print(f"  {platform}: [dim]disabled[/dim]")
+            continue
+        try:
+            platform_events = parser(path)
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"  {platform}: [red]FAIL[/red] {exc}")
+            ok = False
+            continue
+        if not platform_events:
+            console.print(f"  {platform}: [green]ok[/green] 0 events (no qualifying watch activity)")
+            continue
+        dates = [e.timestamp for e in platform_events]
+        console.print(f"  {platform}: [green]ok[/green] {len(platform_events)} events "
+                      f"({min(dates):%Y-%m-%d} to {max(dates):%Y-%m-%d})")
+        events.extend(platform_events)
+
+    # Manual ingestion (not subject to zip-only contract)
+    if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
+        try:
+            manual_events = parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH)
+            events.extend(manual_events)
+            console.print(f"  manual: [green]ok[/green] {len(manual_events)} events")
+        except FileNotFoundError:
+            console.print("  manual: [yellow]skipped[/yellow] (files not found)")
+
+    return events, ok
+
+
+def run_ingest_only() -> None:
+    """Strict preflight validation of configured provider zips."""
+    from collections import defaultdict
+
+    console.print("Validating watch history sources...")
+    events, ok = _load_all_events(strict=True)
+
+    configured = sum(1 for p in _PLATFORM_PARSERS if config.PLATFORM_PATHS.get(p[0]))
+    if configured == 0:
+        console.print("\n[yellow]No providers configured. Set platform_paths in config.local.yaml or config.yaml.[/yellow]")
+        sys.exit(1)
+
+    console.print(f"\n  Total: {len(events)} events")
+
+    if events:
+        by_platform = defaultdict(list)
+        for e in events:
+            by_platform[e.platform].append(e)
+        for platform, pevents in sorted(by_platform.items()):
+            tv_titles = {e.series_name for e in pevents if e.content_type == "tv"}
+            movie_titles = {e.series_name for e in pevents if e.content_type == "movie"}
+            console.print(f"  {platform}: {len(tv_titles)} TV shows, {len(movie_titles)} movies")
+
+    if not ok:
+        console.print("\n[red]Validation failed.[/red]")
+        sys.exit(1)
+
+    console.print("\n[green]All configured providers validated.[/green]")
 
 
 def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provider: str | None = None) -> None:
@@ -36,17 +119,13 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
     console.print(f"  LLM provider: {llm.provider}")
 
     console.print("Loading watch history...")
-    events = []
-    for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime)]:
-        path = config.PLATFORM_PATHS.get(platform)
-        if path:
-            platform_events = parser(path)
-            events.extend(platform_events)
-            console.print(f"  {platform}: {len(platform_events)} events")
-    if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
-        manual_events = parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH)
-        events.extend(manual_events)
-        console.print(f"  manual: {len(manual_events)} events")
+    events, ok = _load_all_events(strict=True)
+    if not ok:
+        console.print("[red]Aborting setup: one or more configured providers failed.[/red]")
+        sys.exit(1)
+    if not events:
+        console.print("[red]No watch events found. Add manual titles or provider exports with qualifying watch activity.[/red]")
+        sys.exit(1)
     console.print(f"  Total: {len(events)} events")
 
 
@@ -212,6 +291,8 @@ if __name__ == "__main__":
                         help="Rebuild taste profile even if it exists")
     parser.add_argument("--refresh-data", action="store_true",
                         help="Re-fetch TMDB metadata, watch index, and enrichments")
+    parser.add_argument("--ingest-only", action="store_true",
+                        help="Load and report on ingested data without TMDB or LLM calls")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
     parser.add_argument("--provider", choices=["anthropic", "gemini", "openai"],
@@ -219,5 +300,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     from recommender.log import setup_logging
     setup_logging(level_override="DEBUG" if args.debug else None)
-    run_setup(refresh_profile=args.refresh_profile, refresh_data=args.refresh_data,
-              provider=args.provider)
+    if args.ingest_only:
+        run_ingest_only()
+    else:
+        run_setup(refresh_profile=args.refresh_profile, refresh_data=args.refresh_data,
+                  provider=args.provider)

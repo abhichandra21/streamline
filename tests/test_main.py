@@ -96,24 +96,134 @@ def test_load_context_exits_if_no_taste_profile(tmp_path, monkeypatch):
         load_context()
 
 
+def test_load_context_skips_invalid_configured_provider(monkeypatch, capsys, tmp_path):
+    import config
+    import json
+    from recommender import main as main_module
+
+    index_path = tmp_path / 'watch_index.json'
+    index_path.write_text(json.dumps([{"tmdb_id": 0, "title": "downton abbey", "content_type": "tv"}]))
+    profile_path = tmp_path / 'profile.txt'
+    profile_path.write_text('taste profile')
+
+    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': '/tmp/missing.zip', 'prime': None, 'apple_tv': None})
+    monkeypatch.setattr(config, 'MANUAL_TV_PATH', None)
+    monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', None)
+    monkeypatch.setattr(config, 'WATCH_INDEX_PATH', str(index_path))
+    monkeypatch.setattr(config, 'TASTE_PROFILE_PATH', str(profile_path))
+    monkeypatch.setattr(config, 'TMDB_API_KEY', 'tmdb')
+    monkeypatch.setattr(main_module, 'create_client', lambda _provider=None: object())
+
+    ctx = main_module.load_context()
+
+    assert ctx.events == []
+    assert 'Skipping netflix watch history for runtime context' in capsys.readouterr().err
+
+
 def test_resolve_platform_path_uses_default_when_key_missing(monkeypatch):
     import config
 
     monkeypatch.setattr(config, '_paths', {})
 
-    resolved = config._resolve_platform_path('netflix', 'data/netflix/ViewingActivity.csv')
+    resolved = config._resolve_platform_path('netflix', 'data/netflix/export.zip')
 
-    assert resolved == str(config._ROOT / 'data/netflix/ViewingActivity.csv')
+    assert resolved == str(config._ROOT / 'data/netflix/export.zip')
 
 
 def test_resolve_platform_path_allows_explicit_disable(monkeypatch):
     import config
 
     monkeypatch.setattr(config, '_paths', {'netflix': None})
-    assert config._resolve_platform_path('netflix', 'data/netflix/ViewingActivity.csv') is None
+    assert config._resolve_platform_path('netflix', 'data/netflix/export.zip') is None
 
     monkeypatch.setattr(config, '_paths', {'netflix': ''})
-    assert config._resolve_platform_path('netflix', 'data/netflix/ViewingActivity.csv') is None
+    assert config._resolve_platform_path('netflix', 'data/netflix/export.zip') is None
+
+
+def test_merge_dicts_applies_local_overrides_recursively():
+    import config
+
+    base = {
+        "platform_paths": {"netflix": None, "prime": None},
+        "models": {"openai": {"fast": "base-fast"}},
+    }
+    local = {
+        "platform_paths": {"netflix": "data/netflix/export.zip"},
+        "models": {"openai": {"reason": "local-reason"}},
+    }
+
+    merged = config._merge_dicts(base, local)
+
+    assert merged["platform_paths"]["netflix"] == "data/netflix/export.zip"
+    assert merged["platform_paths"]["prime"] is None
+    assert merged["models"]["openai"]["fast"] == "base-fast"
+    assert merged["models"]["openai"]["reason"] == "local-reason"
+
+
+def test_run_ingest_only_exits_if_no_provider_zips_are_configured(monkeypatch, capsys):
+    import config
+    import recommender.setup as setup
+
+    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': None, 'prime': None, 'apple_tv': None})
+    monkeypatch.setattr(config, 'MANUAL_TV_PATH', 'manual-tv.csv')
+    monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', 'manual-movies.csv')
+    monkeypatch.setattr(setup, 'parse_manual', lambda *_args: [object()])
+
+    with pytest.raises(SystemExit) as exc_info:
+        setup.run_ingest_only()
+
+    assert exc_info.value.code == 1
+    assert 'No providers configured' in capsys.readouterr().err
+
+
+def test_web_build_context_skips_invalid_configured_provider(monkeypatch, tmp_path):
+    import config
+    from recommender import web
+    import json
+
+    index_path = tmp_path / 'watch_index.json'
+    index_path.write_text(json.dumps([{"tmdb_id": 0, "title": "downton abbey", "content_type": "tv"}]))
+    profile_path = tmp_path / 'profile.txt'
+    profile_path.write_text('taste profile')
+
+    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': '/tmp/missing.zip', 'prime': None, 'apple_tv': None})
+    monkeypatch.setattr(config, 'MANUAL_TV_PATH', None)
+    monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', None)
+    monkeypatch.setattr(config, 'WATCH_INDEX_PATH', str(index_path))
+    monkeypatch.setattr(config, 'TASTE_PROFILE_PATH', str(profile_path))
+    monkeypatch.setattr(config, 'TMDB_API_KEY', 'tmdb')
+    monkeypatch.setattr(web, 'create_client', lambda: object())
+    warnings = []
+    monkeypatch.setattr(web.log, 'warning', lambda message, *args: warnings.append(message % args))
+
+    ctx = web._build_context()
+
+    assert ctx.events == []
+    assert any('Skipping netflix watch history for runtime context' in message for message in warnings)
+
+
+def test_run_ingest_only_accepts_empty_provider_export(monkeypatch, capsys):
+    import config
+    import recommender.setup as setup
+
+    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': '/tmp/export.zip', 'prime': None, 'apple_tv': None})
+    monkeypatch.setattr(config, 'MANUAL_TV_PATH', None)
+    monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', None)
+    monkeypatch.setattr(setup, '_PLATFORM_PARSERS', [('netflix', lambda _path: [])])
+
+    setup.run_ingest_only()
+
+    assert 'netflix:' in capsys.readouterr().err
+
+
+def test_apple_tv_parse_reports_invalid_zip(tmp_path):
+    from recommender.ingestion.apple_tv import parse
+
+    bad_zip = tmp_path / 'bad.zip'
+    bad_zip.write_text('not a zip archive')
+
+    with pytest.raises(ValueError, match='Invalid zip file'):
+        parse(str(bad_zip))
 
 
 def _settings_test_client(tmp_path, monkeypatch, raw_cfg: dict | None = None):
@@ -357,7 +467,11 @@ def test_recommend_web_uses_runtime_provider_for_api_key_check(tmp_path, monkeyp
 
     activate_path = tmp_path / "venv" / "bin"
     activate_path.mkdir(parents=True)
-    (activate_path / "activate").write_text("# recommend-web test activation\n")
+    current_python_bin = Path(sys.executable).parent
+    (activate_path / "activate").write_text(
+        f'export PATH="{current_python_bin}:$PATH"\n'
+        f'export VIRTUAL_ENV="{current_python_bin.parent}"\n'
+    )
 
     cfg = yaml.safe_load((repo_root / "config.yaml").read_text())
     cfg["provider"] = "openai"
@@ -382,3 +496,176 @@ def test_recommend_web_uses_runtime_provider_for_api_key_check(tmp_path, monkeyp
     assert result.returncode == 1
     assert "taste profile not found" in result.stderr
     assert "OPENAI_API_KEY" not in result.stderr
+
+
+# ── 3b: apple_tv key in PLATFORM_PATHS ────────────────────────────────────
+
+def test_apple_tv_key_present_in_platform_paths():
+    import config
+    assert "apple_tv" in config.PLATFORM_PATHS
+
+
+# ── 3c: _resolve_platform_path with default=None ─────────────────────────
+
+def test_resolve_platform_path_with_none_default_returns_none_when_key_missing(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "_paths", {})
+    assert config._resolve_platform_path("apple_tv", None) is None
+
+
+# ── 3d: config.local.yaml overrides config.yaml when both present ─────────
+
+def test_local_config_overrides_base_config_when_both_files_present(tmp_path):
+    import config
+
+    base_file = tmp_path / "config.yaml"
+    base_file.write_text(
+        "provider: anthropic\nplatform_paths:\n  netflix: data/netflix/export.zip\n"
+    )
+    local_file = tmp_path / "config.local.yaml"
+    local_file.write_text(
+        "platform_paths:\n  apple_tv: /path/to/apple_export.zip\n"
+    )
+
+    base = config._load_yaml(base_file)
+    local = config._load_yaml(local_file)
+    merged = config._merge_dicts(base, local)
+
+    assert merged["provider"] == "anthropic"
+    assert merged["platform_paths"]["netflix"] == "data/netflix/export.zip"
+    assert merged["platform_paths"]["apple_tv"] == "/path/to/apple_export.zip"
+
+
+# ── 4c: Mixed: one provider fails, one succeeds -> strict mode exit 1 ──────
+
+def test_run_ingest_only_exits_if_one_provider_fails_in_strict_mode(monkeypatch, capsys):
+    import config
+    import recommender.setup as setup
+    from datetime import datetime, timedelta
+    from recommender.ingestion.base import WatchEvent
+
+    def _ok_parser(_path):
+        return [WatchEvent(
+            platform="netflix",
+            title="Succession",
+            content_type="tv",
+            series_name="Succession",
+            watched_duration=timedelta(hours=1),
+            total_duration=None,
+            timestamp=datetime(2026, 1, 1),
+            profile="",
+        )]
+
+    def _fail_parser(_path):
+        raise ValueError("corrupt zip")
+
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {
+        "netflix": "/tmp/netflix.zip",
+        "prime": "/tmp/prime.zip",
+        "apple_tv": None,
+    })
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [
+        ("netflix", _ok_parser),
+        ("prime", _fail_parser),
+    ])
+
+    with pytest.raises(SystemExit) as exc_info:
+        setup.run_ingest_only()
+
+    assert exc_info.value.code == 1
+    assert "FAIL" in capsys.readouterr().err
+
+
+# ── 4d: All providers valid with events -> prints TV/movie breakdown ────────
+
+def test_run_ingest_only_prints_tv_and_movie_summary(monkeypatch, capsys):
+    import config
+    import recommender.setup as setup
+    from datetime import datetime, timedelta
+    from recommender.ingestion.base import WatchEvent
+
+    def _parser(_path):
+        return [
+            WatchEvent(
+                platform="netflix",
+                title="Succession: Season 1: Episode 1 (Episode 1)",
+                content_type="tv",
+                series_name="Succession",
+                watched_duration=timedelta(hours=1),
+                total_duration=None,
+                timestamp=datetime(2026, 1, 1),
+                profile="",
+            ),
+            WatchEvent(
+                platform="netflix",
+                title="Inception",
+                content_type="movie",
+                series_name="Inception",
+                watched_duration=timedelta(hours=2),
+                total_duration=None,
+                timestamp=datetime(2026, 1, 2),
+                profile="",
+            ),
+        ]
+
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("netflix", _parser)])
+
+    setup.run_ingest_only()
+
+    err = capsys.readouterr().err
+    assert "TV shows" in err
+    assert "movies" in err
+
+
+# ── 4e: run_setup() with zero total events -> exit 1 ──────────────────────
+
+def test_run_setup_exits_with_no_watch_events_message(monkeypatch, capsys):
+    import config
+    import recommender.setup as setup
+
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "TMDB_API_KEY", "fake-tmdb-key")
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("netflix", lambda _path: [])])
+    class _FakeLLM:
+        provider = "anthropic"
+    monkeypatch.setattr(setup, "create_client", lambda _provider=None: _FakeLLM())
+
+    with pytest.raises(SystemExit) as exc_info:
+        setup.run_setup()
+
+    assert exc_info.value.code == 1
+    assert "No watch events found" in capsys.readouterr().err
+
+
+# ── 5c: Ordinary recommendation flow still works after provider zips removed
+
+def test_load_context_works_with_no_configured_providers(monkeypatch, tmp_path):
+    """After provider zips are removed, load_context returns cached index/profile."""
+    import config
+    import json
+    from recommender import main as main_module
+
+    index_path = tmp_path / "watch_index.json"
+    index_path.write_text(json.dumps([{"tmdb_id": 1, "title": "succession", "content_type": "tv"}]))
+    profile_path = tmp_path / "profile.txt"
+    profile_path.write_text("taste profile")
+
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": None, "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(index_path))
+    monkeypatch.setattr(config, "TASTE_PROFILE_PATH", str(profile_path))
+    monkeypatch.setattr(config, "TMDB_API_KEY", "tmdb")
+    monkeypatch.setattr(main_module, "create_client", lambda _provider=None: object())
+
+    ctx = main_module.load_context()
+
+    assert ctx.events == []
+    assert ctx.taste_profile == "taste profile"

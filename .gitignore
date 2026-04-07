@@ -1,9 +1,10 @@
-data/
+data*
 recommender/cache/
 __pycache__/
 *.pyc
 .env
 .envrc
+config.local.yaml
 .web.pid
 .web.log
 .superpowers/
