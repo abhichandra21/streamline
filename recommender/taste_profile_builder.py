@@ -197,11 +197,11 @@ def build(
     cached = _load_cached_batches(fingerprint, total)
     cached_count = sum(1 for c in cached if c is not None)
     if cached_count == total:
-        print(f"  All {total} batch profiles cached, skipping to merge...")
+        log.info("All %d batch profiles cached, skipping to merge...", total)
     elif cached_count > 0:
-        print(f"  Resuming: {cached_count}/{total} batch profiles cached, generating remaining...")
+        log.info("Resuming: %d/%d batch profiles cached, generating remaining...", cached_count, total)
     else:
-        print(f"  Building taste profile in {total} batches ({len(scored)} titles)...")
+        log.info("Building taste profile in %d batches (%d titles)...", total, len(scored))
 
     batch_profiles = []
     try:
@@ -210,7 +210,7 @@ def build(
                 batch_profiles.append(cached[i])
                 continue
 
-            print(f"  Batch {i+1}/{total} ({len(batch)} titles)...")
+            log.info("Batch %d/%d (%d titles)...", i + 1, total, len(batch))
             for attempt in range(3):
                 try:
                     profile = _build_batch_profile(batch, enrichments, i + 1, total, client)
@@ -225,27 +225,30 @@ def build(
                                     or "timeout" in err or "timed out" in err)
                     if is_retryable and attempt < 2:
                         wait = config.RATE_LIMIT_WAIT if "rate" in err or "429" in err else 10
-                        print(f"  {'Rate limited' if '429' in err else 'Timed out'}, "
-                              f"waiting {wait}s (attempt {attempt+1}/3)...")
+                        reason = "Rate limited" if "429" in err or "rate" in err else "Timed out"
+                        log.info("%s, waiting %ds (attempt %d/3)...", reason, wait, attempt + 1)
                         time.sleep(wait)
                     else:
                         log.warning("Batch %d failed (attempt %d): %s", i + 1, attempt + 1, exc)
                         if attempt == 2:
-                            print(f"  Warning: batch {i+1} failed after 3 retries, skipping.")
+                            log.warning("Batch %d failed after 3 retries, skipping.", i + 1)
     except KeyboardInterrupt:
         on_disk = sum(1 for f in _BATCH_DIR.glob("batch_*.txt")) if _BATCH_DIR.exists() else 0
-        print(f"\n  Interrupted. {on_disk}/{total} batches saved to cache.")
+        log.info("Interrupted. %d/%d batches saved to cache.", on_disk, total)
         if on_disk:
-            print(f"  Re-run --refresh-profile to resume from batch {on_disk + 1}.")
+            log.info("Re-run --refresh-profile to resume from batch %d.", on_disk + 1)
         raise
 
-    print(f"  Merging {len(batch_profiles)} batch profiles...")
+    log.info("Merging %d batch profiles...", len(batch_profiles))
     result = _merge_profiles(batch_profiles, client)
 
     if client.was_truncated:
-        print(f"  ERROR: Merge output was truncated ({len(result)} chars). "
-              f"Batch cache preserved — re-run --refresh-profile to retry merge only.")
-        print(f"  To fix: increase llm.tokens_profile_merge in config.yaml (currently {config.TOKENS_PROFILE_MERGE}).")
+        log.error(
+            "Merge output was truncated (%d chars). Batch cache preserved — "
+            "re-run --refresh-profile to retry merge only. "
+            "To fix: increase llm.tokens_profile_merge in config.yaml (currently %d).",
+            len(result), config.TOKENS_PROFILE_MERGE,
+        )
         log.error("Profile merge truncated at %d chars. Batches preserved.", len(result))
         raise RuntimeError(f"Profile merge truncated. Increase llm.tokens_profile_merge (currently {config.TOKENS_PROFILE_MERGE}).")
 

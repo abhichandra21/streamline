@@ -45,24 +45,23 @@ def report_unmatched(
     unmatched_titles: list[dict],
     overrides_path: str,
 ) -> None:
-    """Print unmatched titles and hint about the override system."""
+    """Log unmatched titles and hint about the override system."""
     if not unmatched_titles:
         return
 
-    print(f"\n  {len(unmatched_titles)} titles could not be matched on TMDB:")
-    for e in unmatched_titles[:20]:
-        print(f"    [{e.get('content_type', '?')}] {e['title']}")
-    if len(unmatched_titles) > 20:
-        print(f"    ... and {len(unmatched_titles) - 20} more")
+    sample = ", ".join(
+        f"[{e.get('content_type', '?')}] {e['title']}" for e in unmatched_titles[:20]
+    )
+    tail = f" ... and {len(unmatched_titles) - 20} more" if len(unmatched_titles) > 20 else ""
+    log.warning("%d titles could not be matched on TMDB: %s%s", len(unmatched_titles), sample, tail)
 
     p = Path(overrides_path)
     if p.exists():
-        print(f"\n  To fix these, add entries to {overrides_path}")
+        log.info("To fix unmatched titles, add entries to %s", overrides_path)
     else:
-        print(f"\n  To fix these, create {overrides_path} with overrides:")
-        print('    {')
-        if unmatched_titles:
-            t = unmatched_titles[0]['title']
-            print(f'      "{t}": {{"title": "Corrected Title Here"}},')
-            print(f'      "Title To Skip": {{"skip": true}}')
-        print('    }')
+        first = unmatched_titles[0]["title"] if unmatched_titles else "Some Title"
+        log.info(
+            'To fix unmatched titles, create %s with entries like: '
+            '{"%s": {"title": "Corrected Title Here"}, "Title To Skip": {"skip": true}}',
+            overrides_path, first,
+        )

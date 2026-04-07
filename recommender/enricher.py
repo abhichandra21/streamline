@@ -93,7 +93,7 @@ def enrich_batch(
             api_calls += 1
             time.sleep(throttle)
         if (i + 1) % 50 == 0:
-            print(f"  {i+1}/{len(titles_metadata)} enriched...")
+            log.info("%d/%d titles enriched...", i + 1, len(titles_metadata))
     if api_calls and throttle:
         log.debug("Enrichment: %d API calls with %.1fs throttle", api_calls, throttle)
     return result
