@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import logging
 import sys
@@ -21,6 +22,7 @@ from recommender.llm import create_client
 from recommender import watch_index as wi
 from recommender import feedback as fb
 from recommender import overrides as ov
+from recommender import event_store
 
 console = Console(stderr=True)
 
@@ -32,79 +34,84 @@ _PLATFORM_PARSERS = [
 ]
 
 
-def _load_all_events(strict: bool = False) -> tuple[list, bool]:
-    """Load watch events from all configured platforms.
+def _compute_file_sha256(path: str) -> str:
+    """Compute SHA-256 of a file using chunked reads."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(8192):
+            h.update(chunk)
+    return h.hexdigest()
 
-    Args:
-        strict: If True, any configured provider that fails validation causes
-                overall failure. Empty-but-valid exports remain acceptable.
 
-    Returns:
-        (events, ok) — ok is False if strict=True and any provider failed.
-    """
-    events = []
+def run_ingest_only() -> None:
+    """Strict preflight validation of configured provider zips, persist to SQLite."""
+    from collections import defaultdict
+
+    console.print("Validating watch history sources...")
+
+    platform_events_by_provider: dict[str, tuple[list, str]] = {}
+    all_events = []
     ok = True
 
     for platform, parser in _PLATFORM_PARSERS:
         path = config.PLATFORM_PATHS.get(platform)
         if not path:
-            if strict:
-                console.print(f"  {platform}: [dim]disabled[/dim]")
+            console.print(f"  {platform}: [dim]disabled[/dim]")
             continue
         try:
-            platform_events = parser(path)
+            pevents = parser(path)
         except (FileNotFoundError, ValueError) as exc:
             console.print(f"  {platform}: [red]FAIL[/red] {exc}")
             ok = False
             continue
-        if not platform_events:
+        platform_events_by_provider[platform] = (pevents, path)
+        if not pevents:
             console.print(f"  {platform}: [green]ok[/green] 0 events (no qualifying watch activity)")
-            continue
-        dates = [e.timestamp for e in platform_events]
-        console.print(f"  {platform}: [green]ok[/green] {len(platform_events)} events "
-                      f"({min(dates):%Y-%m-%d} to {max(dates):%Y-%m-%d})")
-        events.extend(platform_events)
+        else:
+            dates = [e.timestamp for e in pevents]
+            console.print(f"  {platform}: [green]ok[/green] {len(pevents)} events "
+                          f"({min(dates):%Y-%m-%d} to {max(dates):%Y-%m-%d})")
+        all_events.extend(pevents)
 
-    # Manual ingestion (not subject to zip-only contract)
+    # Parse manual (report only, not persisted to SQLite)
     if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
         try:
             manual_events = parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH)
-            events.extend(manual_events)
+            all_events.extend(manual_events)
             console.print(f"  manual: [green]ok[/green] {len(manual_events)} events")
         except FileNotFoundError:
             console.print("  manual: [yellow]skipped[/yellow] (files not found)")
-
-    return events, ok
-
-
-def run_ingest_only() -> None:
-    """Strict preflight validation of configured provider zips."""
-    from collections import defaultdict
-
-    console.print("Validating watch history sources...")
-    events, ok = _load_all_events(strict=True)
 
     configured = sum(1 for p in _PLATFORM_PARSERS if config.PLATFORM_PATHS.get(p[0]))
     if configured == 0:
         console.print("\n[yellow]No providers configured. Set platform_paths in config.local.yaml or config.yaml.[/yellow]")
         sys.exit(1)
 
-    console.print(f"\n  Total: {len(events)} events")
+    if not ok:
+        console.print("\n[red]Validation failed.[/red]")
+        sys.exit(1)
 
-    if events:
+    # Persist to SQLite
+    event_store.init_db(config.EVENT_DB_PATH)
+    for platform, (pevents, path) in platform_events_by_provider.items():
+        source_sha = _compute_file_sha256(path)
+        persisted = event_store.replace_provider_events(
+            config.EVENT_DB_PATH, platform, pevents, path, source_sha,
+        )
+        console.print(f"  {platform}: {persisted} events persisted to SQLite")
+
+    console.print(f"\n  Total: {len(all_events)} events")
+
+    if all_events:
         by_platform = defaultdict(list)
-        for e in events:
+        for e in all_events:
             by_platform[e.platform].append(e)
         for platform, pevents in sorted(by_platform.items()):
             tv_titles = {e.series_name for e in pevents if e.content_type == "tv"}
             movie_titles = {e.series_name for e in pevents if e.content_type == "movie"}
             console.print(f"  {platform}: {len(tv_titles)} TV shows, {len(movie_titles)} movies")
 
-    if not ok:
-        console.print("\n[red]Validation failed.[/red]")
-        sys.exit(1)
-
-    console.print("\n[green]All configured providers validated.[/green]")
+    console.print("\n[green]All configured providers validated and persisted.[/green]")
 
 
 def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provider: str | None = None) -> None:
@@ -119,14 +126,80 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
     console.print(f"  LLM provider: {llm.provider}")
 
     console.print("Loading watch history...")
-    events, ok = _load_all_events(strict=True)
-    if not ok:
-        console.print("[red]Aborting setup: one or more configured providers failed.[/red]")
-        sys.exit(1)
-    if not events:
-        console.print("[red]No watch events found. Add manual titles or provider exports with qualifying watch activity.[/red]")
-        sys.exit(1)
-    console.print(f"  Total: {len(events)} events")
+
+    if refresh_data or refresh_profile:
+        # Refresh flows: load platform events from SQLite, not from zips
+        event_store.init_db(config.EVENT_DB_PATH)
+        events = event_store.load_events(config.EVENT_DB_PATH)
+
+        manual_events = []
+        if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
+            try:
+                manual_events = parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH)
+                console.print(f"  manual: [green]ok[/green] {len(manual_events)} events")
+            except FileNotFoundError:
+                console.print("  manual: [yellow]skipped[/yellow] (files not found)")
+
+        events.extend(manual_events)
+        if not events:
+            console.print("[red]No persisted platform imports found and no manual events available. "
+                          "Run ./recommend setup or ./recommend setup --ingest-only first.[/red]")
+            sys.exit(1)
+        console.print(f"  Total: {len(events)} events (from SQLite + manual)")
+
+    else:
+        # Default flow: parse zips, persist to SQLite, load back
+        platform_events_by_provider: dict[str, tuple[list, str]] = {}
+        ok = True
+        for platform, parser in _PLATFORM_PARSERS:
+            path = config.PLATFORM_PATHS.get(platform)
+            if not path:
+                console.print(f"  {platform}: [dim]disabled[/dim]")
+                continue
+            try:
+                pevents = parser(path)
+            except (FileNotFoundError, ValueError) as exc:
+                console.print(f"  {platform}: [red]FAIL[/red] {exc}")
+                ok = False
+                continue
+            platform_events_by_provider[platform] = (pevents, path)
+            if pevents:
+                dates = [e.timestamp for e in pevents]
+                console.print(f"  {platform}: [green]ok[/green] {len(pevents)} events "
+                              f"({min(dates):%Y-%m-%d} to {max(dates):%Y-%m-%d})")
+            else:
+                console.print(f"  {platform}: [green]ok[/green] 0 events (no qualifying watch activity)")
+
+        if not ok:
+            console.print("[red]Aborting setup: one or more configured providers failed.[/red]")
+            sys.exit(1)
+
+        # Parse manual events
+        manual_events = []
+        if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
+            try:
+                manual_events = parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH)
+                console.print(f"  manual: [green]ok[/green] {len(manual_events)} events")
+            except FileNotFoundError:
+                console.print("  manual: [yellow]skipped[/yellow] (files not found)")
+
+        # Persist platform events to SQLite
+        event_store.init_db(config.EVENT_DB_PATH)
+        for platform, (pevents, path) in platform_events_by_provider.items():
+            source_sha = _compute_file_sha256(path)
+            persisted = event_store.replace_provider_events(
+                config.EVENT_DB_PATH, platform, pevents, path, source_sha,
+            )
+            console.print(f"  {platform}: {persisted} events persisted to SQLite")
+
+        # Load back from SQLite (source of truth after dedup)
+        events = event_store.load_events(config.EVENT_DB_PATH)
+        events.extend(manual_events)
+
+        if not events:
+            console.print("[red]No watch events found. Add manual titles or provider exports with qualifying watch activity.[/red]")
+            sys.exit(1)
+        console.print(f"  Total: {len(events)} events")
 
 
     enrichments_index_path = Path(config.ENRICHMENT_CACHE_DIR) / "index.json"

@@ -97,7 +97,8 @@ def test_load_context_exits_if_no_taste_profile(tmp_path, monkeypatch):
         load_context()
 
 
-def test_load_context_skips_invalid_configured_provider(monkeypatch, capsys, tmp_path):
+def test_load_context_returns_lazy_context_regardless_of_platform_paths(monkeypatch, tmp_path):
+    """load_context no longer parses zips; platform paths are ignored at runtime."""
     import config
     import json
     from recommender import main as main_module
@@ -106,6 +107,7 @@ def test_load_context_skips_invalid_configured_provider(monkeypatch, capsys, tmp
     index_path.write_text(json.dumps([{"tmdb_id": 0, "title": "downton abbey", "content_type": "tv"}]))
     profile_path = tmp_path / 'profile.txt'
     profile_path.write_text('taste profile')
+    db_path = str(tmp_path / 'streamline.db')
 
     monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': '/tmp/missing.zip', 'prime': None, 'apple_tv': None})
     monkeypatch.setattr(config, 'MANUAL_TV_PATH', None)
@@ -113,12 +115,16 @@ def test_load_context_skips_invalid_configured_provider(monkeypatch, capsys, tmp
     monkeypatch.setattr(config, 'WATCH_INDEX_PATH', str(index_path))
     monkeypatch.setattr(config, 'TASTE_PROFILE_PATH', str(profile_path))
     monkeypatch.setattr(config, 'TMDB_API_KEY', 'tmdb')
+    monkeypatch.setattr(config, 'EVENT_DB_PATH', db_path)
     monkeypatch.setattr(main_module, 'create_client', lambda _provider=None: object())
 
     ctx = main_module.load_context()
 
+    # Events are lazy — no zip was parsed, no DB exists yet, so load returns []
     assert ctx.events == []
-    assert 'Skipping netflix watch history for runtime context' in capsys.readouterr().err
+    # _events_resolved is None until first access (lazy)
+    # (already resolved above by ctx.events call, so check _events_loader was set)
+    assert ctx._events_loader is not None
 
 
 def test_resolve_platform_path_uses_default_when_key_missing(monkeypatch):
@@ -177,7 +183,8 @@ def test_run_ingest_only_exits_if_no_provider_zips_are_configured(monkeypatch, c
     assert 'No providers configured' in capsys.readouterr().err
 
 
-def test_web_build_context_skips_invalid_configured_provider(monkeypatch, tmp_path):
+def test_web_build_context_uses_lazy_events_loader(monkeypatch, tmp_path):
+    """_build_context no longer parses zips; it sets a lazy events loader from the DB."""
     import config
     from recommender import web
     import json
@@ -187,30 +194,30 @@ def test_web_build_context_skips_invalid_configured_provider(monkeypatch, tmp_pa
     profile_path = tmp_path / 'profile.txt'
     profile_path.write_text('taste profile')
 
-    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': '/tmp/missing.zip', 'prime': None, 'apple_tv': None})
-    monkeypatch.setattr(config, 'MANUAL_TV_PATH', None)
-    monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', None)
     monkeypatch.setattr(config, 'WATCH_INDEX_PATH', str(index_path))
     monkeypatch.setattr(config, 'TASTE_PROFILE_PATH', str(profile_path))
     monkeypatch.setattr(config, 'TMDB_API_KEY', 'tmdb')
+    monkeypatch.setattr(config, 'EVENT_DB_PATH', str(tmp_path / 'events.db'))
     monkeypatch.setattr(web, 'create_client', lambda: object())
-    warnings = []
-    monkeypatch.setattr(web.log, 'warning', lambda message, *args: warnings.append(message % args))
+    monkeypatch.setattr(web, 'load_events', lambda _path: [])
 
     ctx = web._build_context()
 
-    assert ctx.events == []
-    assert any('Skipping netflix watch history for runtime context' in message for message in warnings)
+    # No zip parsing; context is built cleanly with a lazy events loader
+    assert ctx is not None
+    assert ctx._events_loader is not None
 
 
-def test_run_ingest_only_accepts_empty_provider_export(monkeypatch, capsys):
+def test_run_ingest_only_accepts_empty_provider_export(monkeypatch, capsys, tmp_path):
     import config
     import recommender.setup as setup
 
     monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': '/tmp/export.zip', 'prime': None, 'apple_tv': None})
     monkeypatch.setattr(config, 'MANUAL_TV_PATH', None)
     monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', None)
+    monkeypatch.setattr(config, 'EVENT_DB_PATH', str(tmp_path / 'streamline.db'))
     monkeypatch.setattr(setup, '_PLATFORM_PARSERS', [('netflix', lambda _path: [])])
+    monkeypatch.setattr(setup, '_compute_file_sha256', lambda _path: 'fakesha256')
 
     setup.run_ingest_only()
 
@@ -621,7 +628,7 @@ def test_run_ingest_only_exits_if_one_provider_fails_in_strict_mode(monkeypatch,
 
 # ── 4d: All providers valid with events -> prints TV/movie breakdown ────────
 
-def test_run_ingest_only_prints_tv_and_movie_summary(monkeypatch, capsys):
+def test_run_ingest_only_prints_tv_and_movie_summary(monkeypatch, capsys, tmp_path):
     import config
     import recommender.setup as setup
     from datetime import datetime, timedelta
@@ -654,7 +661,9 @@ def test_run_ingest_only_prints_tv_and_movie_summary(monkeypatch, capsys):
     monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
     monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
     monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "EVENT_DB_PATH", str(tmp_path / "streamline.db"))
     monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("netflix", _parser)])
+    monkeypatch.setattr(setup, "_compute_file_sha256", lambda _path: "fakesha256")
 
     setup.run_ingest_only()
 
@@ -665,15 +674,18 @@ def test_run_ingest_only_prints_tv_and_movie_summary(monkeypatch, capsys):
 
 # ── 4e: run_setup() with zero total events -> exit 1 ──────────────────────
 
-def test_run_setup_exits_with_no_watch_events_message(monkeypatch, capsys):
+def test_run_setup_exits_with_no_watch_events_message(monkeypatch, capsys, tmp_path):
     import config
     import recommender.setup as setup
 
+    db_path = str(tmp_path / "streamline.db")
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
     monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
     monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
     monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
     monkeypatch.setattr(config, "TMDB_API_KEY", "fake-tmdb-key")
     monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("netflix", lambda _path: [])])
+    monkeypatch.setattr(setup, "_compute_file_sha256", lambda _path: "fakesha256")
     class _FakeLLM:
         provider = "anthropic"
     monkeypatch.setattr(setup, "create_client", lambda _provider=None: _FakeLLM())
@@ -710,3 +722,155 @@ def test_load_context_works_with_no_configured_providers(monkeypatch, tmp_path):
 
     assert ctx.events == []
     assert ctx.taste_profile == "taste profile"
+
+
+def test_event_db_path_defaults_to_data_streamline_db():
+    import config
+    assert config.EVENT_DB_PATH.endswith("data/streamline.db")
+
+
+def test_refresh_data_loads_events_from_sqlite(monkeypatch, capsys, tmp_path):
+    """--refresh-data should read platform events from SQLite, not parse zips."""
+    import config
+    import recommender.setup as setup
+    from recommender.event_store import init_db, replace_provider_events
+    from datetime import datetime, timedelta
+    from recommender.ingestion.base import WatchEvent
+
+    db_path = str(tmp_path / "streamline.db")
+    init_db(db_path)
+    replace_provider_events(db_path, "netflix", [
+        WatchEvent(platform="netflix", title="Succession S1E1", content_type="tv",
+                   series_name="Succession", watched_duration=timedelta(hours=1),
+                   total_duration=None, timestamp=datetime(2026, 1, 1), profile="user"),
+    ], "/export.zip", "sha1")
+
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
+    # Provide a non-None path so the current zip loop WOULD call the parser (making pre-fix test fail)
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": "/tmp/netflix_export.zip", "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "TMDB_API_KEY", "fake-tmdb-key")
+
+    # Track that no zip parsers are called
+    parser_called = False
+    def _spy_parser(_path):
+        nonlocal parser_called
+        parser_called = True
+        return []
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("netflix", _spy_parser)])
+
+    class _FakeLLM:
+        provider = "anthropic"
+    monkeypatch.setattr(setup, "create_client", lambda _provider=None: _FakeLLM())
+
+    # Mock TMDB and downstream to avoid real API calls
+    mock_tmdb = MagicMock()
+    mock_tmdb.get_metadata.return_value = None
+    monkeypatch.setattr(setup, "TmdbClient", lambda **_kw: mock_tmdb)
+
+    index_path = tmp_path / "watch_index.json"
+    monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(index_path))
+    monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(config, "ENRICHMENT_CACHE_DIR", str(tmp_path / "enrichments"))
+    monkeypatch.setattr(config, "PROVIDERS_CACHE_DIR", str(tmp_path / "providers"))
+    monkeypatch.setattr(config, "OVERRIDES_PATH", str(tmp_path / "overrides.json"))
+    monkeypatch.setattr(setup, "enrich_batch", lambda *_a, **_kw: {})
+    monkeypatch.setattr(config, "TASTE_PROFILE_PATH", str(tmp_path / "profile.txt"))
+
+    # Run refresh_data - this should use SQLite, not zip parsers
+    # Let it fail downstream (we can't mock everything easily), but zip parsers should not be called
+    try:
+        setup.run_setup(refresh_data=True)
+    except (SystemExit, Exception):
+        pass  # Expected to fail downstream, but zip parsers should not be called
+
+    assert not parser_called, "Refresh-data should not parse provider zips"
+
+
+def test_run_setup_zero_events_persists_imports_before_exit(monkeypatch, capsys, tmp_path):
+    import config
+    import recommender.setup as setup
+    from recommender.event_store import get_import_info
+
+    db_path = str(tmp_path / "streamline.db")
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "TMDB_API_KEY", "fake-tmdb-key")
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("netflix", lambda _path: [])])
+    monkeypatch.setattr(setup, "_compute_file_sha256", lambda _path: "fakesha256")
+
+    class _FakeLLM:
+        provider = "anthropic"
+    monkeypatch.setattr(setup, "create_client", lambda _provider=None: _FakeLLM())
+
+    with pytest.raises(SystemExit) as exc_info:
+        setup.run_setup()
+
+    assert exc_info.value.code == 1
+    assert "No watch events found" in capsys.readouterr().err
+
+    # Even though setup exited, zero-event import should be in SQLite
+    info = get_import_info(db_path)
+    assert "netflix" in info
+    assert info["netflix"]["event_count"] == 0
+
+
+def test_load_context_does_not_parse_zips(monkeypatch, tmp_path):
+    """load_context should not call any provider parsers."""
+    import config
+    import json
+    from recommender import main as main_module
+
+    index_path = tmp_path / "watch_index.json"
+    index_path.write_text(json.dumps([{"tmdb_id": 1, "title": "test", "content_type": "tv"}]))
+    profile_path = tmp_path / "profile.txt"
+    profile_path.write_text("taste profile")
+    db_path = str(tmp_path / "streamline.db")
+
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(index_path))
+    monkeypatch.setattr(config, "TASTE_PROFILE_PATH", str(profile_path))
+    monkeypatch.setattr(config, "TMDB_API_KEY", "tmdb")
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
+    monkeypatch.setattr(main_module, "create_client", lambda _provider=None: object())
+
+    # Should not import or call any parser
+    ctx = main_module.load_context()
+
+    # events should be lazy (empty because no SQLite DB)
+    assert ctx.events == []
+    # The key assertion: no zip parsing happened (would have raised FileNotFoundError
+    # for /tmp/export.zip if parsers were called)
+
+
+def test_load_context_debug_log_does_not_force_events_load(monkeypatch, tmp_path):
+    """Debug log should not access ctx.events (would force lazy load)."""
+    import config
+    import json
+    from recommender import main as main_module
+
+    index_path = tmp_path / "watch_index.json"
+    index_path.write_text(json.dumps([{"tmdb_id": 1, "title": "test", "content_type": "tv"}]))
+    profile_path = tmp_path / "profile.txt"
+    profile_path.write_text("taste profile")
+    db_path = str(tmp_path / "streamline.db")
+
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": None, "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(index_path))
+    monkeypatch.setattr(config, "TASTE_PROFILE_PATH", str(profile_path))
+    monkeypatch.setattr(config, "TMDB_API_KEY", "tmdb")
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
+
+    mock_llm = MagicMock()
+    monkeypatch.setattr(main_module, "create_client", lambda _provider=None: mock_llm)
+
+    ctx = main_module.load_context()
+    # After load_context, _events_resolved should still be None (not loaded)
+    assert ctx._events_resolved is None

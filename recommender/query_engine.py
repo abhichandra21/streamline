@@ -3,6 +3,7 @@ import logging
 import re
 import sys
 from dataclasses import dataclass, field
+from typing import Callable
 
 import config
 
@@ -71,17 +72,40 @@ class QueryIntent:
     platforms: list[str]        # e.g. ["Netflix"] from "spy thriller on Netflix"
 
 
-@dataclass
+@dataclass(init=False)
 class RecommendContext:
     taste_profile: str
     watch_index: "WatchIndex"
-    events: list[WatchEvent]
     tmdb_client: TmdbClient
     llm: LLMClient
     cache_dir: str
-    providers_cache_dir: str = ""
-    watch_region: str = "US"
-    streaming_platforms: list[str] = field(default_factory=list)
+    providers_cache_dir: str
+    watch_region: str
+    streaming_platforms: list[str]
+    _events_loader: Callable[[], list[WatchEvent]] | None
+    _events_resolved: list[WatchEvent] | None
+
+    def __init__(self, taste_profile, watch_index, tmdb_client, llm, cache_dir,
+                 events: list[WatchEvent] | None = None,
+                 _events_loader: Callable[[], list[WatchEvent]] | None = None,
+                 providers_cache_dir="", watch_region="US",
+                 streaming_platforms: list[str] | None = None):
+        self.taste_profile = taste_profile
+        self.watch_index = watch_index
+        self.tmdb_client = tmdb_client
+        self.llm = llm
+        self.cache_dir = cache_dir
+        self.providers_cache_dir = providers_cache_dir
+        self.watch_region = watch_region
+        self.streaming_platforms = streaming_platforms or []
+        self._events_loader = _events_loader
+        self._events_resolved = events  # None = lazy, list = eager
+
+    @property
+    def events(self) -> list[WatchEvent]:
+        if self._events_resolved is None:
+            self._events_resolved = self._events_loader() if self._events_loader else []
+        return self._events_resolved
 
 
 @dataclass

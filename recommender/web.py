@@ -19,10 +19,8 @@ from markupsafe import Markup, escape
 import config
 from recommender import history as query_history
 from recommender import watch_index as wi
-from recommender.ingestion.manual import parse as parse_manual
-from recommender.ingestion.netflix import parse as parse_netflix
-from recommender.ingestion.prime import parse as parse_prime
-from recommender.ingestion.apple_tv import parse as parse_apple_tv
+from recommender import event_store
+from recommender.event_store import load_events
 from recommender.jobs import registry as job_registry
 from recommender.llm import create_client
 from recommender.log import setup_logging
@@ -40,9 +38,6 @@ _ctx: RecommendContext | None = None
 _ctx_lock = threading.Lock()
 _config_reload_pending = False
 
-# Ingestion errors from the last context build, surfaced in /status and UI
-_ingestion_errors: list[str] = []
-
 
 def _get_context() -> RecommendContext:
     global _ctx
@@ -53,28 +48,6 @@ def _get_context() -> RecommendContext:
 
 
 def _build_context() -> RecommendContext:
-    global _ingestion_errors
-    errors: list[str] = []
-    events = []
-    for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime), ("apple_tv", parse_apple_tv)]:
-        path = config.PLATFORM_PATHS.get(platform)
-        if path:
-            try:
-                platform_events = parser(path)
-            except (FileNotFoundError, ValueError) as exc:
-                log.warning("Skipping %s watch history for runtime context: %s", platform, exc)
-                errors.append(f"{platform}: {exc}")
-                continue
-            events.extend(platform_events)
-    try:
-        events.extend(parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH))
-    except Exception as exc:
-        msg = f"manual: {exc}"
-        log.warning("Ingestion error — %s", msg)
-        errors.append(msg)
-
-    _ingestion_errors = errors
-
     index_path = Path(config.WATCH_INDEX_PATH)
     profile_path = Path(config.TASTE_PROFILE_PATH)
     if not index_path.exists() or not profile_path.exists():
@@ -83,10 +56,10 @@ def _build_context() -> RecommendContext:
     return RecommendContext(
         taste_profile=profile_path.read_text(),
         watch_index=wi.load(config.WATCH_INDEX_PATH),
-        events=events,
         tmdb_client=TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR),
         llm=create_client(),
         cache_dir=config.ENRICHMENT_CACHE_DIR,
+        _events_loader=lambda: load_events(config.EVENT_DB_PATH),
         providers_cache_dir=config.PROVIDERS_CACHE_DIR,
         watch_region=config.WATCH_REGION,
         streaming_platforms=list(config.STREAMING_PLATFORMS),
@@ -313,7 +286,6 @@ def dashboard() -> str:
         enrichment_count=len(enrichments),
         posters=posters,
         recent_queries=recent_queries,
-        ingestion_errors=_ingestion_errors,
     )
 
 
@@ -528,15 +500,23 @@ def status():
         except Exception:
             pass
 
+    # Event store info
+    try:
+        import_info = event_store.get_import_info(config.EVENT_DB_PATH)
+    except Exception:
+        import_info = {}
+
     running = job_registry.running_jobs()
     return jsonify({
-        "status": "degraded" if _ingestion_errors else "ok",
+        "status": "ok",
         "provider": config.LLM_PROVIDER,
         "models": config.LLM_MODELS.get(config.LLM_PROVIDER, {}),
         "watch_index_entries": index_entries,
         "enrichment_count": enrichment_count,
         "taste_profile_built_at": _profile_built_at(),
-        "ingestion_errors": _ingestion_errors,
+        "event_store_ready": len(import_info) > 0,
+        "event_store_import_count": len(import_info),
+        "event_store_path": config.EVENT_DB_PATH,
         "running_jobs": len(running),
         "jobs": [
             {
