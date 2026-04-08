@@ -478,6 +478,39 @@ def healthz():
     return jsonify({"status": "ok"}), 200
 
 
+def _read_log_lines(n: int) -> list[str]:
+    log_path = Path(config.APP_LOG_PATH)
+    if not log_path.exists():
+        return []
+    try:
+        raw = log_path.read_text(encoding="utf-8", errors="replace")
+        return raw.splitlines()[-n:]
+    except OSError:
+        return []
+
+
+def _parse_n() -> int:
+    try:
+        return min(int(request.args.get("n", 200)), 1000)
+    except (ValueError, TypeError):
+        return 200
+
+
+@app.route("/logs")
+def logs_page() -> str:
+    n = _parse_n()
+    lines = _read_log_lines(n)
+    return render_template("logs.html", lines=lines, log_path=str(Path(config.APP_LOG_PATH)), n=n)
+
+
+@app.route("/logs/lines")
+def logs_lines() -> str:
+    """Partial used by HTMX refresh — returns only the log line fragment."""
+    n = _parse_n()
+    lines = _read_log_lines(n)
+    return render_template("_log_lines.html", lines=lines)
+
+
 @app.route("/status")
 def status():
     index_entries = 0

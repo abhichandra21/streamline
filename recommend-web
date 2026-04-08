@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PIDFILE="$SCRIPT_DIR/.web.pid"
-LOGFILE="$SCRIPT_DIR/.web.log"
+LOGFILE="$SCRIPT_DIR/logs/web.log"
 PORT="${STREAMLINE_PORT:-5050}"
 HOST="${STREAMLINE_HOST:-127.0.0.1}"
 VENV="$SCRIPT_DIR/venv"
@@ -111,6 +111,7 @@ start() {
         exit 1
     fi
 
+    mkdir -p "$SCRIPT_DIR/logs"
     echo "Starting Streamline web UI on http://$HOST:$PORT ..."
     export STREAMLINE_HOST="$HOST"
     export STREAMLINE_PORT="$PORT"

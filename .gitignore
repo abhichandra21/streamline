@@ -6,6 +6,6 @@ __pycache__/
 .envrc
 config.local.yaml
 .web.pid
-.web.log
+logs/
 .superpowers/
 .worktrees/

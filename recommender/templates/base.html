@@ -98,6 +98,16 @@
     .nav-link:hover { color: var(--text); text-decoration: none; }
     .nav-link.active { color: var(--text); border-bottom-color: var(--accent); }
 
+    .nav-group { display: flex; align-items: center; gap: 1.5rem; }
+    .nav-group-system {
+      display: flex;
+      align-items: center;
+      gap: 1.2rem;
+      padding-left: 1.2rem;
+      border-left: 1px solid var(--border);
+    }
+    .nav-group-system .nav-link { font-size: 0.64rem; letter-spacing: 0.07em; }
+
     /* Inputs */
     .input-field {
       background: var(--surface);
@@ -213,13 +223,16 @@
 
   <nav>
     <a href="/" class="nav-brand"><img src="/static/logo.png" alt="Streamline" style="height:22px; width:22px; vertical-align:middle; margin-right:0.4rem; border-radius:3px;">Streamline</a>
-    <div style="display:flex; gap:1.5rem; margin-left:0.5rem; flex:1;">
+    <div class="nav-group" style="margin-left:0.5rem;">
       <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">Home</a>
       <a href="/searches" class="nav-link {% if request.path == '/searches' %}active{% endif %}">Searches</a>
       <a href="/history" class="nav-link {% if request.path.startswith('/history') or request.path.startswith('/title') %}active{% endif %}">Archive</a>
-      <a href="/settings" class="nav-link {% if request.path == '/settings' %}active{% endif %}">Settings</a>
     </div>
-    <a href="/help" class="nav-link {% if request.path == '/help' %}active{% endif %}">Help</a>
+    <div class="nav-group-system">
+      <a href="/settings" class="nav-link {% if request.path == '/settings' %}active{% endif %}">Settings</a>
+      <a href="/logs" class="nav-link {% if request.path == '/logs' %}active{% endif %}">Logs</a>
+      <a href="/help" class="nav-link {% if request.path == '/help' %}active{% endif %}">Help</a>
+    </div>
   </nav>
 
   <main style="max-width:54rem; margin:0 auto; padding:2.5rem 2rem 5rem;">
