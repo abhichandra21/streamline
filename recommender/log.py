@@ -1,7 +1,7 @@
 """Centralized logging setup.
 
 Configures the root 'recommender' logger to write to both stdout and a
-rotating log file at recommender/cache/logs/app.log so that diagnostics
+rotating log file at logs/app.log so that diagnostics
 persist across terminal sessions.
 
 The stream handler level is controlled by config.LOG_LEVEL (default WARNING).
