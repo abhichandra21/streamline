@@ -729,11 +729,11 @@ def test_event_db_path_defaults_to_data_streamline_db():
     assert config.EVENT_DB_PATH.endswith("data/streamline.db")
 
 
-def test_refresh_data_loads_events_from_sqlite(monkeypatch, capsys, tmp_path):
-    """--refresh-data should read platform events from SQLite, not parse zips."""
+def test_refresh_data_reingests_configured_exports(monkeypatch, capsys, tmp_path):
+    """--refresh-data should parse current exports and persist the refreshed event set."""
     import config
     import recommender.setup as setup
-    from recommender.event_store import init_db, replace_provider_events
+    from recommender.event_store import init_db, load_events, replace_provider_events
     from datetime import datetime, timedelta
     from recommender.ingestion.base import WatchEvent
 
@@ -752,12 +752,23 @@ def test_refresh_data_loads_events_from_sqlite(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
     monkeypatch.setattr(config, "TMDB_API_KEY", "fake-tmdb-key")
 
-    # Track that no zip parsers are called
+    # Track that the current export is parsed during refresh.
     parser_called = False
     def _spy_parser(_path):
         nonlocal parser_called
         parser_called = True
-        return []
+        return [
+            WatchEvent(
+                platform="netflix",
+                title="The Bear S1E1",
+                content_type="tv",
+                series_name="The Bear",
+                watched_duration=timedelta(hours=1),
+                total_duration=None,
+                timestamp=datetime(2026, 2, 1),
+                profile="user",
+            ),
+        ]
     monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("netflix", _spy_parser)])
 
     class _FakeLLM:
@@ -776,16 +787,18 @@ def test_refresh_data_loads_events_from_sqlite(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(config, "PROVIDERS_CACHE_DIR", str(tmp_path / "providers"))
     monkeypatch.setattr(config, "OVERRIDES_PATH", str(tmp_path / "overrides.json"))
     monkeypatch.setattr(setup, "enrich_batch", lambda *_a, **_kw: {})
+    monkeypatch.setattr(setup, "_compute_file_sha256", lambda _path: "freshsha")
     monkeypatch.setattr(config, "TASTE_PROFILE_PATH", str(tmp_path / "profile.txt"))
 
-    # Run refresh_data - this should use SQLite, not zip parsers
-    # Let it fail downstream (we can't mock everything easily), but zip parsers should not be called
+    # Run refresh_data - parser should be called and the refreshed event set should reach SQLite.
     try:
         setup.run_setup(refresh_data=True)
     except (SystemExit, Exception):
-        pass  # Expected to fail downstream, but zip parsers should not be called
+        pass  # Downstream build steps are not fully mocked here.
 
-    assert not parser_called, "Refresh-data should not parse provider zips"
+    refreshed = load_events(db_path, provider="netflix")
+    assert parser_called, "Refresh-data should re-parse configured provider exports"
+    assert [event.title for event in refreshed] == ["The Bear S1E1"]
 
 
 def test_run_setup_zero_events_persists_imports_before_exit(monkeypatch, capsys, tmp_path):

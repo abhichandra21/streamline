@@ -27,6 +27,13 @@ from recommender.log import setup_logging
 from recommender.query_engine import RecommendContext, ask
 from recommender.tmdb_client import TmdbClient
 
+def _events_loader_fallback() -> list:
+    events = load_events(config.EVENT_DB_PATH)
+    if not events and not Path(config.EVENT_DB_PATH).exists():
+        from recommender.setup import ingest_providers
+        return ingest_providers(fail_on_error=False)
+    return events
+
 log = logging.getLogger("recommender.web")
 
 app = Flask(__name__, template_folder="templates")
@@ -59,7 +66,7 @@ def _build_context() -> RecommendContext:
         tmdb_client=TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR),
         llm=create_client(),
         cache_dir=config.ENRICHMENT_CACHE_DIR,
-        _events_loader=lambda: load_events(config.EVENT_DB_PATH),
+        _events_loader=_events_loader_fallback,
         providers_cache_dir=config.PROVIDERS_CACHE_DIR,
         watch_region=config.WATCH_REGION,
         streaming_platforms=list(config.STREAMING_PLATFORMS),

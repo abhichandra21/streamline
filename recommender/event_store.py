@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS watch_events (
 
 def _connect(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -53,8 +54,33 @@ def init_db(db_path: str) -> None:
     """Create tables if not present. Create parent directories if needed."""
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = _connect(db_path)
-    conn.executescript(_SCHEMA)
-    conn.close()
+    try:
+        conn.executescript(_SCHEMA)
+    finally:
+        conn.close()
+
+
+def remove_disabled_providers(db_path: str, active_providers: list[str]) -> None:
+    """Remove imported events for providers that are no longer configured."""
+    if not active_providers:
+        conn = _connect(db_path)
+        try:
+            with conn:
+                conn.execute("DELETE FROM imports")
+        finally:
+            conn.close()
+        return
+
+    placeholders = ",".join("?" * len(active_providers))
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                f"DELETE FROM imports WHERE provider NOT IN ({placeholders})",
+                active_providers
+            )
+    finally:
+        conn.close()
 
 
 def replace_provider_events(
