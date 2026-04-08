@@ -489,9 +489,16 @@ def _read_log_lines(n: int) -> list[str]:
         return []
 
 
+def _parse_n() -> int:
+    try:
+        return min(int(request.args.get("n", 200)), 1000)
+    except (ValueError, TypeError):
+        return 200
+
+
 @app.route("/logs")
 def logs_page() -> str:
-    n = min(int(request.args.get("n", 200)), 1000)
+    n = _parse_n()
     lines = _read_log_lines(n)
     return render_template("logs.html", lines=lines, log_path=str(Path(config.APP_LOG_PATH)), n=n)
 
@@ -499,7 +506,7 @@ def logs_page() -> str:
 @app.route("/logs/lines")
 def logs_lines() -> str:
     """Partial used by HTMX refresh — returns only the log line fragment."""
-    n = min(int(request.args.get("n", 200)), 1000)
+    n = _parse_n()
     lines = _read_log_lines(n)
     return render_template("_log_lines.html", lines=lines)
 

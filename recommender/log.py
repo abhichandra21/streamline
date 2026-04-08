@@ -31,14 +31,20 @@ def _configure_stream_handler(logger: logging.Logger, level: int, formatter: log
     handler.setLevel(level)
 
 
-def _configure_file_handler(logger: logging.Logger, formatter: logging.Formatter) -> None:
-    """Add a rotating file handler if not already present.
+_shared_file_handler: RotatingFileHandler | None = None
+_shared_file_path: str | None = None
 
-    The file handler always captures INFO+ so that setup progress and
-    enrichment events are persisted regardless of config.LOG_LEVEL.
+
+def _get_file_handler(formatter: logging.Formatter) -> RotatingFileHandler | None:
+    """Return the single shared rotating file handler, creating it on first call.
+
+    If config.APP_LOG_PATH changes (e.g. during tests), a new handler is created.
     """
-    if any(getattr(h, "_streamline_file_handler", False) for h in logger.handlers):
-        return
+    global _shared_file_handler, _shared_file_path
+
+    log_path_str = str(Path(config.APP_LOG_PATH))
+    if _shared_file_handler is not None and _shared_file_path == log_path_str:
+        return _shared_file_handler
 
     log_path = Path(config.APP_LOG_PATH)
     try:
@@ -47,12 +53,20 @@ def _configure_file_handler(logger: logging.Logger, formatter: logging.Formatter
             log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
         )
     except OSError:
-        # If the log directory can't be created (e.g. read-only FS), skip silently.
-        return
+        return None
 
-    handler._streamline_file_handler = True
     handler.setLevel(logging.INFO)
     handler.setFormatter(formatter)
+    _shared_file_handler = handler
+    _shared_file_path = log_path_str
+    return handler
+
+
+def _configure_file_handler(logger: logging.Logger, formatter: logging.Formatter) -> None:
+    """Attach the shared rotating file handler if not already present."""
+    handler = _get_file_handler(formatter)
+    if handler is None or handler in logger.handlers:
+        return
     logger.addHandler(handler)
 
 
@@ -72,9 +86,9 @@ def setup_logging(level_override: str | None = None) -> None:
     )
 
     root = logging.getLogger("recommender")
-    # Set logger gate to INFO so the file handler can receive INFO messages
-    # even when the stream handler is at WARNING.
-    root.setLevel(logging.INFO)
+    # Logger gate must be the lowest of stream_level and INFO (file handler),
+    # so that DEBUG passes through when --debug is used.
+    root.setLevel(min(stream_level, logging.INFO))
     root.propagate = False
 
     _configure_stream_handler(root, stream_level, formatter)

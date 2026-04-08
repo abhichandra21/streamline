@@ -82,7 +82,7 @@ class TestHandlerDeduplication:
 
         logger = logging.getLogger("recommender")
         file_handlers = [
-            h for h in logger.handlers if getattr(h, "_streamline_file_handler", False)
+            h for h in logger.handlers if isinstance(h, RotatingFileHandler)
         ]
         assert len(file_handlers) == 1, "File handler should not be duplicated"
 
@@ -167,6 +167,61 @@ class TestLogVisibility:
         captured = capsys.readouterr()
         assert "info with override" in captured.out
 
+    def test_debug_override_preserves_debug_output(self, tmp_path, capsys):
+        log_file = tmp_path / "app.log"
+        with patch("config.APP_LOG_PATH", str(log_file)), \
+             patch("config.LOG_LEVEL", "WARNING"):
+            from recommender.log import setup_logging
+            setup_logging(level_override="DEBUG")
+
+        logger = logging.getLogger("recommender.test_debug")
+        logger.debug("debug trace line")
+
+        captured = capsys.readouterr()
+        assert "debug trace line" in captured.out
+
+
+# ── Shared file handler across loggers ───────────────────────────────────────
+
+class TestSharedFileHandler:
+    @pytest.fixture(autouse=True)
+    def _clean_werkzeug_handlers(self):
+        """Remove file handlers leaked from prior tests on the werkzeug logger."""
+        wz = logging.getLogger("werkzeug")
+        old = wz.handlers[:]
+        yield
+        wz.handlers = old
+
+    def test_recommender_and_werkzeug_share_one_file_handler(self, tmp_path):
+        log_file = tmp_path / "app.log"
+        wz_logger = logging.getLogger("werkzeug")
+        wz_logger.handlers = [h for h in wz_logger.handlers if not isinstance(h, RotatingFileHandler)]
+        with patch("config.APP_LOG_PATH", str(log_file)):
+            from recommender.log import setup_logging
+            setup_logging()
+
+        rec_logger = logging.getLogger("recommender")
+
+        rec_file_handlers = [h for h in rec_logger.handlers if isinstance(h, RotatingFileHandler)]
+        wz_file_handlers = [h for h in wz_logger.handlers if isinstance(h, RotatingFileHandler)]
+
+        assert len(rec_file_handlers) == 1
+        assert len(wz_file_handlers) == 1
+        assert rec_file_handlers[0] is wz_file_handlers[0], \
+            "recommender and werkzeug should share the same RotatingFileHandler"
+
+    def test_werkzeug_logs_appear_in_shared_log_file(self, tmp_path):
+        log_file = tmp_path / "app.log"
+        with patch("config.APP_LOG_PATH", str(log_file)):
+            from recommender.log import setup_logging
+            setup_logging()
+
+        wz_logger = logging.getLogger("werkzeug")
+        wz_logger.info("GET /status 200")
+
+        content = log_file.read_text()
+        assert "GET /status 200" in content
+
 
 # ── Web UI /logs route ────────────────────────────────────────────────────────
 
@@ -204,3 +259,17 @@ class TestLogsRoute:
         # First 100 lines should not be visible (only last 200 shown)
         assert b"line 0\n" not in resp.data
         assert b"line 299" in resp.data
+
+    def test_logs_page_non_numeric_n_returns_200(self, client, tmp_path):
+        log_file = tmp_path / "app.log"
+        log_file.write_text("a log line\n")
+        with patch("config.APP_LOG_PATH", str(log_file)):
+            resp = client.get("/logs?n=foo")
+        assert resp.status_code == 200
+
+    def test_logs_lines_non_numeric_n_returns_200(self, client, tmp_path):
+        log_file = tmp_path / "app.log"
+        log_file.write_text("a log line\n")
+        with patch("config.APP_LOG_PATH", str(log_file)):
+            resp = client.get("/logs/lines?n=abc")
+        assert resp.status_code == 200
