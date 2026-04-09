@@ -102,6 +102,7 @@ def _run_recommend_job(query: str) -> dict:
 
 def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
     items = []
+    us = _load_user_state()
     for r in results:
         meta = ctx.tmdb_client.get_metadata(r.title, r.content_type)
         poster = _get_poster_url(meta.tmdb_id, r.content_type) if meta else None
@@ -120,7 +121,7 @@ def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
                 from urllib.parse import quote
                 imdb_url = f"https://www.imdb.com/find/?q={quote(r.title)}"
         tmdb_id_val = meta.tmdb_id if meta else None
-        state = _title_state(r.title, r.content_type, tmdb_id_val)
+        state = _title_state(r.title, r.content_type, us, tmdb_id_val)
         items.append({
             "title": r.title,
             "content_type": r.content_type,
@@ -139,6 +140,13 @@ def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _norm_title(title: str) -> str:
+    """Normalize a title for dedup (same rule as user_store._normalize)."""
+    title = title.lower()
+    title = re.sub(r'\s*\([^)]*\)', '', title)
+    return title.strip()
+
 
 def _load_enrichments() -> dict[str, str]:
     index_path = Path(config.ENRICHMENT_CACHE_DIR) / "index.json"
@@ -325,18 +333,12 @@ def history() -> str:
     user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
     manual = user_store.list_manual_archive(config.EVENT_DB_PATH)
 
-    import re as _re
-    def _norm(t: str) -> str:
-        t = t.lower()
-        t = _re.sub(r'\s*\([^)]*\)', '', t)
-        return t.strip()
-
     existing_norm = {
-        (_norm(e.get("title", "")), e.get("content_type", "tv"))
+        (_norm_title(e.get("title", "")), e.get("content_type", "tv"))
         for e in entries
     }
     for m in manual:
-        key = (_norm(m["title"]), m["content_type"])
+        key = (_norm_title(m["title"]), m["content_type"])
         if key not in existing_norm:
             entries.append({
                 "title": m["title"],
@@ -482,7 +484,8 @@ def title_detail(tmdb_id: int) -> str:
         if cache_path.exists():
             raw = json.loads(cache_path.read_text())
             overview = raw.get("overview", "")
-    state = _title_state(meta.title if meta else "", ct, tmdb_id if meta else None)
+    us = _load_user_state()
+    state = _title_state(meta.title if meta else "", ct, us, tmdb_id if meta else None)
     return render_template(
         "title.html", meta=meta, description=description, overview=overview,
         tmdb_id=tmdb_id, ct=ct, poster=poster, user_state=state,
@@ -496,9 +499,9 @@ def _load_user_state():
     return UserStateIndex.load(config.EVENT_DB_PATH)
 
 
-def _title_state(title: str, content_type: str, tmdb_id: int | None = None) -> dict:
+def _title_state(title: str, content_type: str, us: "UserStateIndex",
+                 tmdb_id: int | None = None) -> dict:
     """Return user state for a title, used across templates."""
-    us = _load_user_state()
     class _Meta:
         pass
     meta = _Meta()
