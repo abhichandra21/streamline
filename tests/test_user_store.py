@@ -227,6 +227,18 @@ def test_add_to_archive_upserts_on_tmdb_id(tmp_path):
     assert items[0]["title"] == "The Bear (2022)"
 
 
+def test_remove_saved_title_does_not_affect_dismissed(tmp_path):
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import init_db, dismiss_title, remove_saved_title, list_saved_titles
+
+    init_db(db)
+    dismiss_title(db, "Breaking Bad", "tv", tmdb_id=1396)
+    remove_saved_title(db, "Breaking Bad", "tv")  # should be no-op
+
+    dismissed = list_saved_titles(db, status="dismissed")
+    assert len(dismissed) == 1  # dismissed entry still present
+
+
 def test_add_to_archive_without_tmdb_id(tmp_path):
     db = str(tmp_path / "test.db")
     from recommender.user_store import init_db, add_to_archive, list_manual_archive

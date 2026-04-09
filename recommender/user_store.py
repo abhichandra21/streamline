@@ -216,6 +216,8 @@ def remove_saved_title(db_path: str, title: str, content_type: str) -> None:
 
 def list_saved_titles(db_path: str, status: str | None = None) -> list[dict]:
     """Return saved titles, optionally filtered by status."""
+    if not Path(db_path).exists():
+        return []
     conn = _connect(db_path)
     try:
         if status:
