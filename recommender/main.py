@@ -18,8 +18,8 @@ from recommender import history
 def _events_loader_fallback() -> list:
     events = load_events(config.EVENT_DB_PATH)
     if not events and not Path(config.EVENT_DB_PATH).exists():
-        from recommender.setup import ingest_providers
-        return ingest_providers(fail_on_error=False)
+        from recommender.setup import load_platform_events_from_exports
+        return load_platform_events_from_exports(fail_on_error=False)
     return events
 
 log = logging.getLogger("recommender")

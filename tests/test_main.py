@@ -127,6 +127,52 @@ def test_load_context_returns_lazy_context_regardless_of_platform_paths(monkeypa
     assert ctx._events_loader is not None
 
 
+def test_load_context_fallback_does_not_recreate_db(monkeypatch, tmp_path):
+    import config
+    import json
+    from datetime import datetime, timedelta
+    from recommender import main as main_module
+    import recommender.setup as setup_module
+    from recommender.ingestion.base import WatchEvent
+
+    index_path = tmp_path / "watch_index.json"
+    index_path.write_text(json.dumps([{"tmdb_id": 0, "title": "ted lasso", "content_type": "tv"}]))
+    profile_path = tmp_path / "profile.txt"
+    profile_path.write_text("taste profile")
+    db_path = tmp_path / "streamline.db"
+
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(index_path))
+    monkeypatch.setattr(config, "TASTE_PROFILE_PATH", str(profile_path))
+    monkeypatch.setattr(config, "TMDB_API_KEY", "tmdb")
+    monkeypatch.setattr(config, "EVENT_DB_PATH", str(db_path))
+    monkeypatch.setattr(main_module, "create_client", lambda _provider=None: object())
+    monkeypatch.setattr(
+        setup_module,
+        "_PLATFORM_PARSERS",
+        [("netflix", lambda _path: [
+            WatchEvent(
+                platform="netflix",
+                title="Ted Lasso S1E1",
+                content_type="tv",
+                series_name="Ted Lasso",
+                watched_duration=timedelta(hours=1),
+                total_duration=None,
+                timestamp=datetime(2026, 1, 1),
+                profile="user",
+            )
+        ])],
+    )
+    monkeypatch.setattr(setup_module, "_compute_file_sha256", lambda _path: "ignored")
+
+    ctx = main_module.load_context()
+
+    assert [event.series_name for event in ctx.events] == ["Ted Lasso"]
+    assert not db_path.exists()
+
+
 def test_resolve_platform_path_uses_default_when_key_missing(monkeypatch):
     import config
 
@@ -709,6 +755,7 @@ def test_load_context_works_with_no_configured_providers(monkeypatch, tmp_path):
     index_path.write_text(json.dumps([{"tmdb_id": 1, "title": "succession", "content_type": "tv"}]))
     profile_path = tmp_path / "profile.txt"
     profile_path.write_text("taste profile")
+    db_path = tmp_path / "streamline.db"
 
     monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": None, "prime": None, "apple_tv": None})
     monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
@@ -716,6 +763,7 @@ def test_load_context_works_with_no_configured_providers(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(index_path))
     monkeypatch.setattr(config, "TASTE_PROFILE_PATH", str(profile_path))
     monkeypatch.setattr(config, "TMDB_API_KEY", "tmdb")
+    monkeypatch.setattr(config, "EVENT_DB_PATH", str(db_path))
     monkeypatch.setattr(main_module, "create_client", lambda _provider=None: object())
 
     ctx = main_module.load_context()

@@ -139,6 +139,58 @@ class TestStatusObservability:
         # Context is built without errors; events loader is set lazily
         assert ctx is not None
 
+    def test_build_context_fallback_does_not_recreate_db(self, tmp_path, monkeypatch):
+        """Touching ctx.events with no DB should use a read-only fallback."""
+        import json
+        from datetime import datetime, timedelta
+        import recommender.setup as setup_module
+        from recommender.ingestion.base import WatchEvent
+
+        index_path = tmp_path / "watch_index.json"
+        profile_path = tmp_path / "profile.txt"
+        index_path.write_text(json.dumps([{"tmdb_id": 1, "title": "ted lasso", "content_type": "tv"}]))
+        profile_path.write_text("taste profile")
+        db_path = tmp_path / "events.db"
+
+        monkeypatch.setattr(web.config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
+        monkeypatch.setattr(web.config, "MANUAL_TV_PATH", None)
+        monkeypatch.setattr(web.config, "MANUAL_MOVIES_PATH", None)
+        monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(index_path))
+        monkeypatch.setattr(web.config, "TASTE_PROFILE_PATH", str(profile_path))
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "tmdb")
+        monkeypatch.setattr(web.config, "CACHE_DIR", str(tmp_path / "cache"))
+        monkeypatch.setattr(web.config, "ENRICHMENT_CACHE_DIR", str(tmp_path / "enrich"))
+        monkeypatch.setattr(web.config, "PROVIDERS_CACHE_DIR", str(tmp_path / "providers"))
+        monkeypatch.setattr(web.config, "WATCH_REGION", "US")
+        monkeypatch.setattr(web.config, "STREAMING_PLATFORMS", [])
+        monkeypatch.setattr(web.config, "EVENT_DB_PATH", str(db_path))
+
+        monkeypatch.setattr(web.wi, "load", lambda _path: MagicMock(entries=[]))
+        monkeypatch.setattr(web, "TmdbClient", lambda **_kwargs: object())
+        monkeypatch.setattr(web, "create_client", lambda: object())
+        monkeypatch.setattr(
+            setup_module,
+            "_PLATFORM_PARSERS",
+            [("netflix", lambda _path: [
+                WatchEvent(
+                    platform="netflix",
+                    title="Ted Lasso S1E1",
+                    content_type="tv",
+                    series_name="Ted Lasso",
+                    watched_duration=timedelta(hours=1),
+                    total_duration=None,
+                    timestamp=datetime(2026, 1, 1),
+                    profile="user",
+                )
+            ])],
+        )
+        monkeypatch.setattr(setup_module, "_compute_file_sha256", lambda _path: "ignored")
+
+        ctx = web._build_context()
+
+        assert [event.series_name for event in ctx.events] == ["Ted Lasso"]
+        assert not db_path.exists()
+
     @patch("recommender.web.job_registry")
     @patch("recommender.web._get_context")
     def test_status_is_always_ok(self, mock_get_context, mock_jobs, client):

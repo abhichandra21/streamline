@@ -43,44 +43,77 @@ def _compute_file_sha256(path: str) -> str:
     return h.hexdigest()
 
 
-def ingest_providers(fail_on_error: bool = True) -> list:
-    """Validate configured provider zips, persist to SQLite, and return normalized events."""
-    from collections import defaultdict
-    
-    console.print("Loading watch history...")
-    
+def _load_platform_events_by_provider(
+    fail_on_error: bool = True,
+    emit_console: bool = True,
+) -> dict[str, tuple[list, str]]:
+    """Parse configured provider exports without touching SQLite."""
     platform_events_by_provider: dict[str, tuple[list, str]] = {}
-    all_events = []
     ok = True
 
     for platform, parser in _PLATFORM_PARSERS:
         path = config.PLATFORM_PATHS.get(platform)
         if not path:
-            console.print(f"  {platform}: [dim]disabled[/dim]")
+            if emit_console:
+                console.print(f"  {platform}: [dim]disabled[/dim]")
             continue
         try:
             pevents = parser(path)
         except (FileNotFoundError, ValueError) as exc:
-            console.print(f"  {platform}: [red]FAIL[/red] {exc}")
+            if emit_console:
+                console.print(f"  {platform}: [red]FAIL[/red] {exc}")
+            else:
+                log.warning("Failed to parse %s export during runtime fallback: %s", platform, exc)
             ok = False
             continue
         platform_events_by_provider[platform] = (pevents, path)
-        all_events.extend(pevents)
         if not pevents:
-            console.print(f"  {platform}: [green]ok[/green] 0 events (no qualifying watch activity)")
+            if emit_console:
+                console.print(f"  {platform}: [green]ok[/green] 0 events (no qualifying watch activity)")
         else:
-            dates = [e.timestamp for e in pevents]
-            console.print(f"  {platform}: [green]ok[/green] {len(pevents)} events "
-                          f"({min(dates):%Y-%m-%d} to {max(dates):%Y-%m-%d})")
+            if emit_console:
+                dates = [e.timestamp for e in pevents]
+                console.print(f"  {platform}: [green]ok[/green] {len(pevents)} events "
+                              f"({min(dates):%Y-%m-%d} to {max(dates):%Y-%m-%d})")
 
     configured = sum(1 for p in _PLATFORM_PARSERS if config.PLATFORM_PATHS.get(p[0]))
     if configured == 0 and fail_on_error:
-        console.print("\n[yellow]No providers configured. Set platform_paths in config.local.yaml or config.yaml.[/yellow]")
+        if emit_console:
+            console.print("\n[yellow]No providers configured. Set platform_paths in config.local.yaml or config.yaml.[/yellow]")
         sys.exit(1)
 
     if not ok and fail_on_error:
-        console.print("\n[red]Validation failed.[/red]")
+        if emit_console:
+            console.print("\n[red]Validation failed.[/red]")
         sys.exit(1)
+    return platform_events_by_provider
+
+
+def load_platform_events_from_exports(fail_on_error: bool = True) -> list:
+    """Load normalized platform events from configured exports without persisting."""
+    platform_events_by_provider = _load_platform_events_by_provider(
+        fail_on_error=fail_on_error,
+        emit_console=False,
+    )
+    all_events = []
+    for pevents, _path in platform_events_by_provider.values():
+        all_events.extend(pevents)
+    return all_events
+
+
+def ingest_providers(fail_on_error: bool = True) -> list:
+    """Validate configured provider zips, persist to SQLite, and return normalized events."""
+    from collections import defaultdict
+
+    console.print("Loading watch history...")
+
+    platform_events_by_provider = _load_platform_events_by_provider(
+        fail_on_error=fail_on_error,
+        emit_console=True,
+    )
+    all_events = []
+    for pevents, _path in platform_events_by_provider.values():
+        all_events.extend(pevents)
 
     # Parse manual events
     manual_events = []
