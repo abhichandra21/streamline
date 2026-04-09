@@ -273,3 +273,90 @@ class TestLogsRoute:
         with patch("config.APP_LOG_PATH", str(log_file)):
             resp = client.get("/logs/lines?n=abc")
         assert resp.status_code == 200
+
+    def test_logs_page_can_show_web_log(self, client, tmp_path):
+        app_log = tmp_path / "app.log"
+        web_log = tmp_path / "web.log"
+        app_log.write_text("app line\n")
+        web_log.write_text("web line\n")
+        with patch("config.APP_LOG_PATH", str(app_log)):
+            resp = client.get("/logs?file=web")
+        assert resp.status_code == 200
+        assert b"web line" in resp.data
+        assert b"app line" not in resp.data
+
+    def test_logs_page_invalid_file_falls_back_to_app_log(self, client, tmp_path):
+        app_log = tmp_path / "app.log"
+        web_log = tmp_path / "web.log"
+        app_log.write_text("app line\n")
+        web_log.write_text("web line\n")
+        with patch("config.APP_LOG_PATH", str(app_log)):
+            resp = client.get("/logs?file=unknown")
+        assert resp.status_code == 200
+        assert b"app line" in resp.data
+        assert b"web line" not in resp.data
+
+    def test_logs_lines_can_show_web_log(self, client, tmp_path):
+        app_log = tmp_path / "app.log"
+        web_log = tmp_path / "web.log"
+        app_log.write_text("app line\n")
+        web_log.write_text("web line\n")
+        with patch("config.APP_LOG_PATH", str(app_log)):
+            resp = client.get("/logs/lines?file=web")
+        assert resp.status_code == 200
+        assert b"web line" in resp.data
+        assert b"app line" not in resp.data
+
+    def test_clear_logs_truncates_only_selected_log(self, client, tmp_path):
+        app_log = tmp_path / "app.log"
+        web_log = tmp_path / "web.log"
+        app_log.write_text("app line\n")
+        web_log.write_text("web line\n")
+
+        with client.session_transaction() as session:
+            session["csrf_token"] = "test-token"
+
+        with patch("config.APP_LOG_PATH", str(app_log)):
+            resp = client.post(
+                "/logs/clear?file=web&n=200",
+                data={"_csrf_token": "test-token"},
+                follow_redirects=False,
+            )
+
+        assert resp.status_code == 302
+        assert app_log.read_text() == "app line\n"
+        assert web_log.read_text() == ""
+        assert resp.headers["Location"].endswith("/logs?file=web&n=200")
+
+    def test_clear_logs_requires_valid_csrf(self, client, tmp_path):
+        app_log = tmp_path / "app.log"
+        app_log.write_text("app line\n")
+
+        with client.session_transaction() as session:
+            session["csrf_token"] = "expected-token"
+
+        with patch("config.APP_LOG_PATH", str(app_log)):
+            resp = client.post(
+                "/logs/clear?file=app",
+                data={"_csrf_token": "wrong-token"},
+            )
+
+        assert resp.status_code == 403
+        assert app_log.read_text() == "app line\n"
+
+    def test_clear_logs_preserves_selected_line_count(self, client, tmp_path):
+        app_log = tmp_path / "app.log"
+        app_log.write_text("app line\n")
+
+        with client.session_transaction() as session:
+            session["csrf_token"] = "test-token"
+
+        with patch("config.APP_LOG_PATH", str(app_log)):
+            resp = client.post(
+                "/logs/clear",
+                data={"_csrf_token": "test-token", "file": "app", "n": "500"},
+                follow_redirects=False,
+            )
+
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/logs?file=app&n=500")

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Streamline — App Logs{% endblock %}
+{% block title %}Streamline — Logs{% endblock %}
 {% block content %}
 
 <style>
@@ -53,6 +53,7 @@
     transition: border-color 0.15s, color 0.15s, background 0.15s;
   }
   .tb-btn:hover { border-color: var(--muted); color: var(--body); }
+  .tb-btn.tb-btn-destructive:hover { border-color: var(--accent2); color: var(--accent2); background: rgba(240,160,64,0.07); }
   .tb-btn[data-active="true"] { background: var(--surface); border-color: var(--muted); color: var(--text); }
 
   /* Tail active state */
@@ -84,7 +85,8 @@
   #log-search::placeholder { color: var(--muted); font-size: 0.6rem; }
   #log-search:focus { border-color: var(--accent); width: 180px; }
 
-  /* ── Line count select ───────────────────────────────────────────────────── */
+  /* ── File + line count selects ─────────────────────────────────────────── */
+  #file-select,
   #n-select {
     height: 26px;
     background: var(--surface);
@@ -103,9 +105,9 @@
     background-position: right 6px center;
     padding-right: 18px;
   }
-  #n-select:hover { border-color: var(--muted); }
-  #n-select:focus { border-color: var(--accent); }
-  #n-select option { background: var(--surface); color: var(--body); }
+  #file-select:hover, #n-select:hover { border-color: var(--muted); }
+  #file-select:focus, #n-select:focus { border-color: var(--accent); }
+  #file-select option, #n-select option { background: var(--surface); color: var(--body); }
 
   /* ── Footer ──────────────────────────────────────────────────────────────── */
   .log-footer {
@@ -138,7 +140,7 @@
 <!-- ── Header ──────────────────────────────────────────────────────────────── -->
 <div style="margin-bottom:1.2rem;">
   <span class="mono" style="font-size:0.6rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">Diagnostics</span>
-  <h1 style="font-size:clamp(1.5rem, 3vw, 2rem); margin-top:0.15rem; margin-bottom:0.15rem;">App Logs</h1>
+  <h1 style="font-size:clamp(1.5rem, 3vw, 2rem); margin-top:0.15rem; margin-bottom:0.15rem;">Logs</h1>
   <p style="color:var(--muted); font-size:0.78rem; margin:0;">
     <code class="mono" style="font-size:0.7rem; color:var(--body);">{{ log_path }}</code>
   </p>
@@ -151,10 +153,17 @@
   <div class="log-toolbar">
     <div class="log-toolbar-left">
       <button class="tb-btn" id="log-refresh-btn"
-        hx-get="/logs/lines?n={{ n }}"
+        hx-get="/logs/lines?file={{ log_name }}&n={{ n }}"
         hx-target="#log-lines-wrap"
         hx-swap="innerHTML"
         title="Reload log (R)">&#8635; Refresh</button>
+      <form method="post" action="/logs/clear?n={{ n }}" style="margin:0;">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="file" id="clear-log-file" value="{{ log_name }}">
+        <input type="hidden" name="n" id="clear-log-n" value="{{ n }}">
+        <button class="tb-btn tb-btn-destructive" type="submit" title="Clear selected log"
+          onclick="return window.confirm('Clear the selected log file?');">Clear</button>
+      </form>
       <button class="tb-btn" id="log-tail-toggle" data-active="false"
         title="Auto-refresh every 5s">&#9654; Tail</button>
       <button class="tb-btn" data-level="error" data-active="false" title="Errors only">Err</button>
@@ -162,6 +171,13 @@
       <button class="tb-btn" data-level="debug" data-active="false" title="Debug only">Dbg</button>
     </div>
     <div class="log-toolbar-right">
+      <form method="get" action="/logs" id="log-file-form" style="margin:0;">
+        <input type="hidden" name="n" id="file-form-n" value="{{ n }}">
+        <select id="file-select" name="file" title="Log file">
+          <option value="app" {{ 'selected' if log_name == 'app' else '' }}>app.log</option>
+          <option value="web" {{ 'selected' if log_name == 'web' else '' }}>web.log</option>
+        </select>
+      </form>
       <input id="log-search" type="search" placeholder="search..." autocomplete="off" spellcheck="false">
       <select id="n-select" title="Lines to show">
         {% for count in [50, 100, 200, 500] %}
@@ -192,12 +208,17 @@
   const refreshBtn = document.getElementById('log-refresh-btn');
   const tailBtn    = document.getElementById('log-tail-toggle');
   const searchBox  = document.getElementById('log-search');
+  const fileSelect = document.getElementById('file-select');
+  const fileFormN  = document.getElementById('file-form-n');
   const nSelect    = document.getElementById('n-select');
+  const clearFile  = document.getElementById('clear-log-file');
+  const clearN     = document.getElementById('clear-log-n');
   const lineCount  = document.getElementById('log-line-count');
   const topBtn     = document.getElementById('scroll-top-btn');
   const botBtn     = document.getElementById('scroll-bot-btn');
   const levelBtns  = document.querySelectorAll('.tb-btn[data-level]');
 
+  let currentFile = {{ log_name|tojson }};
   let currentN    = {{ n }};
   let tailTimer   = null;
   let tailActive  = false;
@@ -269,10 +290,18 @@
     applyFilters();
   });
 
+  fileSelect.addEventListener('change', function () {
+    fileFormN.value = currentN;
+    this.form.submit();
+  });
+
   // Line count dropdown
   nSelect.addEventListener('change', function () {
     currentN = parseInt(this.value);
-    var url = '/logs/lines?n=' + currentN;
+    fileFormN.value = currentN;
+    clearFile.value = currentFile;
+    clearN.value = currentN;
+    var url = '/logs/lines?file=' + encodeURIComponent(currentFile) + '&n=' + currentN;
     // Update the refresh button target too
     refreshBtn.setAttribute('hx-get', url);
     htmx.process(refreshBtn);
@@ -291,7 +320,7 @@
   function startTail() {
     if (tailTimer) return;
     tailTimer = setInterval(function () {
-      htmx.ajax('GET', '/logs/lines?n=' + currentN, {
+      htmx.ajax('GET', '/logs/lines?file=' + encodeURIComponent(currentFile) + '&n=' + currentN, {
         target: '#log-lines-wrap', swap: 'innerHTML'
       });
     }, 5000);

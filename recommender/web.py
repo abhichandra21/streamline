@@ -457,8 +457,15 @@ def healthz():
     return jsonify({"status": "ok"}), 200
 
 
-def _read_log_lines(n: int) -> list[str]:
-    log_path = Path(config.APP_LOG_PATH)
+def _resolve_log_path(log_name: str | None) -> tuple[str, Path]:
+    requested_name = (log_name or "app").strip().lower()
+    if requested_name == "web":
+        return "web", Path(config.APP_LOG_PATH).with_name("web.log")
+    return "app", Path(config.APP_LOG_PATH)
+
+
+def _read_log_lines(log_name: str, n: int) -> list[str]:
+    _, log_path = _resolve_log_path(log_name)
     if not log_path.exists():
         return []
     try:
@@ -468,26 +475,50 @@ def _read_log_lines(n: int) -> list[str]:
         return []
 
 
-def _parse_n() -> int:
+def _parse_n_value(raw_value: str | None) -> int:
     try:
-        return min(int(request.args.get("n", 200)), 1000)
+        return min(int(raw_value or 200), 1000)
     except (ValueError, TypeError):
         return 200
+
+
+def _parse_n() -> int:
+    return _parse_n_value(request.args.get("n", 200))
 
 
 @app.route("/logs")
 def logs_page() -> str:
     n = _parse_n()
-    lines = _read_log_lines(n)
-    return render_template("logs.html", lines=lines, log_path=str(Path(config.APP_LOG_PATH)), n=n)
+    log_name, log_path = _resolve_log_path(request.args.get("file"))
+    lines = _read_log_lines(log_name, n)
+    return render_template(
+        "logs.html",
+        lines=lines,
+        log_name=log_name,
+        log_path=str(log_path),
+        n=n,
+    )
 
 
 @app.route("/logs/lines")
 def logs_lines() -> str:
     """Partial used by HTMX refresh — returns only the log line fragment."""
     n = _parse_n()
-    lines = _read_log_lines(n)
+    log_name, _ = _resolve_log_path(request.args.get("file"))
+    lines = _read_log_lines(log_name, n)
     return render_template("_log_lines.html", lines=lines)
+
+
+@app.route("/logs/clear", methods=["POST"])
+def logs_clear() -> Response:
+    log_name, log_path = _resolve_log_path(request.form.get("file") or request.args.get("file"))
+    n = _parse_n_value(request.form.get("n") or request.args.get("n"))
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("", encoding="utf-8")
+    except OSError as exc:
+        return Response(f"Failed to clear {log_name} log: {exc}", status=500)
+    return redirect(url_for("logs_page", file=log_name, n=n))
 
 
 @app.route("/status")
