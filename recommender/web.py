@@ -1,6 +1,8 @@
 """Flask web UI for Streamline — taste profile dashboard, watch history, and recommendation search."""
 
+import csv
 import importlib
+import io
 import json
 import logging
 import os
@@ -326,6 +328,7 @@ def history() -> str:
     enrichments = _load_enrichments()
     q = request.args.get("q", "").lower()
     ct_filter = request.args.get("type", "")
+    sort = request.args.get("sort", "az")
 
     entries = list(ctx.watch_index.entries)
 
@@ -352,7 +355,10 @@ def history() -> str:
     if ct_filter in ("tv", "movie"):
         entries = [e for e in entries if e.get("content_type") == ct_filter]
 
-    entries.sort(key=lambda e: e["title"].lower())
+    if sort == "za":
+        entries.sort(key=lambda e: e["title"].lower(), reverse=True)
+    else:
+        entries.sort(key=lambda e: e["title"].lower())
     us = _load_user_state()
     items = []
     for e in entries:
@@ -371,7 +377,7 @@ def history() -> str:
                       if e.get("tmdb_id") else None,
             "rating": us.get_rating(m),
         })
-    return render_template("history.html", items=items, q=q, ct_filter=ct_filter, total=len(entries))
+    return render_template("history.html", items=items, q=q, ct_filter=ct_filter, sort=sort, total=len(entries))
 
 
 @app.route("/searches")
@@ -566,6 +572,23 @@ def watchlist_page() -> str:
     user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
     items = user_store.list_saved_titles(config.EVENT_DB_PATH, status="watchlist")
     return render_template("watchlist.html", items=items)
+
+
+@app.route("/watchlist/export")
+def watchlist_export():
+    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    items = user_store.list_saved_titles(config.EVENT_DB_PATH, status="watchlist")
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["title", "content_type", "tmdb_id", "saved_at"])
+    for item in items:
+        writer.writerow([item["title"], item["content_type"],
+                         item.get("tmdb_id") or "", item.get("saved_at") or ""])
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=watchlist.csv"},
+    )
 
 
 @app.route("/watchlist/save", methods=["POST"])

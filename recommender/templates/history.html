@@ -6,33 +6,44 @@
   <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--teal);">Collection</span>
   <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:1.25rem;">Archive</h1>
 
+  <!-- Filter row -->
   <form method="get" action="/history" id="filter-form" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
     <input
       type="text" name="q" value="{{ q }}" placeholder="Search titles..."
       class="input-field"
       style="padding:0.6rem 1rem; flex:1; min-width:180px;"
     >
-    <select name="type" class="input-field" style="padding:0.6rem 0.75rem; font-family:'JetBrains Mono',monospace; font-size:0.72rem;">
+    <select name="type" class="input-field mono" style="padding:0.6rem 0.75rem; font-size:0.72rem;">
       <option value="" {% if not ct_filter %}selected{% endif %}>All</option>
       <option value="tv" {% if ct_filter == 'tv' %}selected{% endif %}>TV</option>
       <option value="movie" {% if ct_filter == 'movie' %}selected{% endif %}>Film</option>
+    </select>
+    <select name="sort" class="input-field mono" style="padding:0.6rem 0.75rem; font-size:0.72rem;">
+      <option value="az" {% if sort == 'az' %}selected{% endif %}>A → Z</option>
+      <option value="za" {% if sort == 'za' %}selected{% endif %}>Z → A</option>
     </select>
     <button type="submit" class="btn-primary" style="padding:0.6rem 1.1rem;">Filter</button>
     {% if q or ct_filter %}
     <a href="/history" class="btn-ghost" style="padding:0.6rem 0.9rem;">Clear</a>
     {% endif %}
+    <!-- Add watched toggle — inline at end of filter row -->
+    <button type="button" id="add-toggle" onclick="toggleAddForm()"
+      class="btn-ghost"
+      style="padding:0.6rem 0.9rem; margin-left:auto;">+ Add watched</button>
   </form>
 
-  <div style="margin-top:0.75rem; padding:0.75rem 1rem; background:var(--surface); border:1px solid var(--border); border-radius:6px;">
+  <!-- Collapsible Add Title form -->
+  <div id="add-form-wrapper" style="display:none; margin-top:0.5rem; padding:0.75rem 1rem; background:var(--surface); border:1px solid var(--border); border-radius:6px;">
     <form hx-post="/archive/add" hx-target="#add-result" hx-swap="innerHTML" style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-      <input type="text" name="title" placeholder="Add a title you watched..."
+      <input type="text" name="title" placeholder="Title you watched..." id="add-title-input"
         class="input-field" style="padding:0.5rem 0.75rem; flex:1; min-width:180px;">
       <select name="content_type" class="input-field mono" style="padding:0.5rem 0.75rem; font-size:0.72rem;">
         <option value="tv">TV</option>
         <option value="movie">Film</option>
       </select>
       <button type="submit" class="btn-primary" style="padding:0.5rem 1rem;">Add</button>
+      <button type="button" onclick="toggleAddForm()" class="btn-ghost" style="padding:0.5rem 0.75rem;">Cancel</button>
       <span id="add-result" style="display:inline;"></span>
     </form>
   </div>
@@ -174,6 +185,18 @@
 </style>
 
 <script>
+function toggleAddForm() {
+  const wrapper = document.getElementById('add-form-wrapper');
+  const btn = document.getElementById('add-toggle');
+  const open = wrapper.style.display !== 'none';
+  wrapper.style.display = open ? 'none' : '';
+  btn.style.color = open ? '' : 'var(--teal)';
+  btn.style.borderColor = open ? '' : 'var(--teal)';
+  if (!open) {
+    setTimeout(() => document.getElementById('add-title-input').focus(), 50);
+  }
+}
+
 function setView(mode) {
   document.querySelectorAll('.archive-view').forEach(el => el.style.display = 'none');
   document.getElementById('view-' + mode).style.display = '';
