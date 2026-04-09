@@ -18,6 +18,7 @@ from markupsafe import Markup, escape
 
 import config
 from recommender import history as query_history
+from recommender import user_store
 from recommender import watch_index as wi
 from recommender import event_store
 from recommender.event_store import load_events
@@ -438,6 +439,105 @@ def title_detail(tmdb_id: int) -> str:
         "title.html", meta=meta, description=description, overview=overview,
         tmdb_id=tmdb_id, ct=ct, poster=poster,
     )
+
+
+def _load_user_state():
+    """Load fresh user state snapshot for the current request."""
+    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    from recommender.user_state import UserStateIndex
+    return UserStateIndex.load(config.EVENT_DB_PATH)
+
+
+# ── Watchlist routes ──────────────────────────────────────────────────────────
+
+@app.route("/watchlist")
+def watchlist_page() -> str:
+    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    items = user_store.list_saved_titles(config.EVENT_DB_PATH, status="watchlist")
+    return render_template("watchlist.html", items=items)
+
+
+@app.route("/watchlist/save", methods=["POST"])
+def watchlist_save() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    if not title:
+        return "Missing title", 400
+    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    user_store.save_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+    return '<span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>'
+
+
+@app.route("/watchlist/dismiss", methods=["POST"])
+def watchlist_dismiss() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    if not title:
+        return "Missing title", 400
+    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    user_store.dismiss_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+    return ""
+
+
+@app.route("/watchlist/remove", methods=["POST"])
+def watchlist_remove() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    if not title:
+        return "Missing title", 400
+    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    user_store.remove_saved_title(config.EVENT_DB_PATH, title, ct)
+    return ""
+
+
+@app.route("/watchlist/watched", methods=["POST"])
+def watchlist_watched() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    if not title:
+        return "Missing title", 400
+    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    user_store.mark_watched_from_watchlist(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+    uid = f"wl-{hash(title) & 0xFFFFFF:06x}"
+    return render_template("_rating_prompt.html", title=title, content_type=ct,
+                           tmdb_id=tmdb_id, uid=uid)
+
+
+# ── Archive routes ────────────────────────────────────────────────────────────
+
+@app.route("/archive/add", methods=["POST"])
+def archive_add() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    if not title:
+        return "Missing title", 400
+    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    user_store.add_to_archive(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id, source="web")
+    uid = f"aa-{hash(title) & 0xFFFFFF:06x}"
+    return render_template("_rating_prompt.html", title=title, content_type=ct,
+                           tmdb_id=tmdb_id, uid=uid)
+
+
+@app.route("/archive/rate", methods=["POST"])
+def archive_rate() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    rating = request.form.get("rating", "")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    if not title:
+        return "Missing title", 400
+    if rating == "skip":
+        return '<span class="mono" style="font-size:0.58rem; color:var(--teal);">added</span>'
+    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    user_store.rate_title(config.EVENT_DB_PATH, title, ct, rating, tmdb_id=tmdb_id)
+    current = None if rating == "clear" else rating
+    uid = f"rt-{hash(title) & 0xFFFFFF:06x}"
+    return render_template("_rating_state.html", title=title, content_type=ct,
+                           tmdb_id=tmdb_id, current_rating=current, uid=uid)
 
 
 @app.route("/help")

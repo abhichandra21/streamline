@@ -518,3 +518,132 @@ class TestEventStoreStatus:
         assert payload["status"] == "ok"
         assert payload["event_store_ready"] is False
         assert payload["event_store_import_count"] == 0
+
+
+class TestWatchlistRoutes:
+
+    def test_save_to_watchlist(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, list_saved_titles
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.post("/watchlist/save", data={
+            **_csrf_form(),
+            "title": "Breaking Bad",
+            "content_type": "tv",
+        })
+        assert resp.status_code == 200
+        items = list_saved_titles(db, status="watchlist")
+        assert len(items) == 1
+
+    def test_dismiss_title(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title, list_saved_titles
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "Bad Show", "tv")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.post("/watchlist/dismiss", data={
+            **_csrf_form(),
+            "title": "Bad Show",
+            "content_type": "tv",
+        })
+        assert resp.status_code == 200
+        assert len(list_saved_titles(db, status="dismissed")) == 1
+
+    def test_remove_from_watchlist(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title, list_saved_titles
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "Some Show", "tv")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.post("/watchlist/remove", data={
+            **_csrf_form(),
+            "title": "Some Show",
+            "content_type": "tv",
+        })
+        assert resp.status_code == 200
+        assert list_saved_titles(db) == []
+
+    def test_mark_watched_returns_rating_prompt(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "The Wire", "tv")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.post("/watchlist/watched", data={
+            **_csrf_form(),
+            "title": "The Wire",
+            "content_type": "tv",
+        })
+        assert resp.status_code == 200
+        assert len(list_manual_archive(db)) == 1
+        # Response should contain rating prompt
+        assert b"liked" in resp.data or b"thumbs" in resp.data.lower()
+
+
+class TestArchiveRoutes:
+
+    def test_add_to_archive(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.post("/archive/add", data={
+            **_csrf_form(),
+            "title": "The Bear",
+            "content_type": "tv",
+        })
+        assert resp.status_code == 200
+        assert len(list_manual_archive(db)) == 1
+
+    def test_rate_archive_title(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, load_ratings
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.post("/archive/rate", data={
+            **_csrf_form(),
+            "title": "Breaking Bad",
+            "content_type": "tv",
+            "rating": "liked",
+        })
+        assert resp.status_code == 200
+        ratings = load_ratings(db)
+        assert len(ratings) == 1
+        assert ratings[0]["rating"] == "liked"
+
+    def test_clear_rating(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, rate_title, load_ratings
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        rate_title(db, "Breaking Bad", "tv", "liked")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.post("/archive/rate", data={
+            **_csrf_form(),
+            "title": "Breaking Bad",
+            "content_type": "tv",
+            "rating": "clear",
+        })
+        assert resp.status_code == 200
+        assert load_ratings(db) == []

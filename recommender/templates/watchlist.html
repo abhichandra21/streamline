@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Watchlist{% endblock %}
+{% block content %}
+<div style="margin-bottom:2rem;">
+  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--teal);">Queue</span>
+  <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:1.25rem;">Watchlist</h1>
+  <p class="mono" style="font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">{{ items|length }} titles</p>
+</div>
+{% if items %}
+<div style="display:flex; flex-direction:column; gap:6px;">
+  {% for item in items %}
+  <div id="wl-item-{{ loop.index }}" style="display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:0.75rem 1rem; border-radius:6px; background:var(--surface); border:1px solid var(--border);">
+    <span style="font-family:'DM Serif Display',serif; font-size:1.05rem; color:var(--text);">{{ item.title }}</span>
+    <div style="display:flex; align-items:center; gap:0.4rem;">
+      <form hx-post="/watchlist/watched" hx-target="#wl-item-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="title" value="{{ item.title }}">
+        <input type="hidden" name="content_type" value="{{ item.content_type }}">
+        {% if item.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ item.tmdb_id }}">{% endif %}
+        <button type="submit" class="mono" style="font-size:0.58rem; background:none; border:1px solid var(--teal); color:var(--teal); cursor:pointer; padding:3px 8px; border-radius:3px;">Watched</button>
+      </form>
+      <form hx-post="/watchlist/dismiss" hx-target="#wl-item-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="title" value="{{ item.title }}">
+        <input type="hidden" name="content_type" value="{{ item.content_type }}">
+        {% if item.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ item.tmdb_id }}">{% endif %}
+        <button type="submit" class="mono" style="font-size:0.58rem; background:none; border:1px solid var(--border); color:var(--muted); cursor:pointer; padding:3px 8px; border-radius:3px;">Won't watch</button>
+      </form>
+      <form hx-post="/watchlist/remove" hx-target="#wl-item-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="title" value="{{ item.title }}">
+        <input type="hidden" name="content_type" value="{{ item.content_type }}">
+        <button type="submit" class="mono" style="font-size:0.58rem; background:none; border:none; color:var(--muted); cursor:pointer; padding:3px 6px;">x</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div style="padding:4rem; text-align:center;">
+  <p class="mono" style="font-size:0.68rem; color:var(--muted);">No titles saved yet</p>
+</div>
+{% endif %}
+{% endblock %}

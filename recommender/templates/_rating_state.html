@@ -1,0 +1,34 @@
+<span id="rating-{{ uid }}" style="display:inline-flex; align-items:center; gap:0.3rem;">
+  <form hx-post="/archive/rate" hx-target="#rating-{{ uid }}" hx-swap="outerHTML" style="margin:0; display:inline-flex; gap:2px;">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="title" value="{{ title }}">
+    <input type="hidden" name="content_type" value="{{ content_type }}">
+    <input type="hidden" name="tmdb_id" value="{{ tmdb_id or '' }}">
+    {% if current_rating == "liked" %}
+    <button type="submit" name="rating" value="clear" class="mono"
+      style="background:none; border:none; cursor:pointer; padding:2px 4px; font-size:0.8rem; color:var(--teal);"
+      title="Remove rating">&#x1F44D;</button>
+    <button type="submit" name="rating" value="disliked" class="mono"
+      style="background:none; border:none; cursor:pointer; padding:2px 4px; font-size:0.8rem; color:var(--muted); transition:color 0.15s;"
+      onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'"
+      title="Disliked">&#x1F44E;</button>
+    {% elif current_rating == "disliked" %}
+    <button type="submit" name="rating" value="liked" class="mono"
+      style="background:none; border:none; cursor:pointer; padding:2px 4px; font-size:0.8rem; color:var(--muted); transition:color 0.15s;"
+      onmouseover="this.style.color='var(--teal)'" onmouseout="this.style.color='var(--muted)'"
+      title="Liked">&#x1F44D;</button>
+    <button type="submit" name="rating" value="clear" class="mono"
+      style="background:none; border:none; cursor:pointer; padding:2px 4px; font-size:0.8rem; color:var(--accent);"
+      title="Remove rating">&#x1F44E;</button>
+    {% else %}
+    <button type="submit" name="rating" value="liked" class="mono"
+      style="background:none; border:none; cursor:pointer; padding:2px 4px; font-size:0.8rem; color:var(--muted); transition:color 0.15s;"
+      onmouseover="this.style.color='var(--teal)'" onmouseout="this.style.color='var(--muted)'"
+      title="Liked">&#x1F44D;</button>
+    <button type="submit" name="rating" value="disliked" class="mono"
+      style="background:none; border:none; cursor:pointer; padding:2px 4px; font-size:0.8rem; color:var(--muted); transition:color 0.15s;"
+      onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'"
+      title="Disliked">&#x1F44E;</button>
+    {% endif %}
+  </form>
+</span>
