@@ -349,3 +349,134 @@ def test_tmdb_id_upgrade_reuses_existing_null_identity(tmp_path):
     items = list_saved_titles(db)
     assert len(items) == 1
     assert items[0]["tmdb_id"] == 95396
+
+
+import json
+
+
+def test_ensure_user_store_creates_tables(tmp_path):
+    db = str(tmp_path / "test.db")
+    feedback_path = str(tmp_path / "feedback.json")
+    from recommender.user_store import ensure_user_store
+
+    ensure_user_store(db, feedback_path)
+
+    import sqlite3
+    conn = sqlite3.connect(db)
+    tables = {
+        row[0] for row in
+        conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    conn.close()
+    assert "saved_titles" in tables
+
+
+def test_ensure_user_store_migrates_feedback_json(tmp_path):
+    db = str(tmp_path / "test.db")
+    feedback_path = str(tmp_path / "feedback.json")
+    Path(feedback_path).write_text(json.dumps({
+        "ratings": [
+            {"title": "Show A", "rating": "liked", "content_type": "tv",
+             "timestamp": "2026-01-15T10:30:00+00:00"},
+            {"title": "Show B", "rating": "disliked", "timestamp": "2026-02-01T08:00:00+00:00",
+             "content_type": "movie"},
+        ],
+        "additions": [
+            {"title": "Movie X", "content_type": "movie", "timestamp": "2026-03-01T12:00:00+00:00"},
+        ],
+    }))
+
+    from recommender.user_store import ensure_user_store, load_ratings, list_manual_archive
+
+    ensure_user_store(db, feedback_path)
+
+    ratings = load_ratings(db)
+    assert len(ratings) == 2
+    assert any(r["title"] == "Show A" and r["rating"] == "liked" for r in ratings)
+
+    archive = list_manual_archive(db)
+    assert len(archive) == 1
+    assert archive[0]["source"] == "feedback_migration"
+    assert archive[0]["watched_at"] == "2026-03-01T12:00:00+00:00"
+
+    # feedback.json should be renamed
+    assert not Path(feedback_path).exists()
+    assert Path(feedback_path + ".migrated").exists()
+
+
+def test_ensure_user_store_rejects_untyped_feedback_when_type_cannot_be_inferred(tmp_path):
+    db = str(tmp_path / "test.db")
+    feedback_path = str(tmp_path / "feedback.json")
+    Path(feedback_path).write_text(json.dumps({
+        "ratings": [
+            {"title": "Unknown Title", "rating": "liked", "timestamp": "2026-01-15T10:30:00+00:00"},
+        ],
+        "additions": [],
+    }))
+
+    from recommender.user_store import ensure_user_store
+
+    with pytest.raises(ValueError, match="content type"):
+        ensure_user_store(db, feedback_path)
+
+
+def test_ensure_user_store_skips_if_already_migrated(tmp_path):
+    db = str(tmp_path / "test.db")
+    feedback_path = str(tmp_path / "feedback.json")
+
+    from recommender.user_store import ensure_user_store
+
+    # First migration
+    Path(feedback_path).write_text(json.dumps({"ratings": [], "additions": []}))
+    ensure_user_store(db, feedback_path)
+
+    # Calling again with no feedback.json should be fine
+    ensure_user_store(db, feedback_path)
+
+
+def test_ensure_user_store_errors_if_json_exists_but_tables_have_rows(tmp_path):
+    db = str(tmp_path / "test.db")
+    feedback_path = str(tmp_path / "feedback.json")
+
+    from recommender.user_store import init_db, rate_title, ensure_user_store
+
+    # Create tables and add a row manually (simulating prior user-store writes)
+    init_db(db)
+    rate_title(db, "Existing", "tv", "liked")
+
+    # Now place a feedback.json (simulating incomplete migration)
+    Path(feedback_path).write_text(json.dumps({
+        "ratings": [{"title": "New", "rating": "liked", "content_type": "tv",
+                     "timestamp": "2026-01-01T00:00:00+00:00"}],
+        "additions": [],
+    }))
+
+    with pytest.raises(RuntimeError, match="already contain"):
+        ensure_user_store(db, feedback_path)
+
+
+def test_ensure_user_store_retries_rename_if_marker_set(tmp_path):
+    """If migration marker exists but feedback.json was not renamed, retry only the rename."""
+    db = str(tmp_path / "test.db")
+    feedback_path = str(tmp_path / "feedback.json")
+
+    from recommender.user_store import init_db, ensure_user_store
+
+    init_db(db)
+
+    # Set migration marker manually
+    import sqlite3
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO user_store_meta (key, value) VALUES ('feedback_migrated', '1')"
+    )
+    conn.commit()
+    conn.close()
+
+    # feedback.json still exists (rename failed last time)
+    Path(feedback_path).write_text(json.dumps({"ratings": [], "additions": []}))
+    ensure_user_store(db, feedback_path)
+
+    # Should have renamed without re-importing
+    assert not Path(feedback_path).exists()
+    assert Path(feedback_path + ".migrated").exists()

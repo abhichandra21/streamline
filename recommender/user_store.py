@@ -1,9 +1,13 @@
 """SQLite user store for watchlist, ratings, and manual archive entries."""
 
+import json as _json
+import logging
 import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+
+log = logging.getLogger("recommender.user_store")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS saved_titles (
@@ -133,9 +137,13 @@ def resolve_rating_content_type(db_path: str, title: str,
             if len(rows) == 1:
                 return rows[0][0]
 
+        try:
+            events = load_events(db_path)
+        except Exception:
+            events = []
         event_matches = {
             event.content_type
-            for event in load_events(db_path)
+            for event in events
             if _normalize(event.series_name if event.content_type == "tv" else event.title) == norm
         }
         if len(event_matches) == 1:
@@ -478,5 +486,107 @@ def list_manual_archive(db_path: str) -> list[dict]:
             }
             for r in rows
         ]
+    finally:
+        conn.close()
+
+
+def ensure_user_store(db_path: str, feedback_path: str) -> None:
+    """Create tables/indexes and run one-time migration from feedback.json if needed."""
+    init_db(db_path)
+
+    fp = Path(feedback_path)
+    if not fp.exists():
+        return
+
+    conn = _connect(db_path)
+    try:
+        # Check for migration marker
+        marker = conn.execute(
+            "SELECT value FROM user_store_meta WHERE key = 'feedback_migrated'"
+        ).fetchone()
+
+        if marker:
+            # Marker exists — just retry the rename if JSON still present
+            fp.rename(str(fp) + ".migrated")
+            log.info("Renamed leftover %s after prior migration", feedback_path)
+            return
+
+        # Check for existing rows (conflict guard)
+        row_count = 0
+        for table in ("saved_titles", "title_ratings", "manual_archive_entries"):
+            row_count += conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+
+        if row_count > 0:
+            raise RuntimeError(
+                f"User-store tables already contain {row_count} rows but "
+                f"{feedback_path} has not been migrated. Cannot safely proceed. "
+                "Remove the JSON file manually if the data has already been migrated."
+            )
+
+        # Load and import feedback.json
+        data = _json.loads(fp.read_text())
+
+        with conn:
+            for entry in data.get("ratings", []):
+                title = entry["title"]
+                rating = entry.get("rating", "liked")
+                tmdb_id = entry.get("tmdb_id")
+                ct = entry.get("content_type") or resolve_rating_content_type(db_path, title, tmdb_id=tmdb_id)
+                ts = entry.get("timestamp", _now_iso())
+                norm = _normalize(title)
+                if tmdb_id is not None:
+                    conn.execute(
+                        "INSERT INTO title_ratings "
+                        "(title, normalized_title, content_type, tmdb_id, rating, rated_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT (content_type, tmdb_id) WHERE tmdb_id IS NOT NULL "
+                        "DO UPDATE SET rating=excluded.rating, updated_at=excluded.updated_at",
+                        (title, norm, ct, tmdb_id, rating, ts, ts),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO title_ratings "
+                        "(title, normalized_title, content_type, tmdb_id, rating, rated_at, updated_at) "
+                        "VALUES (?, ?, ?, NULL, ?, ?, ?) "
+                        "ON CONFLICT (content_type, normalized_title) WHERE tmdb_id IS NULL "
+                        "DO UPDATE SET rating=excluded.rating, updated_at=excluded.updated_at",
+                        (title, norm, ct, rating, ts, ts),
+                    )
+
+            for entry in data.get("additions", []):
+                title = entry["title"]
+                tmdb_id = entry.get("tmdb_id")
+                ct = entry.get("content_type") or resolve_rating_content_type(db_path, title, tmdb_id=tmdb_id)
+                ts = entry.get("timestamp", _now_iso())
+                norm = _normalize(title)
+                if tmdb_id is not None:
+                    conn.execute(
+                        "INSERT INTO manual_archive_entries "
+                        "(title, normalized_title, content_type, tmdb_id, watched_at, source) "
+                        "VALUES (?, ?, ?, ?, ?, 'feedback_migration') "
+                        "ON CONFLICT (content_type, tmdb_id) WHERE tmdb_id IS NOT NULL "
+                        "DO UPDATE SET watched_at=excluded.watched_at, source=excluded.source",
+                        (title, norm, ct, tmdb_id, ts),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO manual_archive_entries "
+                        "(title, normalized_title, content_type, tmdb_id, watched_at, source) "
+                        "VALUES (?, ?, ?, NULL, ?, 'feedback_migration') "
+                        "ON CONFLICT (content_type, normalized_title) WHERE tmdb_id IS NULL "
+                        "DO UPDATE SET watched_at=excluded.watched_at, source=excluded.source",
+                        (title, norm, ct, ts),
+                    )
+
+            # Write migration marker inside the transaction
+            conn.execute(
+                "INSERT OR REPLACE INTO user_store_meta (key, value) "
+                "VALUES ('feedback_migrated', '1')"
+            )
+
+        # Rename after successful transaction
+        fp.rename(str(fp) + ".migrated")
+        log.info("Migrated %s to SQLite and renamed to %s.migrated", feedback_path, feedback_path)
+
     finally:
         conn.close()
