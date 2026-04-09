@@ -249,3 +249,103 @@ def test_add_to_archive_without_tmdb_id(tmp_path):
     items = list_manual_archive(db)
     assert len(items) == 1
     assert items[0]["tmdb_id"] is None
+
+
+def test_mark_watched_from_watchlist(tmp_path):
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import (
+        init_db, save_title, mark_watched_from_watchlist,
+        list_saved_titles, list_manual_archive, load_ratings,
+    )
+
+    init_db(db)
+    save_title(db, "Breaking Bad", "tv", tmdb_id=1396)
+    mark_watched_from_watchlist(db, "Breaking Bad", "tv", rating="liked", tmdb_id=1396)
+
+    assert list_saved_titles(db) == []
+    archive = list_manual_archive(db)
+    assert len(archive) == 1
+    assert archive[0]["title"] == "Breaking Bad"
+    ratings = load_ratings(db)
+    assert len(ratings) == 1
+    assert ratings[0]["rating"] == "liked"
+
+
+def test_mark_watched_without_rating(tmp_path):
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import (
+        init_db, save_title, mark_watched_from_watchlist,
+        list_saved_titles, list_manual_archive, load_ratings,
+    )
+
+    init_db(db)
+    save_title(db, "The Wire", "tv")
+    mark_watched_from_watchlist(db, "The Wire", "tv")
+
+    assert list_saved_titles(db) == []
+    assert len(list_manual_archive(db)) == 1
+    assert load_ratings(db) == []
+
+
+def test_mark_watched_rollback_on_failure(tmp_path):
+    """If the rating write fails, the entire transaction rolls back."""
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import init_db, save_title, list_saved_titles, list_manual_archive
+    import recommender.user_store as us
+
+    init_db(db)
+    save_title(db, "Test Show", "tv", tmdb_id=999)
+
+    # Corrupt the title_ratings table to force a write failure
+    import sqlite3
+    conn = sqlite3.connect(db)
+    conn.execute("DROP TABLE title_ratings")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(Exception):
+        us.mark_watched_from_watchlist(db, "Test Show", "tv", rating="liked", tmdb_id=999)
+
+    # Watchlist row must still be present
+    assert len(list_saved_titles(db)) == 1
+    # No archive entry should exist
+    assert list_manual_archive(db) == []
+
+
+def test_tmdb_id_takes_precedence_over_title(tmp_path):
+    """Two entries with same normalized title but different tmdb_ids are separate."""
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import init_db, save_title, list_saved_titles
+
+    init_db(db)
+    save_title(db, "The Office", "tv", tmdb_id=2316)
+    save_title(db, "The Office", "tv", tmdb_id=69735)  # US vs UK
+
+    items = list_saved_titles(db)
+    assert len(items) == 2
+
+
+def test_no_tmdb_id_dedupes_by_normalized_title(tmp_path):
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import init_db, save_title, list_saved_titles
+
+    init_db(db)
+    save_title(db, "The Office (US)", "tv")  # normalized: "the office"
+    save_title(db, "The Office", "tv")       # same normalized title
+
+    items = list_saved_titles(db)
+    assert len(items) == 1
+
+
+def test_tmdb_id_upgrade_reuses_existing_null_identity(tmp_path):
+    """A later TMDB-backed save upgrades the NULL-tmdb row instead of duplicating it."""
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import init_db, save_title, list_saved_titles
+
+    init_db(db)
+    save_title(db, "Severance", "tv")
+    save_title(db, "Severance", "tv", tmdb_id=95396)
+
+    items = list_saved_titles(db)
+    assert len(items) == 1
+    assert items[0]["tmdb_id"] == 95396

@@ -386,6 +386,81 @@ def add_to_archive(db_path: str, title: str, content_type: str,
         conn.close()
 
 
+def mark_watched_from_watchlist(db_path: str, title: str, content_type: str,
+                                rating: str | None = None,
+                                tmdb_id: int | None = None) -> None:
+    """Atomic: remove from saved_titles, add to manual_archive, optionally rate.
+
+    If any step fails, the entire transaction rolls back.
+    """
+    now = _now_iso()
+    norm = _normalize(title)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            # Delete from saved_titles
+            if tmdb_id is not None:
+                conn.execute(
+                    "DELETE FROM saved_titles WHERE content_type = ? AND tmdb_id = ?",
+                    (content_type, tmdb_id),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM saved_titles "
+                    "WHERE content_type = ? AND normalized_title = ? AND tmdb_id IS NULL",
+                    (content_type, norm),
+                )
+
+            # Upsert manual archive entry
+            _reconcile_identity(conn, "manual_archive_entries", title, content_type, tmdb_id)
+            if tmdb_id is not None:
+                conn.execute(
+                    "INSERT INTO manual_archive_entries "
+                    "(title, normalized_title, content_type, tmdb_id, watched_at, source) "
+                    "VALUES (?, ?, ?, ?, ?, 'web') "
+                    "ON CONFLICT (content_type, tmdb_id) WHERE tmdb_id IS NOT NULL "
+                    "DO UPDATE SET title=excluded.title, normalized_title=excluded.normalized_title, "
+                    "watched_at=excluded.watched_at, source=excluded.source",
+                    (title, norm, content_type, tmdb_id, now),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO manual_archive_entries "
+                    "(title, normalized_title, content_type, tmdb_id, watched_at, source) "
+                    "VALUES (?, ?, ?, NULL, ?, 'web') "
+                    "ON CONFLICT (content_type, normalized_title) WHERE tmdb_id IS NULL "
+                    "DO UPDATE SET title=excluded.title, watched_at=excluded.watched_at, "
+                    "source=excluded.source",
+                    (title, norm, content_type, now),
+                )
+
+            # Optional rating
+            if rating and rating != "clear":
+                _reconcile_identity(conn, "title_ratings", title, content_type, tmdb_id)
+                if tmdb_id is not None:
+                    conn.execute(
+                        "INSERT INTO title_ratings "
+                        "(title, normalized_title, content_type, tmdb_id, rating, rated_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT (content_type, tmdb_id) WHERE tmdb_id IS NOT NULL "
+                        "DO UPDATE SET title=excluded.title, normalized_title=excluded.normalized_title, "
+                        "rating=excluded.rating, updated_at=excluded.updated_at",
+                        (title, norm, content_type, tmdb_id, rating, now, now),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO title_ratings "
+                        "(title, normalized_title, content_type, tmdb_id, rating, rated_at, updated_at) "
+                        "VALUES (?, ?, ?, NULL, ?, ?, ?) "
+                        "ON CONFLICT (content_type, normalized_title) WHERE tmdb_id IS NULL "
+                        "DO UPDATE SET title=excluded.title, rating=excluded.rating, "
+                        "updated_at=excluded.updated_at",
+                        (title, norm, content_type, rating, now, now),
+                    )
+    finally:
+        conn.close()
+
+
 def list_manual_archive(db_path: str) -> list[dict]:
     """Return all manual archive entries."""
     if not Path(db_path).exists():
