@@ -63,7 +63,9 @@
 
     <div style="border-left:3px solid var(--accent); padding:0 0 0.5rem;">
       {% if entry.results %}
+      {% set entry_idx = loop.index %}
       {% for r in entry.results %}
+      {% set save_id = "save-" ~ entry_idx ~ "-" ~ loop.index %}
       <div style="display:flex; gap:0.85rem; padding:0.65rem 1.25rem 0.65rem 2.75rem; transition:background 0.15s;{% if not loop.last %} border-bottom:1px solid rgba(53,47,64,0.5);{% endif %}"
         onmouseover="this.style.background='var(--surface2)'"
         onmouseout="this.style.background='transparent'"
@@ -75,9 +77,38 @@
             <span class="mono" style="font-size:0.58rem; color:var(--accent2);">★ {{ "%.1f"|format(r.vote_average) }}</span>
           </div>
           <p style="font-size:0.8rem; color:var(--body); line-height:1.65; margin:0;">{{ r.explanation }}</p>
-          {% if r.streaming_providers %}
-          <span class="mono" style="font-size:0.55rem; color:var(--muted); margin-top:0.2rem; display:inline-block;">{{ r.streaming_providers | join("  ·  ") }}</span>
-          {% endif %}
+          <div style="display:flex; align-items:center; gap:0.75rem; margin-top:0.2rem; flex-wrap:wrap;">
+            {% if r.streaming_providers %}
+            <span class="mono" style="font-size:0.55rem; color:var(--muted);">{{ r.streaming_providers | join("  ·  ") }}</span>
+            {% endif %}
+            {% if r.user_state.in_archive %}
+            <span class="mono" style="font-size:0.55rem; color:var(--muted);">Watched</span>
+            {% elif r.user_state.in_watchlist %}
+            <span id="{{ save_id }}" style="display:inline-flex; align-items:center; gap:0.3rem;">
+              <span class="mono" style="font-size:0.55rem; color:var(--teal);">Saved</span>
+              <form hx-post="/watchlist/unsave" hx-target="#{{ save_id }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="title" value="{{ r.title }}">
+                <input type="hidden" name="content_type" value="{{ r.content_type }}">
+                {% if r.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ r.tmdb_id }}">{% endif %}
+                <input type="hidden" name="target_id" value="{{ save_id }}">
+                <button type="submit" class="mono" style="font-size:0.55rem; background:none; border:none; cursor:pointer; color:var(--muted); padding:0 2px;" title="Remove from watchlist">&times;</button>
+              </form>
+            </span>
+            {% else %}
+            <span id="{{ save_id }}">
+              <form hx-post="/watchlist/save" hx-target="#{{ save_id }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="title" value="{{ r.title }}">
+                <input type="hidden" name="content_type" value="{{ r.content_type }}">
+                {% if r.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ r.tmdb_id }}">{% endif %}
+                <input type="hidden" name="mode" value="toggle">
+                <input type="hidden" name="target_id" value="{{ save_id }}">
+                <button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;">+ Save</button>
+              </form>
+            </span>
+            {% endif %}
+          </div>
         </div>
       </div>
       {% endfor %}

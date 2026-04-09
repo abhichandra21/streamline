@@ -79,18 +79,6 @@
   {% endfor %}
 </div>
 
-<style>
-  .result-link {
-    font-size: 0.58rem;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--muted);
-    text-decoration: none;
-    transition: color 0.15s;
-  }
-  .result-link:hover { color: var(--accent); text-decoration: none; }
-</style>
-
 {% elif query %}
 <div style="padding:3rem; text-align:center;">
   <p class="mono" style="font-size:0.7rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">No results for "{{ query }}"</p>

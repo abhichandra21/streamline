@@ -377,6 +377,7 @@ def history() -> str:
 @app.route("/searches")
 def searches() -> str:
     entries = query_history.load()
+    us = _load_user_state()
     for e in entries:
         ts = e.get("timestamp", "")
         try:
@@ -398,6 +399,8 @@ def searches() -> str:
                 e["timestamp_display"] = dt.strftime("%b %d, %Y")
         except (ValueError, TypeError):
             e["timestamp_display"] = ts[:19]
+        for r in e.get("results", []):
+            r["user_state"] = _title_state(r["title"], r["content_type"], us, r.get("tmdb_id"))
     return render_template("searches.html", entries=entries)
 
 
@@ -516,6 +519,46 @@ def _title_state(title: str, content_type: str, us: "UserStateIndex",
     }
 
 
+def _watchlist_saved_fragment(title: str, ct: str, tmdb_id: int | None, target_id: str) -> str:
+    """HTML fragment: 'Saved ×' toggle, used when saving from searches history."""
+    csrf = _get_csrf_token()
+    t = escape(title)
+    tid = escape(target_id)
+    tmdb_val = tmdb_id if tmdb_id is not None else ""
+    return Markup(
+        f'<span id="{tid}" style="display:inline-flex; align-items:center; gap:0.3rem;">'
+        f'<span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>'
+        f'<form hx-post="/watchlist/unsave" hx-target="#{tid}" hx-swap="outerHTML" style="margin:0; display:inline;">'
+        f'<input type="hidden" name="_csrf_token" value="{csrf}">'
+        f'<input type="hidden" name="title" value="{t}">'
+        f'<input type="hidden" name="content_type" value="{escape(ct)}">'
+        f'<input type="hidden" name="tmdb_id" value="{tmdb_val}">'
+        f'<input type="hidden" name="target_id" value="{tid}">'
+        f'<button type="submit" class="mono" style="font-size:0.55rem; background:none; border:none; cursor:pointer; color:var(--muted); padding:0 2px;" title="Remove from watchlist">&times;</button>'
+        f'</form></span>'
+    )
+
+
+def _watchlist_save_fragment(title: str, ct: str, tmdb_id: int | None, target_id: str) -> str:
+    """HTML fragment: '+ Save' toggle, returned after unsaving from searches history."""
+    csrf = _get_csrf_token()
+    t = escape(title)
+    tid = escape(target_id)
+    tmdb_val = tmdb_id if tmdb_id is not None else ""
+    return Markup(
+        f'<span id="{tid}" style="display:inline-flex; align-items:center;">'
+        f'<form hx-post="/watchlist/save" hx-target="#{tid}" hx-swap="outerHTML" style="margin:0; display:inline;">'
+        f'<input type="hidden" name="_csrf_token" value="{csrf}">'
+        f'<input type="hidden" name="title" value="{t}">'
+        f'<input type="hidden" name="content_type" value="{escape(ct)}">'
+        f'<input type="hidden" name="tmdb_id" value="{tmdb_val}">'
+        f'<input type="hidden" name="mode" value="toggle">'
+        f'<input type="hidden" name="target_id" value="{tid}">'
+        f'<button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;">+ Save</button>'
+        f'</form></span>'
+    )
+
+
 # ── Watchlist routes ──────────────────────────────────────────────────────────
 
 @app.route("/watchlist")
@@ -530,11 +573,28 @@ def watchlist_save() -> str:
     title = (request.form.get("title") or "").strip()
     ct = request.form.get("content_type", "tv")
     tmdb_id = request.form.get("tmdb_id", type=int)
+    mode = request.form.get("mode", "")
+    target_id = (request.form.get("target_id") or "").strip()
     if not title:
         return "Missing title", 400
     user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
     user_store.save_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+    if mode == "toggle" and target_id:
+        return _watchlist_saved_fragment(title, ct, tmdb_id, target_id)
     return '<span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>'
+
+
+@app.route("/watchlist/unsave", methods=["POST"])
+def watchlist_unsave() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    target_id = (request.form.get("target_id") or "").strip()
+    if not title:
+        return "Missing title", 400
+    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    user_store.remove_saved_title(config.EVENT_DB_PATH, title, ct)
+    return _watchlist_save_fragment(title, ct, tmdb_id, target_id)
 
 
 @app.route("/watchlist/dismiss", methods=["POST"])
