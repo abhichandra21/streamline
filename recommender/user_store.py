@@ -139,7 +139,7 @@ def resolve_rating_content_type(db_path: str, title: str,
 
         try:
             events = load_events(db_path)
-        except Exception:
+        except sqlite3.OperationalError:
             events = []
         event_matches = {
             event.content_type
