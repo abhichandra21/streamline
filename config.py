@@ -147,6 +147,7 @@ PLATFORM_PATHS = {
 MANUAL_TV_PATH = str(_ROOT / _cfg.get("manual_tv_path", "data/manual/tv.csv"))
 MANUAL_MOVIES_PATH = str(_ROOT / _cfg.get("manual_movies_path", "data/manual/movies.csv"))
 OVERRIDES_PATH = str(_ROOT / _cfg.get("overrides_path", "data/overrides.json"))
+EVENT_DB_PATH = str(_ROOT / _cfg.get("event_db_path", "data/streamline.db"))
 
 # ── Cache paths (fixed, not user-configurable) ──
 CACHE_DIR = str(_ROOT / "recommender/cache/tmdb")

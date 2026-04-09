@@ -24,10 +24,8 @@ def client():
 @pytest.fixture(autouse=True)
 def reset_reload_state():
     web._config_reload_pending = False
-    web._ingestion_errors = []
     yield
     web._config_reload_pending = False
-    web._ingestion_errors = []
 
 
 def _csrf_form(**kwargs):
@@ -114,17 +112,13 @@ class TestDeferredConfigReload:
 
 
 class TestStatusObservability:
-    def test_build_context_records_provider_parse_failures(self, tmp_path, monkeypatch):
+    def test_build_context_does_not_parse_zips(self, tmp_path, monkeypatch):
+        """_build_context should not call any zip parsers; events come from the DB lazily."""
         index_path = tmp_path / "watch_index.json"
         profile_path = tmp_path / "profile.txt"
         index_path.write_text("[]")
         profile_path.write_text("taste profile")
 
-        monkeypatch.setattr(web.config, "PLATFORM_PATHS", {
-            "netflix": "/tmp/missing-export.zip",
-            "prime": None,
-            "apple_tv": None,
-        })
         monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(index_path))
         monkeypatch.setattr(web.config, "TASTE_PROFILE_PATH", str(profile_path))
         monkeypatch.setattr(web.config, "TMDB_API_KEY", "tmdb")
@@ -133,33 +127,86 @@ class TestStatusObservability:
         monkeypatch.setattr(web.config, "PROVIDERS_CACHE_DIR", str(tmp_path / "providers"))
         monkeypatch.setattr(web.config, "WATCH_REGION", "US")
         monkeypatch.setattr(web.config, "STREAMING_PLATFORMS", [])
+        monkeypatch.setattr(web.config, "EVENT_DB_PATH", str(tmp_path / "events.db"))
 
-        monkeypatch.setattr(web, "parse_netflix", lambda _path: (_ for _ in ()).throw(FileNotFoundError("missing export")))
-        monkeypatch.setattr(web, "parse_prime", lambda _path: [])
-        monkeypatch.setattr(web, "parse_apple_tv", lambda _path: [])
-        monkeypatch.setattr(web, "parse_manual", lambda *_args: [])
         monkeypatch.setattr(web.wi, "load", lambda _path: MagicMock(entries=[]))
         monkeypatch.setattr(web, "TmdbClient", lambda **_kwargs: object())
         monkeypatch.setattr(web, "create_client", lambda: object())
+        monkeypatch.setattr(web, "load_events", lambda _path: [])
 
-        web._build_context()
+        ctx = web._build_context()
 
-        assert web._ingestion_errors == ["netflix: missing export"]
+        # Context is built without errors; events loader is set lazily
+        assert ctx is not None
+
+    def test_build_context_fallback_does_not_recreate_db(self, tmp_path, monkeypatch):
+        """Touching ctx.events with no DB should use a read-only fallback."""
+        import json
+        from datetime import datetime, timedelta
+        import recommender.setup as setup_module
+        from recommender.ingestion.base import WatchEvent
+
+        index_path = tmp_path / "watch_index.json"
+        profile_path = tmp_path / "profile.txt"
+        index_path.write_text(json.dumps([{"tmdb_id": 1, "title": "ted lasso", "content_type": "tv"}]))
+        profile_path.write_text("taste profile")
+        db_path = tmp_path / "events.db"
+
+        monkeypatch.setattr(web.config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
+        monkeypatch.setattr(web.config, "MANUAL_TV_PATH", None)
+        monkeypatch.setattr(web.config, "MANUAL_MOVIES_PATH", None)
+        monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(index_path))
+        monkeypatch.setattr(web.config, "TASTE_PROFILE_PATH", str(profile_path))
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "tmdb")
+        monkeypatch.setattr(web.config, "CACHE_DIR", str(tmp_path / "cache"))
+        monkeypatch.setattr(web.config, "ENRICHMENT_CACHE_DIR", str(tmp_path / "enrich"))
+        monkeypatch.setattr(web.config, "PROVIDERS_CACHE_DIR", str(tmp_path / "providers"))
+        monkeypatch.setattr(web.config, "WATCH_REGION", "US")
+        monkeypatch.setattr(web.config, "STREAMING_PLATFORMS", [])
+        monkeypatch.setattr(web.config, "EVENT_DB_PATH", str(db_path))
+
+        monkeypatch.setattr(web.wi, "load", lambda _path: MagicMock(entries=[]))
+        monkeypatch.setattr(web, "TmdbClient", lambda **_kwargs: object())
+        monkeypatch.setattr(web, "create_client", lambda: object())
+        monkeypatch.setattr(
+            setup_module,
+            "_PLATFORM_PARSERS",
+            [("netflix", lambda _path: [
+                WatchEvent(
+                    platform="netflix",
+                    title="Ted Lasso S1E1",
+                    content_type="tv",
+                    series_name="Ted Lasso",
+                    watched_duration=timedelta(hours=1),
+                    total_duration=None,
+                    timestamp=datetime(2026, 1, 1),
+                    profile="user",
+                )
+            ])],
+        )
+        monkeypatch.setattr(setup_module, "_compute_file_sha256", lambda _path: "ignored")
+
+        ctx = web._build_context()
+
+        assert [event.series_name for event in ctx.events] == ["Ted Lasso"]
+        assert not db_path.exists()
 
     @patch("recommender.web.job_registry")
     @patch("recommender.web._get_context")
-    def test_status_reports_degraded_when_ingestion_errors_exist(self, mock_get_context, mock_jobs, client):
+    def test_status_is_always_ok(self, mock_get_context, mock_jobs, client):
+        """Status should always be 'ok' — event store missing is informational, not degraded."""
         mock_get_context.return_value = MagicMock(watch_index=MagicMock(entries=[]))
         mock_jobs.running_jobs.return_value = []
         mock_jobs.recent_jobs.return_value = []
-        web._ingestion_errors = ["netflix: missing export"]
 
-        resp = client.get("/status")
+        with patch("recommender.web.event_store") as mock_es:
+            mock_es.get_import_info.return_value = {}
+            resp = client.get("/status")
 
         assert resp.status_code == 200
         payload = resp.get_json()
-        assert payload["status"] == "degraded"
-        assert payload["ingestion_errors"] == ["netflix: missing export"]
+        assert payload["status"] == "ok"
+        assert "ingestion_errors" not in payload
 
 
 # ── /recommend progressive enhancement ────────────────────────────────────────
@@ -433,3 +480,41 @@ class TestCSRF:
         """POST without CSRF token should be rejected with 403."""
         resp = client.post("/recommend", data={"query": "test"})
         assert resp.status_code == 403
+
+
+class TestEventStoreStatus:
+    @patch("recommender.web.job_registry")
+    @patch("recommender.web._get_context")
+    def test_status_includes_event_store_fields(self, mock_get_context, mock_jobs, client):
+        mock_get_context.return_value = MagicMock(watch_index=MagicMock(entries=[]))
+        mock_jobs.running_jobs.return_value = []
+        mock_jobs.recent_jobs.return_value = []
+
+        with patch("recommender.web.event_store") as mock_es:
+            mock_es.get_import_info.return_value = {
+                "netflix": {"event_count": 100, "source_path": "/nf.zip",
+                            "source_sha256": "abc", "imported_at": "2026-01-01"},
+            }
+            resp = client.get("/status")
+
+        payload = resp.get_json()
+        assert payload["status"] == "ok"
+        assert payload["event_store_ready"] is True
+        assert payload["event_store_import_count"] == 1
+        assert "event_store_path" in payload
+
+    @patch("recommender.web.job_registry")
+    @patch("recommender.web._get_context")
+    def test_status_ok_when_event_store_missing(self, mock_get_context, mock_jobs, client):
+        mock_get_context.return_value = MagicMock(watch_index=MagicMock(entries=[]))
+        mock_jobs.running_jobs.return_value = []
+        mock_jobs.recent_jobs.return_value = []
+
+        with patch("recommender.web.event_store") as mock_es:
+            mock_es.get_import_info.return_value = {}
+            resp = client.get("/status")
+
+        payload = resp.get_json()
+        assert payload["status"] == "ok"
+        assert payload["event_store_ready"] is False
+        assert payload["event_store_import_count"] == 0

@@ -166,3 +166,55 @@ def test_ask_excludes_watched_titles():
     titles = [r.title for r in results]
     assert "Broadchurch" not in titles
     assert "Hinterland" in titles
+
+
+def test_recommend_context_events_eager():
+    """Existing callers passing events=[] still work."""
+    mock_llm = make_mock_llm("")
+    ctx = RecommendContext(
+        taste_profile="profile",
+        watch_index=WatchIndex(tmdb_ids=set(), normalized_titles=set(), entries=[]),
+        events=[],
+        tmdb_client=MagicMock(),
+        llm=mock_llm,
+        cache_dir="/tmp",
+    )
+    assert ctx.events == []
+
+
+def test_recommend_context_events_lazy_loads_once():
+    """Lazy loader is called once, result is cached."""
+    call_count = 0
+
+    def loader():
+        nonlocal call_count
+        call_count += 1
+        return ["event1", "event2"]
+
+    mock_llm = make_mock_llm("")
+    ctx = RecommendContext(
+        taste_profile="profile",
+        watch_index=WatchIndex(tmdb_ids=set(), normalized_titles=set(), entries=[]),
+        tmdb_client=MagicMock(),
+        llm=mock_llm,
+        cache_dir="/tmp",
+        _events_loader=loader,
+    )
+    # First access triggers loader
+    assert ctx.events == ["event1", "event2"]
+    # Second access uses cache
+    assert ctx.events == ["event1", "event2"]
+    assert call_count == 1
+
+
+def test_recommend_context_events_no_loader_returns_empty():
+    """No events and no loader returns empty list."""
+    mock_llm = make_mock_llm("")
+    ctx = RecommendContext(
+        taste_profile="profile",
+        watch_index=WatchIndex(tmdb_ids=set(), normalized_titles=set(), entries=[]),
+        tmdb_client=MagicMock(),
+        llm=mock_llm,
+        cache_dir="/tmp",
+    )
+    assert ctx.events == []

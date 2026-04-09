@@ -19,15 +19,20 @@ from markupsafe import Markup, escape
 import config
 from recommender import history as query_history
 from recommender import watch_index as wi
-from recommender.ingestion.manual import parse as parse_manual
-from recommender.ingestion.netflix import parse as parse_netflix
-from recommender.ingestion.prime import parse as parse_prime
-from recommender.ingestion.apple_tv import parse as parse_apple_tv
+from recommender import event_store
+from recommender.event_store import load_events
 from recommender.jobs import registry as job_registry
 from recommender.llm import create_client
 from recommender.log import setup_logging
 from recommender.query_engine import RecommendContext, ask
 from recommender.tmdb_client import TmdbClient
+
+def _events_loader_fallback() -> list:
+    events = load_events(config.EVENT_DB_PATH)
+    if not events and not Path(config.EVENT_DB_PATH).exists():
+        from recommender.setup import load_platform_events_from_exports
+        return load_platform_events_from_exports(fail_on_error=False)
+    return events
 
 log = logging.getLogger("recommender.web")
 
@@ -40,9 +45,6 @@ _ctx: RecommendContext | None = None
 _ctx_lock = threading.Lock()
 _config_reload_pending = False
 
-# Ingestion errors from the last context build, surfaced in /status and UI
-_ingestion_errors: list[str] = []
-
 
 def _get_context() -> RecommendContext:
     global _ctx
@@ -53,28 +55,6 @@ def _get_context() -> RecommendContext:
 
 
 def _build_context() -> RecommendContext:
-    global _ingestion_errors
-    errors: list[str] = []
-    events = []
-    for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime), ("apple_tv", parse_apple_tv)]:
-        path = config.PLATFORM_PATHS.get(platform)
-        if path:
-            try:
-                platform_events = parser(path)
-            except (FileNotFoundError, ValueError) as exc:
-                log.warning("Skipping %s watch history for runtime context: %s", platform, exc)
-                errors.append(f"{platform}: {exc}")
-                continue
-            events.extend(platform_events)
-    try:
-        events.extend(parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH))
-    except Exception as exc:
-        msg = f"manual: {exc}"
-        log.warning("Ingestion error — %s", msg)
-        errors.append(msg)
-
-    _ingestion_errors = errors
-
     index_path = Path(config.WATCH_INDEX_PATH)
     profile_path = Path(config.TASTE_PROFILE_PATH)
     if not index_path.exists() or not profile_path.exists():
@@ -83,10 +63,10 @@ def _build_context() -> RecommendContext:
     return RecommendContext(
         taste_profile=profile_path.read_text(),
         watch_index=wi.load(config.WATCH_INDEX_PATH),
-        events=events,
         tmdb_client=TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR),
         llm=create_client(),
         cache_dir=config.ENRICHMENT_CACHE_DIR,
+        _events_loader=_events_loader_fallback,
         providers_cache_dir=config.PROVIDERS_CACHE_DIR,
         watch_region=config.WATCH_REGION,
         streaming_platforms=list(config.STREAMING_PLATFORMS),
@@ -313,7 +293,6 @@ def dashboard() -> str:
         enrichment_count=len(enrichments),
         posters=posters,
         recent_queries=recent_queries,
-        ingestion_errors=_ingestion_errors,
     )
 
 
@@ -478,8 +457,15 @@ def healthz():
     return jsonify({"status": "ok"}), 200
 
 
-def _read_log_lines(n: int) -> list[str]:
-    log_path = Path(config.APP_LOG_PATH)
+def _resolve_log_path(log_name: str | None) -> tuple[str, Path]:
+    requested_name = (log_name or "app").strip().lower()
+    if requested_name == "web":
+        return "web", Path(config.APP_LOG_PATH).with_name("web.log")
+    return "app", Path(config.APP_LOG_PATH)
+
+
+def _read_log_lines(log_name: str, n: int) -> list[str]:
+    _, log_path = _resolve_log_path(log_name)
     if not log_path.exists():
         return []
     try:
@@ -489,26 +475,50 @@ def _read_log_lines(n: int) -> list[str]:
         return []
 
 
-def _parse_n() -> int:
+def _parse_n_value(raw_value: str | None) -> int:
     try:
-        return min(int(request.args.get("n", 200)), 1000)
+        return min(int(raw_value or 200), 1000)
     except (ValueError, TypeError):
         return 200
+
+
+def _parse_n() -> int:
+    return _parse_n_value(request.args.get("n", 200))
 
 
 @app.route("/logs")
 def logs_page() -> str:
     n = _parse_n()
-    lines = _read_log_lines(n)
-    return render_template("logs.html", lines=lines, log_path=str(Path(config.APP_LOG_PATH)), n=n)
+    log_name, log_path = _resolve_log_path(request.args.get("file"))
+    lines = _read_log_lines(log_name, n)
+    return render_template(
+        "logs.html",
+        lines=lines,
+        log_name=log_name,
+        log_path=str(log_path),
+        n=n,
+    )
 
 
 @app.route("/logs/lines")
 def logs_lines() -> str:
     """Partial used by HTMX refresh — returns only the log line fragment."""
     n = _parse_n()
-    lines = _read_log_lines(n)
+    log_name, _ = _resolve_log_path(request.args.get("file"))
+    lines = _read_log_lines(log_name, n)
     return render_template("_log_lines.html", lines=lines)
+
+
+@app.route("/logs/clear", methods=["POST"])
+def logs_clear() -> Response:
+    log_name, log_path = _resolve_log_path(request.form.get("file") or request.args.get("file"))
+    n = _parse_n_value(request.form.get("n") or request.args.get("n"))
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("", encoding="utf-8")
+    except OSError as exc:
+        return Response(f"Failed to clear {log_name} log: {exc}", status=500)
+    return redirect(url_for("logs_page", file=log_name, n=n))
 
 
 @app.route("/status")
@@ -528,15 +538,23 @@ def status():
         except Exception:
             pass
 
+    # Event store info
+    try:
+        import_info = event_store.get_import_info(config.EVENT_DB_PATH)
+    except Exception:
+        import_info = {}
+
     running = job_registry.running_jobs()
     return jsonify({
-        "status": "degraded" if _ingestion_errors else "ok",
+        "status": "ok",
         "provider": config.LLM_PROVIDER,
         "models": config.LLM_MODELS.get(config.LLM_PROVIDER, {}),
         "watch_index_entries": index_entries,
         "enrichment_count": enrichment_count,
         "taste_profile_built_at": _profile_built_at(),
-        "ingestion_errors": _ingestion_errors,
+        "event_store_ready": len(import_info) > 0,
+        "event_store_import_count": len(import_info),
+        "event_store_path": config.EVENT_DB_PATH,
         "running_jobs": len(running),
         "jobs": [
             {

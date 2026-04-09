@@ -7,16 +7,20 @@ from rich.panel import Panel
 
 import config
 from recommender import feedback as fb
-from recommender.ingestion.netflix import parse as parse_netflix
-from recommender.ingestion.prime import parse as parse_prime
-from recommender.ingestion.apple_tv import parse as parse_apple_tv
-from recommender.ingestion.manual import parse as parse_manual
+from recommender.event_store import load_events
 from recommender.llm import create_client
 from recommender.models import Recommendation
 from recommender.tmdb_client import TmdbClient
 from recommender.query_engine import RecommendContext, ConversationContext, ask
 from recommender import watch_index as wi
 from recommender import history
+
+def _events_loader_fallback() -> list:
+    events = load_events(config.EVENT_DB_PATH)
+    if not events and not Path(config.EVENT_DB_PATH).exists():
+        from recommender.setup import load_platform_events_from_exports
+        return load_platform_events_from_exports(fail_on_error=False)
+    return events
 
 log = logging.getLogger("recommender")
 
@@ -25,23 +29,6 @@ console_out = Console()              # recommendation results
 
 
 def load_context(provider: str | None = None) -> RecommendContext:
-    events = []
-    for platform, parser in [("netflix", parse_netflix), ("prime", parse_prime), ("apple_tv", parse_apple_tv)]:
-        path = config.PLATFORM_PATHS.get(platform)
-        if path:
-            try:
-                platform_events = parser(path)
-            except (FileNotFoundError, ValueError) as exc:
-                # Runtime recommendations can rely on cached watch_index/profile even
-                # when the original provider export is unavailable. Only abandoned-title
-                # queries depend on raw watch events.
-                console_err.print(f"[yellow]Skipping {platform} watch history for runtime context:[/yellow] {exc}")
-                console_err.print("[dim]Ordinary recommendations still use the cached watch index and taste profile.[/dim]")
-                continue
-            events.extend(platform_events)
-    if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
-        events.extend(parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH))
-
     index_path = Path(config.WATCH_INDEX_PATH)
     if not index_path.exists():
         console_err.print("[red]Watch index not found. Run: ./recommend setup[/red]")
@@ -61,10 +48,10 @@ def load_context(provider: str | None = None) -> RecommendContext:
     return RecommendContext(
         taste_profile=profile_path.read_text(),
         watch_index=wi.load(config.WATCH_INDEX_PATH),
-        events=events,
         tmdb_client=TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR),
         llm=llm,
         cache_dir=config.ENRICHMENT_CACHE_DIR,
+        _events_loader=_events_loader_fallback,
         providers_cache_dir=config.PROVIDERS_CACHE_DIR,
         watch_region=config.WATCH_REGION,
         streaming_platforms=list(config.STREAMING_PLATFORMS),
@@ -196,8 +183,7 @@ def main() -> None:
         sys.exit(1)
 
     ctx = load_context(provider=args.provider)
-    log.debug("Context loaded: %d events, %d watched titles",
-              len(ctx.events), len(ctx.watch_index.entries))
+    log.debug("Context loaded: %d watched titles", len(ctx.watch_index.entries))
 
     if args.query:
         query = " ".join(args.query)
