@@ -97,7 +97,7 @@ class UserStateIndex:
         return self.get_rating(meta) is not None
 
     def get_rating(self, meta) -> str | None:
-        if meta.tmdb_id and meta.tmdb_id in self._ratings_by_tmdb:
-            return self._ratings_by_tmdb[meta.tmdb_id]
+        if meta.tmdb_id is not None:
+            return self._ratings_by_tmdb.get(meta.tmdb_id)
         key = (_normalize(meta.title), meta.content_type)
         return self._ratings_by_title.get(key)

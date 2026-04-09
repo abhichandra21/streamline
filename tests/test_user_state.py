@@ -94,6 +94,19 @@ def test_snapshot_does_not_see_later_mutations(tmp_path):
     assert idx2.is_manually_watched(FakeMeta("New Show", "tv"))
 
 
+def test_get_rating_does_not_fallthrough_on_wrong_tmdb_id(tmp_path):
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    rate_title(db, "Breaking Bad", "tv", "liked")  # no tmdb_id, stored by title
+
+    from recommender.user_state import UserStateIndex
+    idx = UserStateIndex.load(db)
+
+    # meta has a tmdb_id that is NOT in the ratings dict
+    # should NOT fall through to title-based match
+    assert idx.get_rating(FakeMeta("Breaking Bad", "tv", tmdb_id=9999)) is None
+
+
 def test_is_in_watchlist(tmp_path):
     db = str(tmp_path / "test.db")
     init_db(db)
