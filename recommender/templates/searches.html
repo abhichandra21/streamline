@@ -85,14 +85,14 @@
             <span class="mono" style="font-size:0.55rem; color:var(--muted);">Watched</span>
             {% elif r.user_state.in_watchlist %}
             <span id="{{ save_id }}" style="display:inline-flex; align-items:center; gap:0.3rem;">
-              <span class="mono" style="font-size:0.55rem; color:var(--teal);">Saved</span>
+              <span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>
               <form hx-post="/watchlist/unsave" hx-target="#{{ save_id }}" hx-swap="outerHTML" style="margin:0; display:inline;">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="title" value="{{ r.title }}">
                 <input type="hidden" name="content_type" value="{{ r.content_type }}">
                 {% if r.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ r.tmdb_id }}">{% endif %}
                 <input type="hidden" name="target_id" value="{{ save_id }}">
-                <button type="submit" class="mono" style="font-size:0.55rem; background:none; border:none; cursor:pointer; color:var(--muted); padding:0 2px;" title="Remove from watchlist">&times;</button>
+                <button type="submit" class="wl-btn wl-btn--remove" title="Remove from watchlist">&times;</button>
               </form>
             </span>
             {% else %}
