@@ -82,6 +82,7 @@ def _get_job_context() -> RecommendContext:
     """
     ctx = copy(_get_context())
     ctx.llm = create_client()
+    ctx.user_state = _load_user_state()
     return ctx
 
 
@@ -319,6 +320,31 @@ def history() -> str:
     ct_filter = request.args.get("type", "")
 
     entries = list(ctx.watch_index.entries)
+
+    # Union manual archive entries that aren't already in the watch index
+    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    manual = user_store.list_manual_archive(config.EVENT_DB_PATH)
+
+    import re as _re
+    def _norm(t: str) -> str:
+        t = t.lower()
+        t = _re.sub(r'\s*\([^)]*\)', '', t)
+        return t.strip()
+
+    existing_norm = {
+        (_norm(e.get("title", "")), e.get("content_type", "tv"))
+        for e in entries
+    }
+    for m in manual:
+        key = (_norm(m["title"]), m["content_type"])
+        if key not in existing_norm:
+            entries.append({
+                "title": m["title"],
+                "content_type": m["content_type"],
+                "tmdb_id": m.get("tmdb_id"),
+                "source": m["source"],
+            })
+
     if q:
         entries = [e for e in entries if q in e["title"].lower()]
     if ct_filter in ("tv", "movie"):

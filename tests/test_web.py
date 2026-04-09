@@ -647,3 +647,23 @@ class TestArchiveRoutes:
         })
         assert resp.status_code == 200
         assert load_ratings(db) == []
+
+
+def test_history_includes_manual_archive_entries(client, tmp_path, monkeypatch):
+    from recommender.user_store import init_db, add_to_archive
+    from unittest.mock import MagicMock, patch
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    add_to_archive(db, "Manual Show", "tv", source="web")
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = []
+
+    with patch("recommender.web._get_context", return_value=mock_ctx):
+        resp = client.get("/history")
+
+    assert resp.status_code == 200
+    assert b"Manual Show" in resp.data
