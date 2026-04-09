@@ -118,6 +118,8 @@ def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
             if not imdb_url:
                 from urllib.parse import quote
                 imdb_url = f"https://www.imdb.com/find/?q={quote(r.title)}"
+        tmdb_id_val = meta.tmdb_id if meta else None
+        state = _title_state(r.title, r.content_type, tmdb_id_val)
         items.append({
             "title": r.title,
             "content_type": r.content_type,
@@ -129,6 +131,8 @@ def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
             "poster": poster,
             "tmdb_url": tmdb_url,
             "imdb_url": imdb_url,
+            "tmdb_id": tmdb_id_val,
+            "user_state": state,
         })
     return items
 
@@ -321,17 +325,24 @@ def history() -> str:
         entries = [e for e in entries if e.get("content_type") == ct_filter]
 
     entries.sort(key=lambda e: e["title"].lower())
-    items = [
-        {
+    us = _load_user_state()
+    items = []
+    for e in entries:
+        class _M:
+            pass
+        m = _M()
+        m.title = e["title"]
+        m.content_type = e.get("content_type", "tv")
+        m.tmdb_id = e.get("tmdb_id")
+        items.append({
             "title": e["title"],
             "content_type": e.get("content_type", ""),
             "tmdb_id": e.get("tmdb_id"),
             "description": enrichments.get(e["title"], ""),
             "poster": _get_poster_url(e.get("tmdb_id", 0), e.get("content_type", "movie"), "w185")
                       if e.get("tmdb_id") else None,
-        }
-        for e in entries
-    ]
+            "rating": us.get_rating(m),
+        })
     return render_template("history.html", items=items, q=q, ct_filter=ct_filter, total=len(entries))
 
 
@@ -445,9 +456,10 @@ def title_detail(tmdb_id: int) -> str:
         if cache_path.exists():
             raw = json.loads(cache_path.read_text())
             overview = raw.get("overview", "")
+    state = _title_state(meta.title if meta else "", ct, tmdb_id if meta else None)
     return render_template(
         "title.html", meta=meta, description=description, overview=overview,
-        tmdb_id=tmdb_id, ct=ct, poster=poster,
+        tmdb_id=tmdb_id, ct=ct, poster=poster, user_state=state,
     )
 
 
@@ -456,6 +468,23 @@ def _load_user_state():
     user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
     from recommender.user_state import UserStateIndex
     return UserStateIndex.load(config.EVENT_DB_PATH)
+
+
+def _title_state(title: str, content_type: str, tmdb_id: int | None = None) -> dict:
+    """Return user state for a title, used across templates."""
+    us = _load_user_state()
+    class _Meta:
+        pass
+    meta = _Meta()
+    meta.title = title
+    meta.content_type = content_type
+    meta.tmdb_id = tmdb_id
+    return {
+        "in_archive": us.is_manually_watched(meta),
+        "in_watchlist": us.is_in_watchlist(meta),
+        "is_dismissed": us.is_dismissed(meta),
+        "rating": us.get_rating(meta),
+    }
 
 
 # ── Watchlist routes ──────────────────────────────────────────────────────────

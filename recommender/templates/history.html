@@ -23,6 +23,20 @@
     {% endif %}
   </form>
 
+  <div style="margin-top:0.75rem; padding:0.75rem 1rem; background:var(--surface); border:1px solid var(--border); border-radius:6px;">
+    <form hx-post="/archive/add" hx-target="#add-result" hx-swap="innerHTML" style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <input type="text" name="title" placeholder="Add a title you watched..."
+        class="input-field" style="padding:0.5rem 0.75rem; flex:1; min-width:180px;">
+      <select name="content_type" class="input-field" style="padding:0.5rem 0.75rem; font-family:'JetBrains Mono',monospace; font-size:0.72rem;">
+        <option value="tv">TV</option>
+        <option value="movie">Film</option>
+      </select>
+      <button type="submit" class="btn-primary" style="padding:0.5rem 1rem;">Add</button>
+      <span id="add-result" style="display:inline;"></span>
+    </form>
+  </div>
+
   <div style="display:flex; align-items:center; justify-content:space-between; margin-top:0.75rem;">
     <p class="mono" style="font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">{{ total }} titles</p>
 
@@ -71,6 +85,10 @@
       {% if item.description %}
       <p style="font-size:0.78rem; color:var(--muted); line-height:1.45; overflow:hidden; display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; margin-top:0.1rem;">{{ item.description }}</p>
       {% endif %}
+      {% set uid = "hist-" ~ loop.index %}
+      {% with title=item.title, content_type=item.content_type, tmdb_id=item.tmdb_id, current_rating=item.rating, uid=uid %}
+      {% include "_rating_state.html" %}
+      {% endwith %}
     </div>
   </div>
   {% else %}
