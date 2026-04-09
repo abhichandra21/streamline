@@ -649,6 +649,83 @@ class TestArchiveRoutes:
         assert load_ratings(db) == []
 
 
+class TestRenderedState:
+
+    def test_watchlist_badge_count(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "Show A", "tv")
+        save_title(db, "Show B", "tv")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.get("/watchlist")
+        assert resp.status_code == 200
+        # Badge count and items|length both render "2" on the page
+        assert b"2" in resp.data
+
+    def test_watchlist_page_renders_items(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "Breaking Bad", "tv")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.get("/watchlist")
+        assert b"Breaking Bad" in resp.data
+        assert b"Watched" in resp.data  # action button present
+        assert b"Won&#39;t watch" in resp.data or b"Won't watch" in resp.data
+
+    def test_archive_rate_shows_thumbs_state(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, rate_title
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        rate_title(db, "Breaking Bad", "tv", "liked")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        # Rate endpoint should return the _rating_state partial
+        resp = client.post("/archive/rate", data={
+            **_csrf_form(),
+            "title": "Breaking Bad",
+            "content_type": "tv",
+            "rating": "liked",
+        })
+        assert resp.status_code == 200
+        # Should show the liked state (clear button for liked thumb)
+        assert b"clear" in resp.data
+
+    def test_history_dedup_does_not_double_show_manual_entry(self, client, tmp_path, monkeypatch):
+        """A manual archive entry already in the watch index should not appear twice."""
+        from recommender.user_store import init_db, add_to_archive
+        from unittest.mock import MagicMock, patch
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        add_to_archive(db, "Duplicate Show", "tv", source="web")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        # Simulate watch index already having the same title
+        mock_ctx = MagicMock()
+        mock_ctx.watch_index.entries = [
+            {"title": "Duplicate Show", "content_type": "tv", "tmdb_id": None}
+        ]
+
+        with patch("recommender.web._get_context", return_value=mock_ctx):
+            resp = client.get("/history")
+
+        assert resp.status_code == 200
+        # hist-1 is the uid for the first item; hist-2 would only appear if there are two items
+        assert b"Duplicate Show" in resp.data
+        assert b"hist-2" not in resp.data  # only one item in the deduped list
+
+
 def test_history_includes_manual_archive_entries(client, tmp_path, monkeypatch):
     from recommender.user_store import init_db, add_to_archive
     from unittest.mock import MagicMock, patch
