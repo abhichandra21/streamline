@@ -116,9 +116,14 @@ def test_remove_saved_title(tmp_path):
     from recommender.user_store import init_db, save_title, remove_saved_title, list_saved_titles
 
     init_db(db)
+    # With tmdb_id: removal uses TMDB-first matching
     save_title(db, "Breaking Bad", "tv", tmdb_id=1396)
-    remove_saved_title(db, "Breaking Bad", "tv")
+    remove_saved_title(db, "Breaking Bad", "tv", tmdb_id=1396)
+    assert list_saved_titles(db) == []
 
+    # Without tmdb_id: removal matches only rows where tmdb_id IS NULL
+    save_title(db, "Some Show", "tv")
+    remove_saved_title(db, "Some Show", "tv")
     assert list_saved_titles(db) == []
 
 

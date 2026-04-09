@@ -300,7 +300,10 @@ def create_client(provider: str | None = None) -> LLMClient:
         raise ValueError(f"No model config for provider '{provider}' in config.yaml")
 
     api_key_env = config.get_llm_api_key_env(provider)
-    api_key = os.environ.get(api_key_env, "")
+    if api_key_env in config.LLM_DEFAULT_API_KEY_ENVS.values():
+        api_key = getattr(config, api_key_env, os.environ.get(api_key_env, ""))
+    else:
+        api_key = os.environ.get(api_key_env, "")
     if not api_key:
         raise RuntimeError(f"{api_key_env} not set. Export it or add to .env.")
 

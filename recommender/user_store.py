@@ -76,7 +76,8 @@ WHERE tmdb_id IS NULL;
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -207,17 +208,26 @@ def dismiss_title(db_path: str, title: str, content_type: str,
     save_title(db_path, title, content_type, tmdb_id=tmdb_id, status="dismissed")
 
 
-def remove_saved_title(db_path: str, title: str, content_type: str) -> None:
-    """Delete a saved_titles row (watchlist only)."""
+def remove_saved_title(db_path: str, title: str, content_type: str,
+                       tmdb_id: int | None = None) -> None:
+    """Delete a saved_titles row (watchlist only) using TMDB-first matching."""
     norm = _normalize(title)
     conn = _connect(db_path)
     try:
         with conn:
-            conn.execute(
-                "DELETE FROM saved_titles WHERE normalized_title = ? AND content_type = ? "
-                "AND status = 'watchlist'",
-                (norm, content_type),
-            )
+            if tmdb_id is not None:
+                conn.execute(
+                    "DELETE FROM saved_titles "
+                    "WHERE content_type = ? AND tmdb_id = ? AND status = 'watchlist'",
+                    (content_type, tmdb_id),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM saved_titles "
+                    "WHERE content_type = ? AND normalized_title = ? "
+                    "AND tmdb_id IS NULL AND status = 'watchlist'",
+                    (content_type, norm),
+                )
     finally:
         conn.close()
 
@@ -241,8 +251,9 @@ def list_saved_titles(db_path: str, status: str | None = None) -> list[dict]:
             ).fetchall()
         return [
             {
-                "title": r[0], "normalized_title": r[1], "content_type": r[2],
-                "tmdb_id": r[3], "status": r[4], "saved_at": r[5], "updated_at": r[6],
+                "title": r["title"], "normalized_title": r["normalized_title"],
+                "content_type": r["content_type"], "tmdb_id": r["tmdb_id"],
+                "status": r["status"], "saved_at": r["saved_at"], "updated_at": r["updated_at"],
             }
             for r in rows
         ]
@@ -320,8 +331,9 @@ def load_ratings(db_path: str) -> list[dict]:
         ).fetchall()
         return [
             {
-                "title": r[0], "normalized_title": r[1], "content_type": r[2],
-                "tmdb_id": r[3], "rating": r[4], "rated_at": r[5],
+                "title": r["title"], "normalized_title": r["normalized_title"],
+                "content_type": r["content_type"], "tmdb_id": r["tmdb_id"],
+                "rating": r["rating"], "rated_at": r["rated_at"],
             }
             for r in rows
         ]
@@ -338,7 +350,7 @@ def get_disliked_titles(db_path: str) -> list[str]:
         rows = conn.execute(
             "SELECT title FROM title_ratings WHERE rating = 'disliked'",
         ).fetchall()
-        return [r[0] for r in rows]
+        return [r["title"] for r in rows]
     finally:
         conn.close()
 
@@ -481,8 +493,9 @@ def list_manual_archive(db_path: str) -> list[dict]:
         ).fetchall()
         return [
             {
-                "title": r[0], "normalized_title": r[1], "content_type": r[2],
-                "tmdb_id": r[3], "watched_at": r[4], "source": r[5],
+                "title": r["title"], "normalized_title": r["normalized_title"],
+                "content_type": r["content_type"], "tmdb_id": r["tmdb_id"],
+                "watched_at": r["watched_at"], "source": r["source"],
             }
             for r in rows
         ]

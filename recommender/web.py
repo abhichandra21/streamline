@@ -48,6 +48,23 @@ _ctx: RecommendContext | None = None
 _ctx_lock = threading.Lock()
 _config_reload_pending = False
 
+# ── User store initialization ─────────────────────────────────────────────────
+# Run once per process. ensure_user_store does IF-NOT-EXISTS DDL + migration
+# checks — cheap but not free. A flag prevents the overhead on every request.
+_user_store_ready = False
+_user_store_lock = threading.Lock()
+
+
+def _ensure_user_store_once() -> None:
+    global _user_store_ready
+    if _user_store_ready:
+        return
+    with _user_store_lock:
+        if _user_store_ready:
+            return
+        user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+        _user_store_ready = True
+
 
 def _get_context() -> RecommendContext:
     global _ctx
@@ -237,7 +254,7 @@ def _inject_footer() -> dict:
 @app.context_processor
 def _inject_watchlist_count() -> dict:
     try:
-        user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+        _ensure_user_store_once()
         items = user_store.list_saved_titles(config.EVENT_DB_PATH, status="watchlist")
         return {"watchlist_count": len(items)}
     except Exception:
@@ -332,7 +349,7 @@ def history() -> str:
     entries = list(ctx.watch_index.entries)
 
     # Union manual archive entries that aren't already in the watch index
-    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    _ensure_user_store_once()
     manual = user_store.list_manual_archive(config.EVENT_DB_PATH)
 
     existing_norm = {
@@ -478,9 +495,7 @@ def title_detail(tmdb_id: int) -> str:
     enrichments = _load_enrichments()
     meta = None
     try:
-        cached = ctx.tmdb_client._load_cache(ct, tmdb_id)
-        if cached:
-            meta = ctx.tmdb_client._parse_metadata(cached, ct)
+        meta = ctx.tmdb_client.get_cached_by_id(tmdb_id, ct)
     except Exception:
         pass
 
@@ -507,7 +522,7 @@ def title_detail(tmdb_id: int) -> str:
 
 def _load_user_state():
     """Load fresh user state snapshot for the current request."""
-    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    _ensure_user_store_once()
     from recommender.user_state import UserStateIndex
     return UserStateIndex.load(config.EVENT_DB_PATH)
 
@@ -573,7 +588,7 @@ def _watchlist_save_fragment(title: str, ct: str, tmdb_id: int | None, target_id
 
 @app.route("/watchlist")
 def watchlist_page() -> str:
-    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    _ensure_user_store_once()
     items = user_store.list_saved_titles(config.EVENT_DB_PATH, status="watchlist")
     try:
         ctx = _get_context()
@@ -581,9 +596,9 @@ def watchlist_page() -> str:
             vote_average = 0.0
             if item.get("tmdb_id"):
                 try:
-                    cached = ctx.tmdb_client._load_cache(item["content_type"], item["tmdb_id"])
-                    if cached:
-                        vote_average = cached.get("vote_average") or 0.0
+                    meta = ctx.tmdb_client.get_cached_by_id(item["tmdb_id"], item["content_type"])
+                    if meta:
+                        vote_average = meta.vote_average or 0.0
                 except Exception:
                     pass
             item["vote_average"] = vote_average
@@ -595,7 +610,7 @@ def watchlist_page() -> str:
 
 @app.route("/watchlist/export")
 def watchlist_export():
-    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    _ensure_user_store_once()
     items = user_store.list_saved_titles(config.EVENT_DB_PATH, status="watchlist")
     output = io.StringIO()
     writer = csv.writer(output)
@@ -619,7 +634,7 @@ def watchlist_save() -> str:
     target_id = (request.form.get("target_id") or "").strip()
     if not title:
         return "Missing title", 400
-    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    _ensure_user_store_once()
     user_store.save_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
     if mode == "toggle" and target_id:
         return _watchlist_saved_fragment(title, ct, tmdb_id, target_id)
@@ -634,8 +649,8 @@ def watchlist_unsave() -> str:
     target_id = (request.form.get("target_id") or "").strip()
     if not title:
         return "Missing title", 400
-    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
-    user_store.remove_saved_title(config.EVENT_DB_PATH, title, ct)
+    _ensure_user_store_once()
+    user_store.remove_saved_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
     return _watchlist_save_fragment(title, ct, tmdb_id, target_id)
 
 
@@ -646,7 +661,7 @@ def watchlist_dismiss() -> str:
     tmdb_id = request.form.get("tmdb_id", type=int)
     if not title:
         return "Missing title", 400
-    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    _ensure_user_store_once()
     user_store.dismiss_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
     return ""
 
@@ -655,10 +670,11 @@ def watchlist_dismiss() -> str:
 def watchlist_remove() -> str:
     title = (request.form.get("title") or "").strip()
     ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
     if not title:
         return "Missing title", 400
-    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
-    user_store.remove_saved_title(config.EVENT_DB_PATH, title, ct)
+    _ensure_user_store_once()
+    user_store.remove_saved_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
     return ""
 
 
@@ -669,7 +685,7 @@ def watchlist_watched() -> str:
     tmdb_id = request.form.get("tmdb_id", type=int)
     if not title:
         return "Missing title", 400
-    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    _ensure_user_store_once()
     user_store.mark_watched_from_watchlist(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
     uid = f"wl-{hash(title) & 0xFFFFFF:06x}"
     return render_template("_rating_prompt.html", title=title, content_type=ct,
@@ -685,7 +701,7 @@ def archive_add() -> str:
     tmdb_id = request.form.get("tmdb_id", type=int)
     if not title:
         return "Missing title", 400
-    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    _ensure_user_store_once()
     user_store.add_to_archive(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id, source="web")
     uid = f"aa-{hash(title) & 0xFFFFFF:06x}"
     return render_template("_rating_prompt.html", title=title, content_type=ct,
@@ -703,7 +719,7 @@ def archive_rate() -> str:
         return "Missing title", 400
     if rating == "skip":
         return "" if context == "watchlist" else '<span class="mono" style="font-size:0.58rem; color:var(--teal);">added</span>'
-    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    _ensure_user_store_once()
     user_store.rate_title(config.EVENT_DB_PATH, title, ct, rating, tmdb_id=tmdb_id)
     if context == "watchlist":
         return ""
