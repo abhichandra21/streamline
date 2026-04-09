@@ -5,6 +5,7 @@
     <input type="hidden" name="title" value="{{ title }}">
     <input type="hidden" name="content_type" value="{{ content_type }}">
     <input type="hidden" name="tmdb_id" value="{{ tmdb_id or '' }}">
+    {% if context %}<input type="hidden" name="context" value="{{ context }}">{% endif %}
     <button type="submit" name="rating" value="liked" class="btn-thumb btn-thumb--like" title="Liked">&#x1F44D;</button>
     <button type="submit" name="rating" value="disliked" class="btn-thumb btn-thumb--dislike" title="Disliked">&#x1F44E;</button>
     <button type="submit" name="rating" value="skip" class="btn-thumb btn-thumb--skip" title="Skip">skip</button>

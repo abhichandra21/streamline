@@ -36,13 +36,10 @@
     </div>
     {% endif %}
 
-    <a href="https://www.themoviedb.org/{{ 'tv' if meta.content_type == 'tv' else 'movie' }}/{{ tmdb_id }}"
-       target="_blank" rel="noopener"
-       class="mono" style="font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); transition:color 0.15s;"
-       onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'"
-    >View on TMDB →</a>
-
-    <div style="display:flex; align-items:center; gap:0.75rem; margin-top:0.5rem;">
+    <div style="display:flex; align-items:center; gap:0.75rem; margin-top:0.5rem; flex-wrap:wrap;">
+      <a href="https://www.themoviedb.org/{{ 'tv' if meta.content_type == 'tv' else 'movie' }}/{{ tmdb_id }}"
+         target="_blank" rel="noopener" class="mono result-link">TMDB ↗</a>
+      <span style="color:var(--border);">·</span>
       {% if user_state.in_archive %}
       {% set uid = "title-" ~ tmdb_id %}
       {% with current_rating=user_state.rating, title=meta.title, content_type=meta.content_type, tmdb_id=tmdb_id %}

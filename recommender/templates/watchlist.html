@@ -16,6 +16,7 @@
     <select class="input-field mono" id="wl-sort" onchange="setSort(this.value)" style="padding:4px 8px; font-size:0.65rem; border-radius:3px;">
       <option value="newest">Newest first</option>
       <option value="oldest">Oldest first</option>
+      <option value="rating">Highest rated</option>
       <option value="az">A → Z</option>
       <option value="za">Z → A</option>
     </select>
@@ -33,6 +34,7 @@
     data-type="{{ item.content_type }}"
     data-title="{{ item.title | lower }}"
     data-saved="{{ item.saved_at or '' }}"
+    data-rating="{{ item.vote_average }}"
     style="display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:0.75rem 1rem; border-radius:6px; background:var(--surface); border:1px solid var(--border);">
     <div style="display:flex; align-items:baseline; gap:0.5rem; min-width:0;">
       <span style="font-family:'DM Serif Display',serif; font-size:1.05rem; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ item.title }}</span>
@@ -127,6 +129,7 @@ function _apply(sortVal) {
     if (sort === 'za') return b.dataset.title.localeCompare(a.dataset.title);
     if (sort === 'newest') return (b.dataset.saved || '').localeCompare(a.dataset.saved || '');
     if (sort === 'oldest') return (a.dataset.saved || '').localeCompare(b.dataset.saved || '');
+    if (sort === 'rating') return parseFloat(b.dataset.rating || 0) - parseFloat(a.dataset.rating || 0);
     return 0;
   });
   visible.forEach(el => list.appendChild(el));

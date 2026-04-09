@@ -494,6 +494,11 @@ def title_detail(tmdb_id: int) -> str:
             overview = raw.get("overview", "")
     us = _load_user_state()
     state = _title_state(meta.title if meta else "", ct, us, tmdb_id if meta else None)
+    # Also count watch-index entries (imported from Netflix/Prime/etc.) as archived
+    if not state["in_archive"] and meta:
+        wi_ctx = _get_context()
+        if tmdb_id in wi_ctx.watch_index.tmdb_ids:
+            state["in_archive"] = True
     return render_template(
         "title.html", meta=meta, description=description, overview=overview,
         tmdb_id=tmdb_id, ct=ct, poster=poster, user_state=state,
@@ -570,6 +575,21 @@ def _watchlist_save_fragment(title: str, ct: str, tmdb_id: int | None, target_id
 def watchlist_page() -> str:
     user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
     items = user_store.list_saved_titles(config.EVENT_DB_PATH, status="watchlist")
+    try:
+        ctx = _get_context()
+        for item in items:
+            vote_average = 0.0
+            if item.get("tmdb_id"):
+                try:
+                    cached = ctx.tmdb_client._load_cache(item["content_type"], item["tmdb_id"])
+                    if cached:
+                        vote_average = cached.get("vote_average") or 0.0
+                except Exception:
+                    pass
+            item["vote_average"] = vote_average
+    except Exception:
+        for item in items:
+            item.setdefault("vote_average", 0.0)
     return render_template("watchlist.html", items=items)
 
 
@@ -653,7 +673,7 @@ def watchlist_watched() -> str:
     user_store.mark_watched_from_watchlist(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
     uid = f"wl-{hash(title) & 0xFFFFFF:06x}"
     return render_template("_rating_prompt.html", title=title, content_type=ct,
-                           tmdb_id=tmdb_id, uid=uid)
+                           tmdb_id=tmdb_id, uid=uid, context="watchlist")
 
 
 # ── Archive routes ────────────────────────────────────────────────────────────
@@ -678,12 +698,15 @@ def archive_rate() -> str:
     ct = request.form.get("content_type", "tv")
     rating = request.form.get("rating", "")
     tmdb_id = request.form.get("tmdb_id", type=int)
+    context = request.form.get("context", "")
     if not title:
         return "Missing title", 400
     if rating == "skip":
-        return '<span class="mono" style="font-size:0.58rem; color:var(--teal);">added</span>'
+        return "" if context == "watchlist" else '<span class="mono" style="font-size:0.58rem; color:var(--teal);">added</span>'
     user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
     user_store.rate_title(config.EVENT_DB_PATH, title, ct, rating, tmdb_id=tmdb_id)
+    if context == "watchlist":
+        return ""
     current = None if rating == "clear" else rating
     uid = f"rt-{hash(title) & 0xFFFFFF:06x}"
     return render_template("_rating_state.html", title=title, content_type=ct,
