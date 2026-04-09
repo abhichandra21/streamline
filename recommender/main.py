@@ -6,7 +6,8 @@ from rich.console import Console
 from rich.panel import Panel
 
 import config
-from recommender import feedback as fb
+from recommender import user_store
+from recommender.user_state import UserStateIndex
 from recommender.event_store import load_events
 from recommender.llm import create_client
 from recommender.models import Recommendation
@@ -45,7 +46,7 @@ def load_context(provider: str | None = None) -> RecommendContext:
         console_err.print(f"[red]Error: {exc}[/red]")
         sys.exit(1)
 
-    return RecommendContext(
+    ctx = RecommendContext(
         taste_profile=profile_path.read_text(),
         watch_index=wi.load(config.WATCH_INDEX_PATH),
         tmdb_client=TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR),
@@ -55,7 +56,9 @@ def load_context(provider: str | None = None) -> RecommendContext:
         providers_cache_dir=config.PROVIDERS_CACHE_DIR,
         watch_region=config.WATCH_REGION,
         streaming_platforms=list(config.STREAMING_PLATFORMS),
+        user_state=UserStateIndex.load(config.EVENT_DB_PATH),
     )
+    return ctx
 
 
 def print_recommendations(results: list[Recommendation], query: str) -> None:
@@ -84,9 +87,13 @@ def _handle_feedback_command(line: str) -> bool:
     for prefix in ("+liked ", "+loved ", "+like "):
         if line.lower().startswith(prefix):
             title = line[len(prefix):].strip()
-            data = fb.load(config.FEEDBACK_PATH)
-            fb.add_rating(data, title, "liked")
-            fb.save(data, config.FEEDBACK_PATH)
+            user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+            try:
+                ct = user_store.resolve_rating_content_type(config.EVENT_DB_PATH, title)
+            except ValueError as exc:
+                console_out.print(f"[red]{exc}[/red]")
+                return True
+            user_store.rate_title(config.EVENT_DB_PATH, title, ct, "liked")
             console_out.print(f"[green]Marked as liked:[/green] {title}")
             console_out.print("[dim]Run --refresh-profile to update your taste profile.[/dim]")
             return True
@@ -95,9 +102,13 @@ def _handle_feedback_command(line: str) -> bool:
     for prefix in ("-disliked ", "+disliked ", "-dislike ", "+dislike "):
         if line.lower().startswith(prefix):
             title = line[len(prefix):].strip()
-            data = fb.load(config.FEEDBACK_PATH)
-            fb.add_rating(data, title, "disliked")
-            fb.save(data, config.FEEDBACK_PATH)
+            user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+            try:
+                ct = user_store.resolve_rating_content_type(config.EVENT_DB_PATH, title)
+            except ValueError as exc:
+                console_out.print(f"[red]{exc}[/red]")
+                return True
+            user_store.rate_title(config.EVENT_DB_PATH, title, ct, "disliked")
             console_out.print(f"[yellow]Marked as disliked:[/yellow] {title}")
             console_out.print("[dim]Run --refresh-profile to update your taste profile.[/dim]")
             return True
@@ -110,9 +121,8 @@ def _handle_feedback_command(line: str) -> bool:
             title, ct = parts[0].strip(), parts[1].lower()
         else:
             title, ct = rest, "tv"
-        data = fb.load(config.FEEDBACK_PATH)
-        fb.add_addition(data, title, ct)
-        fb.save(data, config.FEEDBACK_PATH)
+        user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+        user_store.add_to_archive(config.EVENT_DB_PATH, title, ct, source="cli")
         console_out.print(f"[green]Added to watch history:[/green] {title} ({ct})")
         console_out.print("[dim]Run --refresh-profile to update your taste profile.[/dim]")
         return True
@@ -159,17 +169,22 @@ def main() -> None:
 
     # Handle feedback-only invocations (no API keys needed).
     if args.liked or args.disliked or args.add:
-        data = fb.load(config.FEEDBACK_PATH)
-        if args.liked:
-            fb.add_rating(data, args.liked, "liked")
-            console_out.print(f"[green]Marked as liked:[/green] {args.liked}")
-        if args.disliked:
-            fb.add_rating(data, args.disliked, "disliked")
-            console_out.print(f"[yellow]Marked as disliked:[/yellow] {args.disliked}")
+        user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+        try:
+            if args.liked:
+                ct = user_store.resolve_rating_content_type(config.EVENT_DB_PATH, args.liked)
+                user_store.rate_title(config.EVENT_DB_PATH, args.liked, ct, "liked")
+                console_out.print(f"[green]Marked as liked:[/green] {args.liked}")
+            if args.disliked:
+                ct = user_store.resolve_rating_content_type(config.EVENT_DB_PATH, args.disliked)
+                user_store.rate_title(config.EVENT_DB_PATH, args.disliked, ct, "disliked")
+                console_out.print(f"[yellow]Marked as disliked:[/yellow] {args.disliked}")
+        except ValueError as exc:
+            console_out.print(f"[red]{exc}[/red]")
+            return
         if args.add:
-            fb.add_addition(data, args.add, args.type)
+            user_store.add_to_archive(config.EVENT_DB_PATH, args.add, args.type, source="cli")
             console_out.print(f"[green]Added to watch history:[/green] {args.add} ({args.type})")
-        fb.save(data, config.FEEDBACK_PATH)
         console_out.print("[dim]Run python -m recommender.setup --refresh-profile to update your taste profile.[/dim]")
         return
 
@@ -208,6 +223,7 @@ def main() -> None:
         if not line or line.lower() == "exit":
             break
         if _handle_feedback_command(line):
+            ctx.user_state = UserStateIndex.load(config.EVENT_DB_PATH)
             continue
         # Create conv_ctx before ask() so ask() can write the real parsed intent into it
         # on the very first turn — otherwise "what else?" on turn 2 reuses a placeholder.

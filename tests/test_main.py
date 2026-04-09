@@ -935,3 +935,41 @@ def test_load_context_debug_log_does_not_force_events_load(monkeypatch, tmp_path
     ctx = main_module.load_context()
     # After load_context, _events_resolved should still be None (not loaded)
     assert ctx._events_resolved is None
+
+
+def test_liked_writes_to_sqlite(tmp_path, monkeypatch):
+    from recommender.user_store import init_db, load_ratings
+    import recommender.user_store as us
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+    monkeypatch.setattr(us, "resolve_rating_content_type", lambda *_args, **_kwargs: "tv")
+    monkeypatch.setattr("sys.argv", ["recommend", "--liked", "Breaking Bad"])
+    monkeypatch.setattr("config.WATCH_INDEX_PATH", str(tmp_path / "wi.json"))
+    monkeypatch.setattr("config.TASTE_PROFILE_PATH", str(tmp_path / "tp.txt"))
+
+    from recommender.main import main
+    main()
+
+    ratings = load_ratings(db)
+    assert any(r["title"] == "Breaking Bad" and r["rating"] == "liked" for r in ratings)
+
+
+def test_add_writes_to_sqlite(tmp_path, monkeypatch):
+    from recommender.user_store import init_db, list_manual_archive
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+    monkeypatch.setattr("sys.argv", ["recommend", "--add", "The Bear", "--type", "tv"])
+    monkeypatch.setattr("config.WATCH_INDEX_PATH", str(tmp_path / "wi.json"))
+    monkeypatch.setattr("config.TASTE_PROFILE_PATH", str(tmp_path / "tp.txt"))
+
+    from recommender.main import main
+    main()
+
+    archive = list_manual_archive(db)
+    assert any(a["title"] == "The Bear" for a in archive)
