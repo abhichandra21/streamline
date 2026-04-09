@@ -20,7 +20,6 @@ from recommender.enricher import enrich_batch
 from recommender.taste_profile_builder import build as build_taste_profile
 from recommender.llm import create_client
 from recommender import watch_index as wi
-from recommender import feedback as fb
 from recommender import user_store
 from recommender import overrides as ov
 from recommender import event_store
