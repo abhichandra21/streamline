@@ -93,13 +93,12 @@ def _get_job_context() -> RecommendContext:
 def _run_recommend_job(query: str) -> dict:
     ctx = _get_job_context()
     results = ask(query, ctx)
-
+    items = _build_result_items(results, ctx)
     try:
-        query_history.record(query, results, ctx.llm.provider, ctx.llm.usage.summary())
+        query_history.record(query, items, ctx.llm.provider, ctx.llm.usage.summary())
     except OSError as exc:
         log.warning("Failed to persist query history for %r: %s", query, exc)
-
-    return {"items": _build_result_items(results, ctx), "query": query}
+    return {"items": items, "query": query}
 
 
 def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
@@ -444,11 +443,11 @@ def recommend_post() -> str:
     try:
         ctx = _get_job_context()
         results = ask(query, ctx)
+        items = _build_result_items(results, ctx)
         try:
-            query_history.record(query, results, ctx.llm.provider, ctx.llm.usage.summary())
+            query_history.record(query, items, ctx.llm.provider, ctx.llm.usage.summary())
         except OSError as exc:
             log.warning("Failed to persist query history for %r: %s", query, exc)
-        items = _build_result_items(results, ctx)
         return render_template("recommend.html", query=query, results=items)
     except Exception as exc:
         log.exception("Error during recommendation")

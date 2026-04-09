@@ -88,38 +88,60 @@ def _write_raw_to_file(history_file, entries: list[dict]) -> None:
     os.fsync(history_file.fileno())
 
 
+def _serialize_result(r) -> dict:
+    """Serialize a result for storage — accepts enriched dicts or Recommendation objects."""
+    if isinstance(r, dict):
+        return {
+            "title": r["title"],
+            "content_type": r["content_type"],
+            "score": round(r.get("score") or 0, 3),
+            "vote_average": r.get("vote_average") or 0,
+            "genres": r.get("genres") or [],
+            "explanation": r.get("explanation") or "",
+            "streaming_providers": (r.get("streaming_providers") or [])[:4],
+            "tmdb_id": r.get("tmdb_id"),
+            "poster": r.get("poster"),
+            "tmdb_url": r.get("tmdb_url") or "",
+            "imdb_url": r.get("imdb_url") or "",
+        }
+    # Raw Recommendation object
+    return {
+        "title": r.title,
+        "content_type": r.content_type,
+        "score": round(r.score, 3),
+        "vote_average": r.vote_average,
+        "genres": getattr(r, "genres", []),
+        "explanation": r.explanation,
+        "streaming_providers": r.streaming_providers[:4],
+        "tmdb_id": None,
+        "poster": None,
+        "tmdb_url": "",
+        "imdb_url": "",
+    }
+
+
 def record(
     query: str,
-    results: list[Recommendation],
+    results: list,
     provider: str,
     usage_summary: str,
 ) -> None:
-    """Append a query + results to history, capped at MAX_ENTRIES."""
+    """Append a query + results to history, capped at MAX_ENTRIES.
+
+    ``results`` may be enriched dicts (from web.py) or raw Recommendation objects.
+    """
     def append_entry(history_file) -> None:
         entries = _load_raw_from_file(history_file)
-
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "query": query,
             "provider": provider,
-            "results": [
-                {
-                    "title": r.title,
-                    "content_type": r.content_type,
-                    "score": round(r.score, 3),
-                    "vote_average": r.vote_average,
-                    "explanation": r.explanation,
-                    "streaming_providers": r.streaming_providers[:4],
-                }
-                for r in results
-            ],
+            "results": [_serialize_result(r) for r in results],
             "usage": usage_summary,
         }
         entries.append(entry)
-
         if len(entries) > MAX_ENTRIES:
             entries[:] = entries[-MAX_ENTRIES:]
-
         _write_raw_to_file(history_file, entries)
 
     _with_locked_history_file(append_entry)

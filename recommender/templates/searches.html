@@ -15,7 +15,36 @@
 </div>
 {% endif %}
 
-<div style="display:flex; flex-direction:column; gap:6px;">
+{% if entries %}
+<!-- Filter / sort controls -->
+<div style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap; margin-bottom:1rem; padding:0.6rem 0.9rem; background:var(--surface); border:1px solid var(--border); border-radius:6px;">
+  <!-- Type filter pills -->
+  <div style="display:flex; gap:2px;">
+    <button class="sh-pill active" data-type="all" onclick="setTypeFilter('all')">All</button>
+    <button class="sh-pill" data-type="tv" onclick="setTypeFilter('tv')">TV</button>
+    <button class="sh-pill" data-type="movie" onclick="setTypeFilter('movie')">Film</button>
+  </div>
+  <span style="color:var(--border);">·</span>
+  <!-- Min rating -->
+  <label class="mono" style="font-size:0.58rem; color:var(--muted); display:flex; align-items:center; gap:0.3rem;">
+    <span style="color:var(--accent2);">★</span>
+    <input type="range" id="sh-rating" min="0" max="10" step="0.5" value="0"
+      oninput="setMinRating(this.value)"
+      style="width:80px; accent-color:var(--accent2); cursor:pointer;">
+    <span id="sh-rating-val" style="min-width:2ch;">0+</span>
+  </label>
+  <span style="color:var(--border);">·</span>
+  <!-- Provider filter -->
+  <select id="sh-provider" class="input-field mono" onchange="setProvider(this.value)"
+    style="padding:3px 6px; font-size:0.6rem; border-radius:3px; display:none;">
+    <option value="">All providers</option>
+  </select>
+  <div style="flex:1;"></div>
+  <span class="mono" id="sh-summary" style="font-size:0.55rem; color:var(--muted);"></span>
+</div>
+{% endif %}
+
+<div id="sh-list" style="display:flex; flex-direction:column; gap:6px;">
 {% for entry in entries %}
   <details class="search-details" id="q-{{ loop.index }}" style="background:var(--surface); border-radius:6px; overflow:hidden;">
     <summary style="
@@ -66,13 +95,37 @@
       {% set entry_idx = loop.index %}
       {% for r in entry.results %}
       {% set save_id = "save-" ~ entry_idx ~ "-" ~ loop.index %}
-      <div style="display:flex; gap:0.85rem; padding:0.65rem 1.25rem 0.65rem 2.75rem; transition:background 0.15s;{% if not loop.last %} border-bottom:1px solid rgba(53,47,64,0.5);{% endif %}"
+      <div class="sh-result"
+        data-type="{{ r.content_type }}"
+        data-rating="{{ r.vote_average }}"
+        data-providers="{{ r.streaming_providers | join(',') | lower }}"
+        style="display:flex; gap:0.85rem; padding:0.65rem 1.25rem 0.65rem 1rem; transition:background 0.15s;{% if not loop.last %} border-bottom:1px solid rgba(53,47,64,0.5);{% endif %}"
         onmouseover="this.style.background='var(--surface2)'"
         onmouseout="this.style.background='transparent'"
       >
+        <!-- Poster (new entries only) -->
+        {% if r.poster %}
+        <div style="flex-shrink:0; width:38px; height:57px; overflow:hidden; border-radius:3px;">
+          {% if r.tmdb_url %}
+          <a href="{{ r.tmdb_url }}" target="_blank" rel="noopener">
+            <img src="{{ r.poster }}" alt="{{ r.title }}" style="width:100%; height:100%; object-fit:cover;">
+          </a>
+          {% else %}
+          <img src="{{ r.poster }}" alt="{{ r.title }}" style="width:100%; height:100%; object-fit:cover;">
+          {% endif %}
+        </div>
+        {% endif %}
+
         <div style="flex:1; min-width:0;">
           <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.2rem;">
+            {% if r.tmdb_url %}
+            <a href="{{ r.tmdb_url }}" target="_blank" rel="noopener" style="text-decoration:none;">
+              <span style="font-family:'DM Serif Display',serif; font-size:0.95rem; color:var(--text); transition:color 0.15s;"
+                onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">{{ r.title }}</span>
+            </a>
+            {% else %}
             <span style="font-family:'DM Serif Display',serif; font-size:0.95rem; color:var(--text);">{{ r.title }}</span>
+            {% endif %}
             <span class="badge {{ 'badge-tv' if r.content_type == 'tv' else 'badge-movie' }}" style="font-size:0.5rem;">{{ r.content_type }}</span>
             <span class="mono" style="font-size:0.58rem; color:var(--accent2);">★ {{ "%.1f"|format(r.vote_average) }}</span>
           </div>
@@ -80,6 +133,12 @@
           <div style="display:flex; align-items:center; gap:0.75rem; margin-top:0.2rem; flex-wrap:wrap;">
             {% if r.streaming_providers %}
             <span class="mono" style="font-size:0.55rem; color:var(--muted);">{{ r.streaming_providers | join("  ·  ") }}</span>
+            {% endif %}
+            {% if r.tmdb_url %}
+            <a href="{{ r.tmdb_url }}" target="_blank" rel="noopener" class="mono result-link" style="font-size:0.55rem;">TMDB</a>
+            {% endif %}
+            {% if r.imdb_url %}
+            <a href="{{ r.imdb_url }}" target="_blank" rel="noopener" class="mono result-link" style="font-size:0.55rem;">IMDB</a>
             {% endif %}
             {% if r.user_state.in_archive %}
             <span class="mono" style="font-size:0.55rem; color:var(--muted);">Watched</span>
@@ -134,6 +193,83 @@
   .search-details summary:hover { background: var(--surface2); }
   .search-details[open] .search-arrow { transform: rotate(90deg); }
   .search-details.htmx-swapping { opacity: 0; transition: opacity 0.3s ease; }
+  .sh-pill {
+    background: none; border: none; cursor: pointer;
+    font-family: 'JetBrains Mono', monospace; font-size: 0.6rem;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--muted); padding: 3px 8px; border-radius: 3px;
+    transition: color 0.15s, background 0.15s;
+  }
+  .sh-pill:hover { color: var(--text); }
+  .sh-pill.active { color: var(--accent); background: rgba(232,93,74,0.08); }
 </style>
+
+<script>
+let _shType = 'all', _shMinRating = 0, _shProvider = '';
+
+function setTypeFilter(type) {
+  _shType = type;
+  document.querySelectorAll('.sh-pill').forEach(p =>
+    p.classList.toggle('active', p.dataset.type === type));
+  _shApply();
+}
+
+function setMinRating(val) {
+  _shMinRating = parseFloat(val);
+  document.getElementById('sh-rating-val').textContent = val > 0 ? val + '+' : '0+';
+  _shApply();
+}
+
+function setProvider(val) {
+  _shProvider = val.toLowerCase();
+  _shApply();
+}
+
+function _shApply() {
+  let visibleEntries = 0;
+  document.querySelectorAll('.search-details').forEach(detail => {
+    const rows = detail.querySelectorAll('.sh-result');
+    let visibleRows = 0;
+    rows.forEach(row => {
+      const typeOk = _shType === 'all' || row.dataset.type === _shType;
+      const ratingOk = parseFloat(row.dataset.rating || 0) >= _shMinRating;
+      const providerOk = !_shProvider || (row.dataset.providers || '').includes(_shProvider);
+      const show = typeOk && ratingOk && providerOk;
+      row.style.display = show ? '' : 'none';
+      if (show) visibleRows++;
+    });
+    // Hide the whole entry if all its results are filtered out
+    detail.style.display = (rows.length === 0 || visibleRows > 0) ? '' : 'none';
+    if (detail.style.display !== 'none') visibleEntries++;
+  });
+
+  const summary = document.getElementById('sh-summary');
+  if (summary) {
+    summary.textContent = (_shType !== 'all' || _shMinRating > 0 || _shProvider)
+      ? visibleEntries + ' matching quer' + (visibleEntries !== 1 ? 'ies' : 'y')
+      : '';
+  }
+}
+
+// Populate provider dropdown from rendered data
+(function buildProviderDropdown() {
+  const providers = new Set();
+  document.querySelectorAll('.sh-result').forEach(row => {
+    (row.dataset.providers || '').split(',').forEach(p => {
+      const t = p.trim();
+      if (t) providers.add(t);
+    });
+  });
+  if (providers.size === 0) return;
+  const sel = document.getElementById('sh-provider');
+  [...providers].sort().forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p;
+    opt.textContent = p.charAt(0).toUpperCase() + p.slice(1);
+    sel.appendChild(opt);
+  });
+  sel.style.display = '';
+})();
+</script>
 
 {% endblock %}
