@@ -227,6 +227,12 @@
       <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">Home</a>
       <a href="/searches" class="nav-link {% if request.path == '/searches' %}active{% endif %}">Searches</a>
       <a href="/history" class="nav-link {% if request.path.startswith('/history') or request.path.startswith('/title') %}active{% endif %}">Archive</a>
+      <a href="/watchlist" class="nav-link {% if request.path == '/watchlist' %}active{% endif %}" style="display:flex; align-items:center; gap:0.3rem;">
+        Watchlist
+        {% if watchlist_count %}
+        <span style="font-family:'JetBrains Mono',monospace; font-size:0.5rem; background:var(--teal); color:var(--bg); padding:1px 5px; border-radius:8px; line-height:1.3;">{{ watchlist_count }}</span>
+        {% endif %}
+      </a>
     </div>
     <div class="nav-group-system">
       <a href="/settings" class="nav-link {% if request.path == '/settings' %}active{% endif %}">Settings</a>

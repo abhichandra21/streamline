@@ -220,6 +220,16 @@ def _inject_footer() -> dict:
     }
 
 
+@app.context_processor
+def _inject_watchlist_count() -> dict:
+    try:
+        user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+        items = user_store.list_saved_titles(config.EVENT_DB_PATH, status="watchlist")
+        return {"watchlist_count": len(items)}
+    except Exception:
+        return {"watchlist_count": 0}
+
+
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 @app.before_request
