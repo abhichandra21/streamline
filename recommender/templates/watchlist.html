@@ -20,7 +20,7 @@
         <input type="hidden" name="title" value="{{ item.title }}">
         <input type="hidden" name="content_type" value="{{ item.content_type }}">
         {% if item.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ item.tmdb_id }}">{% endif %}
-        <button type="submit" class="wl-btn wl-btn--watched">Watched</button>
+        <button type="submit" class="wl-btn wl-btn--watched">Mark as watched</button>
       </form>
       <form hx-post="/watchlist/dismiss" hx-target="#wl-item-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">

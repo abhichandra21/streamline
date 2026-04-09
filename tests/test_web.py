@@ -677,7 +677,7 @@ class TestRenderedState:
 
         resp = client.get("/watchlist")
         assert b"Breaking Bad" in resp.data
-        assert b"Watched" in resp.data  # action button present
+        assert b"Mark as watched" in resp.data  # action button present
         assert b"Won&#39;t watch" in resp.data or b"Won't watch" in resp.data
 
     def test_archive_rate_shows_thumbs_state(self, client, tmp_path, monkeypatch):
