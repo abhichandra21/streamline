@@ -153,7 +153,7 @@ def test_ask_excludes_watched_titles():
 
     ctx = RecommendContext(
         taste_profile="taste profile text",
-        watch_index=WatchIndex(tmdb_ids={1}, normalized_titles={("broadchurch", "tv")}, entries=[]),
+        watch_index=WatchIndex(tmdb_ids={1}, tmdb_keys={("tv", 1)}, normalized_titles={("broadchurch", "tv")}, entries=[]),
         events=[],
         tmdb_client=mock_tmdb,
         llm=mock_llm,
@@ -173,7 +173,7 @@ def test_recommend_context_events_eager():
     mock_llm = make_mock_llm("")
     ctx = RecommendContext(
         taste_profile="profile",
-        watch_index=WatchIndex(tmdb_ids=set(), normalized_titles=set(), entries=[]),
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
         events=[],
         tmdb_client=MagicMock(),
         llm=mock_llm,
@@ -194,7 +194,7 @@ def test_recommend_context_events_lazy_loads_once():
     mock_llm = make_mock_llm("")
     ctx = RecommendContext(
         taste_profile="profile",
-        watch_index=WatchIndex(tmdb_ids=set(), normalized_titles=set(), entries=[]),
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
         tmdb_client=MagicMock(),
         llm=mock_llm,
         cache_dir="/tmp",
@@ -212,7 +212,7 @@ def test_recommend_context_events_no_loader_returns_empty():
     mock_llm = make_mock_llm("")
     ctx = RecommendContext(
         taste_profile="profile",
-        watch_index=WatchIndex(tmdb_ids=set(), normalized_titles=set(), entries=[]),
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
         tmdb_client=MagicMock(),
         llm=mock_llm,
         cache_dir="/tmp",
@@ -261,7 +261,7 @@ def test_user_state_excludes_dismissed_and_manual_archive():
 
     ctx = RecommendContext(
         taste_profile="taste profile text",
-        watch_index=WatchIndex(tmdb_ids=set(), normalized_titles=set(), entries=[]),
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
         events=[],
         tmdb_client=mock_tmdb,
         llm=mock_llm,
