@@ -514,8 +514,9 @@ def title_detail(tmdb_id: int) -> str:
         except Exception:
             alt_meta = None
         if alt_meta:
-            # Only accept if the watch index actually has an entry for this ID
-            if (alt_ct, tmdb_id) in ctx.watch_index.tmdb_keys:
+            # Accept if the watch index has this tmdb_id under either type
+            # (old indexes may store the wrong content_type for the ID)
+            if tmdb_id in ctx.watch_index.tmdb_ids:
                 meta = alt_meta
                 ct = alt_ct
 
