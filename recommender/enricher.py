@@ -30,7 +30,7 @@ def enrichment_key_from_parts(
     tmdb_id: int | None,
     title: str,
 ) -> str:
-    if tmdb_id is not None and content_type in ("tv", "movie"):
+    if tmdb_id and content_type in ("tv", "movie"):
         return f"{content_type}/{tmdb_id}"
     return f"unknown/{_slug(title)}"
 
