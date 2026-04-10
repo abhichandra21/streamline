@@ -499,7 +499,12 @@ def title_detail(tmdb_id: int) -> str:
     except Exception:
         pass
 
-    description = enrichments.get(meta.title, "") if meta else ""
+    description = ""
+    enrichment_path = Path(config.ENRICHMENT_CACHE_DIR) / ct / f"{tmdb_id}.txt"
+    if enrichment_path.exists():
+        description = enrichment_path.read_text()
+    elif meta:
+        description = enrichments.get(meta.title, "")
     poster = _get_poster_url(tmdb_id, ct, "w500") if meta else None
     overview = ""
     if meta:

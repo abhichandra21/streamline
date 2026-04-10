@@ -78,11 +78,26 @@
       border-bottom: 1px solid var(--border);
     }
     .nav-brand {
-      font-family: 'DM Serif Display', serif;
-      font-size: 1.15rem;
-      color: var(--text);
-      letter-spacing: 0.04em;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
       text-decoration: none;
+      font-family: 'DM Serif Display', serif;
+      font-size: 1.18rem;
+      letter-spacing: 0.01em;
+    }
+    .nav-brand img {
+      height: 21px;
+      width: 21px;
+      border-radius: 4px;
+      opacity: 0.92;
+      flex-shrink: 0;
+    }
+    .nav-brand:hover { text-decoration: none; }
+    .nav-brand-word { color: var(--text); }
+    .nav-brand-word em {
+      font-style: italic;
+      color: var(--teal);
     }
     .nav-link {
       font-family: 'JetBrains Mono', monospace;
@@ -280,7 +295,10 @@
 <body>
 
   <nav>
-    <a href="/" class="nav-brand"><img src="/static/logo.png" alt="Streamline" style="height:22px; width:22px; vertical-align:middle; margin-right:0.4rem; border-radius:3px;">Streamline</a>
+    <a href="/" class="nav-brand">
+      <img src="/static/logo.png" alt="">
+      <span class="nav-brand-word">Stream<em>line</em></span>
+    </a>
     <div class="nav-group" style="margin-left:0.5rem;">
       <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">Home</a>
       <a href="/searches" class="nav-link {% if request.path == '/searches' %}active{% endif %}">Searches</a>
