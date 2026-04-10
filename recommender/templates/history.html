@@ -8,6 +8,7 @@
 
   <!-- Filter row -->
   <form method="get" action="/history" id="filter-form" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+    <input type="hidden" name="per_page" value="{{ per_page }}">
     <input
       type="text" name="q" value="{{ q }}" placeholder="Search titles..."
       class="input-field"
@@ -49,7 +50,17 @@
   </div>
 
   <div style="display:flex; align-items:center; justify-content:space-between; margin-top:0.75rem;">
-    <p class="mono" style="font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">{{ total }} titles</p>
+    <div style="display:flex; align-items:center; gap:0.75rem;">
+      <p class="mono" style="font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">
+        {% if total_pages > 1 %}{{ (page - 1) * per_page + 1 }}–{{ [page * per_page, total] | min }} of {% endif %}{{ total }} titles
+      </p>
+      <select id="per-page-select" class="input-field mono" style="padding:0.25rem 0.4rem; font-size:0.6rem; color:var(--muted); background:var(--surface); border-color:var(--border);"
+        onchange="updatePerPage(this.value)">
+        <option value="30" {% if per_page == 30 %}selected{% endif %}>30</option>
+        <option value="60" {% if per_page == 60 %}selected{% endif %}>60</option>
+        <option value="120" {% if per_page == 120 %}selected{% endif %}>120</option>
+      </select>
+    </div>
 
     <!-- View toggle -->
     <div style="display:flex; gap:2px; background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:2px;">
@@ -65,6 +76,14 @@
     </div>
   </div>
 </div>
+
+<!-- Blocking script: apply saved view mode before any archive-view paints -->
+<script>
+(function() {
+  var saved = localStorage.getItem('archive-view') || 'list';
+  document.documentElement.setAttribute('data-archive-view', saved);
+})();
+</script>
 
 <!-- LIST VIEW (default) -->
 <div id="view-list" class="archive-view">
@@ -110,7 +129,7 @@
 </div>
 
 <!-- GRID VIEW (posters) -->
-<div id="view-grid" class="archive-view" style="display:none;">
+<div id="view-grid" class="archive-view">
   {% if items %}
   <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:8px;">
     {% for item in items %}
@@ -148,7 +167,7 @@
 </div>
 
 <!-- COMPACT VIEW -->
-<div id="view-compact" class="archive-view" style="display:none;">
+<div id="view-compact" class="archive-view">
   <div style="columns:2; column-gap:1.5rem;">
     {% for item in items %}
     {% set link = "/title/" ~ item.tmdb_id ~ "?type=" ~ item.content_type if item.tmdb_id else none %}
@@ -168,7 +187,37 @@
   </div>
 </div>
 
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<div class="archive-pager">
+  {% if page > 1 %}
+  <a href="{{ url_for('history', page=page - 1, sort=sort, per_page=per_page, q=q or None, type=ct_filter or None) }}" class="btn-ghost pager-btn">Prev</a>
+  {% endif %}
+  {% for p in range(1, total_pages + 1) %}
+    {% if p == page %}
+    <span class="mono pager-current">{{ p }}</span>
+    {% elif p == 1 or p == total_pages or (p >= page - 2 and p <= page + 2) %}
+    <a href="{{ url_for('history', page=p, sort=sort, per_page=per_page, q=q or None, type=ct_filter or None) }}" class="btn-ghost pager-btn">{{ p }}</a>
+    {% elif p == page - 3 or p == page + 3 %}
+    <span class="mono pager-ellipsis">...</span>
+    {% endif %}
+  {% endfor %}
+  {% if page < total_pages %}
+  <a href="{{ url_for('history', page=page + 1, sort=sort, per_page=per_page, q=q or None, type=ct_filter or None) }}" class="btn-ghost pager-btn">Next</a>
+  {% endif %}
+</div>
+{% endif %}
+
 <style>
+  /* Hide all views by default, show only the one matching the saved preference.
+     The blocking script above sets data-archive-view before paint, so no flash. */
+  .archive-view { display: none; }
+  html[data-archive-view="list"] #view-list,
+  html[data-archive-view="grid"] #view-grid,
+  html[data-archive-view="compact"] #view-compact { display: block; }
+  /* Fallback when no attribute is set (first visit, no localStorage) */
+  html:not([data-archive-view]) #view-list { display: block; }
+
   .view-btn {
     background: none;
     border: none;
@@ -182,6 +231,58 @@
   }
   .view-btn:hover { color: var(--text); }
   .view-btn.active { color: var(--accent); background: var(--surface2); }
+
+  /* Pagination */
+  .archive-pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+  .pager-btn {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.68rem;
+  }
+  .pager-current {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.68rem;
+    color: var(--bg);
+    background: var(--accent);
+    border-radius: 4px;
+    font-weight: 500;
+  }
+  .pager-ellipsis {
+    font-size: 0.68rem;
+    color: var(--muted);
+    padding: 0 0.15rem;
+  }
+
+  /* Staggered fade-in for archive items on page load */
+  @keyframes archiveIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  #view-list > div,
+  #view-grid > div > a,
+  #view-compact > div > div {
+    animation: archiveIn 0.25s ease both;
+  }
+  /* Stagger first 12 items; rest appear together */
+  #view-list > div:nth-child(1),  #view-grid > div > a:nth-child(1)  { animation-delay: 0s; }
+  #view-list > div:nth-child(2),  #view-grid > div > a:nth-child(2)  { animation-delay: 0.02s; }
+  #view-list > div:nth-child(3),  #view-grid > div > a:nth-child(3)  { animation-delay: 0.04s; }
+  #view-list > div:nth-child(4),  #view-grid > div > a:nth-child(4)  { animation-delay: 0.06s; }
+  #view-list > div:nth-child(5),  #view-grid > div > a:nth-child(5)  { animation-delay: 0.08s; }
+  #view-list > div:nth-child(6),  #view-grid > div > a:nth-child(6)  { animation-delay: 0.10s; }
+  #view-list > div:nth-child(7),  #view-grid > div > a:nth-child(7)  { animation-delay: 0.12s; }
+  #view-list > div:nth-child(8),  #view-grid > div > a:nth-child(8)  { animation-delay: 0.14s; }
+  #view-list > div:nth-child(9),  #view-grid > div > a:nth-child(9)  { animation-delay: 0.16s; }
+  #view-list > div:nth-child(10), #view-grid > div > a:nth-child(10) { animation-delay: 0.18s; }
+  #view-list > div:nth-child(11), #view-grid > div > a:nth-child(11) { animation-delay: 0.20s; }
+  #view-list > div:nth-child(12), #view-grid > div > a:nth-child(12) { animation-delay: 0.22s; }
 </style>
 
 <script>
@@ -197,18 +298,27 @@ function toggleAddForm() {
   }
 }
 
+function updatePerPage(val) {
+  var params = new URLSearchParams(window.location.search);
+  params.set('per_page', val);
+  params.set('page', '1');
+  window.location.search = params.toString();
+}
+
 function setView(mode) {
-  document.querySelectorAll('.archive-view').forEach(el => el.style.display = 'none');
-  document.getElementById('view-' + mode).style.display = '';
+  document.documentElement.setAttribute('data-archive-view', mode);
   document.querySelectorAll('.view-btn').forEach(el => el.classList.remove('active'));
   document.getElementById('btn-' + mode).classList.add('active');
   localStorage.setItem('archive-view', mode);
 }
-// Restore saved preference
-const saved = localStorage.getItem('archive-view');
-if (saved && document.getElementById('view-' + saved)) {
-  setView(saved);
-}
+// Sync button active state with the view already applied by the blocking script
+(function() {
+  var saved = localStorage.getItem('archive-view') || 'list';
+  if (document.getElementById('view-' + saved)) {
+    document.querySelectorAll('.view-btn').forEach(function(el) { el.classList.remove('active'); });
+    document.getElementById('btn-' + saved).classList.add('active');
+  }
+})();
 </script>
 
 {% endblock %}
