@@ -18,14 +18,14 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10+-blue?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/LLM-Claude%20%7C%20Gemini-blueviolet" alt="LLM Support">
+  <img src="https://img.shields.io/badge/LLM-Claude%20%7C%20Gemini%20%7C%20OpenAI-blueviolet" alt="LLM Support">
   <img src="https://img.shields.io/badge/tests-86%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
 </p>
 
 ---
 
-Streamline ingests your real watch history from Netflix, Prime Video, and manual lists, enriches every title via TMDB and LLM, builds a detailed taste profile from *all* your watched content, then answers natural-language queries using hybrid candidate generation. No generic "top 10" lists — recommendations are calibrated to *your* patterns.
+Streamline ingests your real watch history from Netflix, Prime Video, Apple TV, and manual lists, enriches every title via TMDB and LLM, builds a detailed taste profile from *all* your watched content, then answers natural-language queries using hybrid candidate generation. No generic "top 10" lists — recommendations are calibrated to *your* patterns.
 
 <p align="center">
   <img src="docs/screenshot-hero.png" width="720" alt="Streamline in action">
@@ -36,8 +36,8 @@ Streamline ingests your real watch history from Netflix, Prime Video, and manual
 - **Natural language search** — "paranoid spy thriller like The Night Manager", "feel-good Bollywood comedy", "why not Slow Horses?"
 - **Taste profile** — built from your entire watch history (2000+ titles), organized into 15+ genre clusters with deep analysis
 - **Hybrid candidate generation** — TMDB Discover (structured filters) + LLM semantic suggestions (creative matches)
-- **Multi-provider LLM** — Anthropic (Claude) and Google (Gemini) with role-based model dispatch (fast/reason)
-- **Web UI** — Flask + HTMX with editorial design: search, taste profile dashboard, poster archive, search history, settings
+- **Multi-provider LLM** — Anthropic (Claude), Google (Gemini), and OpenAI with role-based model dispatch (fast/reason)
+- **Web UI** — Flask + HTMX with editorial design: search, taste profile dashboard, poster archive, watchlist management, search history, settings
 - **Rich CLI** — interactive REPL, conversational context ("more like that"), feedback system, usage/cost tracking
 - **Streaming availability** — annotated results with platform filtering (Netflix, Prime, etc.)
 - **Quality filters** — configurable minimum rating, release year, and vote count
@@ -138,8 +138,9 @@ Each query prints token usage and estimated cost at the end.
 
 The web UI includes:
 - **Home** — natural language search with HTMX, suggestion pills, recent searches
-- **Searches** — expandable history of past queries with cached results
-- **Archive** — full watch history with poster grid, list, and compact views
+- **Searches** — expandable history of past queries with cached results and watchlist actions
+- **Archive** — full watch history with poster grid, list, and compact views; sortable A-Z/Z-A
+- **Watchlist** — save/unsave titles from any page, CSV export
 - **Settings** — edit all configuration from the browser with live reload
 - **Help** — built-in usage guide
 
@@ -158,7 +159,7 @@ Settings live in a few places:
 
 ```yaml
 # config.yaml
-provider: anthropic                    # or "gemini"
+provider: anthropic                    # or "gemini" or "openai"
 
 models:
   anthropic:
@@ -167,6 +168,9 @@ models:
   gemini:
     fast: gemini-2.5-flash
     reason: gemini-2.5-pro
+  openai:
+    fast: gpt-4.1-mini
+    reason: gpt-4.1
 ```
 
 Switch providers by changing `provider:` in config or per-query with `--provider gemini`.
@@ -208,7 +212,7 @@ All shared settings in `config.yaml`:
 **LLM:**
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `provider` | anthropic | LLM provider ("anthropic" or "gemini") |
+| `provider` | anthropic | LLM provider ("anthropic", "gemini", or "openai") |
 | `models.*` | (see above) | Model assignments per provider (fast/reason roles) |
 | `llm.timeout_*` | 30-300s | Per-call-type timeouts |
 | `llm.tokens_*` | 200-16000 | Per-call-type max output tokens |

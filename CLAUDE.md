@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Streamline is a personal streaming recommendation engine. It ingests real watch history (Netflix, Prime Video, manual lists), enriches titles via TMDB and LLM, builds a full taste profile from all watched content, then answers natural language queries using hybrid candidate generation (TMDB Discover + LLM semantic suggestions). Supports Anthropic (Claude) and Google (Gemini) as LLM providers.
+Streamline is a personal streaming recommendation engine. It ingests real watch history (Netflix, Prime Video, Apple TV, manual lists), enriches titles via TMDB and LLM, builds a full taste profile from all watched content, then answers natural language queries using hybrid candidate generation (TMDB Discover + LLM semantic suggestions). Supports Anthropic (Claude), Google (Gemini), and OpenAI as LLM providers.
 
 ## Product Philosophy
 
@@ -65,7 +65,7 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `recommender/ingestion/` — Platform parsers. Manual titles use `datetime.now()` for competitive scoring.
 - `recommender/tmdb_client.py` — Metadata lookup with guessit title classification, title cleanup fallback (strips suffixes, tries alternate content type), discover endpoint (page-limited), watch providers.
 - `recommender/watch_index.py` — Content-type-aware dual-key dedup (TMDB ID + `(normalized_title, content_type)`). Post-build rapidfuzz dedup. Stale cache cleanup.
-- `recommender/enricher.py` — LLM enrichment (role=fast), 30s timeout, rate limit retry. Only caches successful responses.
+- `recommender/enricher.py` — LLM enrichment (role=fast), 30s timeout, rate limit retry. Only caches successful responses. Identity-keyed index (`content_type/tmdb_id` or `unknown/slug`).
 - `recommender/taste_profile_builder.py` — Batched profile builder (200 titles/batch, rate limit retry, merge pass). No top-N limit.
 - `recommender/signals.py` — Scoring: completion (50%) + rewatch (30%) + true half-life recency decay (20%).
 - `recommender/query_engine.py` — Full online pipeline. "Why not X?" trace mode, conversational context, platform filtering.
@@ -73,7 +73,7 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `recommender/feedback.py` — (Deprecated) Original JSON-based feedback storage. Migrated to `user_store.py` SQLite tables.
 - `recommender/user_store.py` — SQLite storage for watchlist (`saved_titles`), ratings (`title_ratings`), and manual archive additions (`manual_archive_entries`). Migration from `feedback.json`.
 - `recommender/user_state.py` — `UserStateIndex` snapshot for TMDB-ID-first matching in query filtering and UI rendering.
-- `recommender/web.py` — Flask web UI with HTMX search, poster grid, taste profile clusters.
+- `recommender/web.py` — Flask web UI with HTMX search, poster grid, taste profile clusters, watchlist management (save/unsave/export CSV), search history with user state.
 - `recommender/main.py` — Rich CLI with spinners, panels, stderr/stdout separation, REPL with inline feedback, usage stats.
 
 ### Data Models
@@ -83,7 +83,7 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `UsageStats` — accumulated token counts and cost per query
 
 ### Cache Layout
-All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ index.json), `providers/`, `watch_index.json`, `taste_profile.txt` (+ timestamped backups), `feedback.json`. User-managed state (watchlist, ratings, manual archive) lives in the same SQLite database as imported watch events (`events.db`).
+All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ identity-keyed index.json), `providers/`, `watch_index.json`, `taste_profile.txt` (+ timestamped backups), `feedback.json`. User-managed state (watchlist, ratings, manual archive) lives in the same SQLite database as imported watch events (`events.db`).
 
 ## Configuration
 

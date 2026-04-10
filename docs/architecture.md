@@ -100,6 +100,8 @@ This prevents cross-media false matches (watching the TV show "Fargo" won't bloc
 
 Calls Claude Haiku to generate 2-3 sentence semantic descriptions per title. Only successful LLM responses are cached — fallback descriptions (keyword strings) are not persisted, allowing retry on subsequent runs.
 
+The enrichment index (`index.json`) uses identity keys: `content_type/tmdb_id` for resolved titles (e.g. `tv/12345`) and `unknown/slug` for unresolved ones. A `_title_keyed_enrichments()` bridge in `setup.py` converts identity keys back to display titles for the taste profile builder.
+
 ### Taste Profile Builder (`recommender/taste_profile_builder.py`)
 
 Processes ALL enriched titles (no limit) in batches of 200. Each batch produces a mini taste profile, then a merge pass consolidates them into one document covering every taste cluster. Includes rate limit retry with backoff.
@@ -108,13 +110,19 @@ Previous profiles are auto-backed up with timestamps before rebuild.
 
 Negative preferences from the feedback system are included in the prompt, generating a "What you don't enjoy" section.
 
-### Feedback (`recommender/feedback.py`)
+### User Store (`recommender/user_store.py`)
 
-Persists user feedback at `recommender/cache/feedback.json`:
+SQLite storage (`events.db`) for user-managed state:
 
-- **Liked/disliked ratings** — applied as score multipliers (1.3x liked, 0.5x disliked) during profile rebuild
-- **Title additions** — added to watch history with current timestamp
+- **Watchlist** (`saved_titles` with status `watchlist`) — save/unsave from any UI page, CSV export
+- **Dismissed** (`saved_titles` with status `dismissed`) — excluded from recommendations
+- **Ratings** (`title_ratings`) — liked/disliked, applied as score multipliers during profile rebuild
+- **Manual archive** (`manual_archive_entries`) — titles added via CLI or web UI
 - Disliked titles inform negative preference prompting in the taste profile
+
+All lookups use TMDB-ID-first matching with normalized-title fallback. `UserStateIndex` (in `user_state.py`) provides a read-only snapshot for fast matching in query filtering and UI rendering.
+
+Note: `recommender/feedback.py` is deprecated. The original JSON-based feedback was migrated to the SQLite tables above.
 
 ### Query Engine (`recommender/query_engine.py`)
 
@@ -142,9 +150,12 @@ The online pipeline:
 
 Flask app serving:
 - `/` — Home: search bar (HTMX-powered), taste profile clusters (expandable, markdown-rendered), archive poster wall
-- `/history` — Watch archive with switchable views (list, poster grid, compact). Search + type filter.
+- `/history` — Watch archive with switchable views (list, poster grid, compact). Search + type filter + A-Z/Z-A sort.
 - `/title/:id` — Title detail with poster, TMDB overview, AI analysis, credits, keywords, TMDB link
 - `/recommend` — Standalone discover page
+- `/watchlist` — Saved titles with TMDB ratings, CSV export via `/watchlist/export`
+- `/watchlist/save`, `/watchlist/unsave` — HTMX toggle endpoints for inline save/unsave from any page
+- `/searches` — Query history with user state badges (watchlist, archived, dismissed) per result
 
 ### LLM Abstraction (`recommender/llm.py`)
 
@@ -184,7 +195,7 @@ recommender/cache/
     tv/{tmdb_id}.txt
     movie/{tmdb_id}.txt
     unknown/{slug}.txt
-    index.json                   title -> description index
+    index.json                   identity-keyed description index (content_type/tmdb_id -> text)
   providers/
     {content_type}/{region}/{tmdb_id}.json
   profile_batches/               Intermediate batch profiles (auto-cleaned after merge)
