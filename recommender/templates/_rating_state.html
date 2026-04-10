@@ -5,14 +5,14 @@
     <input type="hidden" name="content_type" value="{{ content_type }}">
     <input type="hidden" name="tmdb_id" value="{{ tmdb_id or '' }}">
     {% if current_rating == "liked" %}
-    <button type="submit" name="rating" value="clear" class="btn-thumb btn-thumb--liked" title="Remove rating">&#x1F44D;</button>
-    <button type="submit" name="rating" value="disliked" class="btn-thumb btn-thumb--dislike" title="Disliked">&#x1F44E;</button>
+    <button type="submit" name="rating" value="clear" class="btn-thumb btn-thumb--liked" title="Remove rating">liked</button>
+    <button type="submit" name="rating" value="disliked" class="btn-thumb btn-thumb--dislike" title="Disliked">disliked</button>
     {% elif current_rating == "disliked" %}
-    <button type="submit" name="rating" value="liked" class="btn-thumb btn-thumb--like" title="Liked">&#x1F44D;</button>
-    <button type="submit" name="rating" value="clear" class="btn-thumb btn-thumb--disliked" title="Remove rating">&#x1F44E;</button>
+    <button type="submit" name="rating" value="liked" class="btn-thumb btn-thumb--like" title="Liked">liked</button>
+    <button type="submit" name="rating" value="clear" class="btn-thumb btn-thumb--disliked" title="Remove rating">disliked</button>
     {% else %}
-    <button type="submit" name="rating" value="liked" class="btn-thumb btn-thumb--like" title="Liked">&#x1F44D;</button>
-    <button type="submit" name="rating" value="disliked" class="btn-thumb btn-thumb--dislike" title="Disliked">&#x1F44E;</button>
+    <button type="submit" name="rating" value="liked" class="btn-thumb btn-thumb--like" title="Liked">liked</button>
+    <button type="submit" name="rating" value="disliked" class="btn-thumb btn-thumb--dislike" title="Disliked">disliked</button>
     {% endif %}
   </form>
 </span>

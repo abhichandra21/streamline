@@ -49,7 +49,8 @@ class UserStateIndex:
                 tmdb_id, norm, ct = row
                 if tmdb_id is not None:
                     idx._archive_tmdb_ids.add(tmdb_id)
-                idx._archive_titles.add((norm, ct))
+                else:
+                    idx._archive_titles.add((norm, ct))
 
             # Saved titles (watchlist + dismissed)
             for row in conn.execute(
@@ -59,11 +60,13 @@ class UserStateIndex:
                 if status == "dismissed":
                     if tmdb_id is not None:
                         idx._dismissed_tmdb_ids.add(tmdb_id)
-                    idx._dismissed_titles.add((norm, ct))
+                    else:
+                        idx._dismissed_titles.add((norm, ct))
                 elif status == "watchlist":
                     if tmdb_id is not None:
                         idx._watchlist_tmdb_ids.add(tmdb_id)
-                    idx._watchlist_titles.add((norm, ct))
+                    else:
+                        idx._watchlist_titles.add((norm, ct))
 
             # Ratings
             for row in conn.execute(
@@ -80,8 +83,8 @@ class UserStateIndex:
         return idx
 
     def _match_tmdb_first(self, meta, tmdb_set: set, title_set: set) -> bool:
-        if meta.tmdb_id is not None:
-            return meta.tmdb_id in tmdb_set
+        if meta.tmdb_id is not None and meta.tmdb_id in tmdb_set:
+            return True
         return (_normalize(meta.title), meta.content_type) in title_set
 
     def is_manually_watched(self, meta) -> bool:

@@ -29,6 +29,12 @@ console_err = Console(stderr=True)   # spinners, progress, warnings
 console_out = Console()              # recommendation results
 
 
+def _load_user_state():
+    if Path(config.EVENT_DB_PATH).exists():
+        user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    return UserStateIndex.load(config.EVENT_DB_PATH)
+
+
 def load_context(provider: str | None = None) -> RecommendContext:
     index_path = Path(config.WATCH_INDEX_PATH)
     if not index_path.exists():
@@ -56,7 +62,7 @@ def load_context(provider: str | None = None) -> RecommendContext:
         providers_cache_dir=config.PROVIDERS_CACHE_DIR,
         watch_region=config.WATCH_REGION,
         streaming_platforms=list(config.STREAMING_PLATFORMS),
-        user_state=UserStateIndex.load(config.EVENT_DB_PATH),
+        user_state=_load_user_state(),
     )
     return ctx
 
