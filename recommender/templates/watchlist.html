@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Watchlist{% endblock %}
+{% block content %}
+<div style="margin-bottom:1.5rem;">
+  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--teal);">Queue</span>
+  <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:1.25rem;">Watchlist</h1>
+
+  <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+    <!-- Type filter pills -->
+    <div style="display:flex; gap:2px; background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:2px;">
+      <button class="wl-pill active" data-type="all" onclick="setFilter('all')">All</button>
+      <button class="wl-pill" data-type="tv" onclick="setFilter('tv')">TV</button>
+      <button class="wl-pill" data-type="movie" onclick="setFilter('movie')">Film</button>
+    </div>
+    <!-- Sort -->
+    <select class="input-field mono" id="wl-sort" onchange="setSort(this.value)" style="padding:4px 8px; font-size:0.65rem; border-radius:3px;">
+      <option value="newest">Newest first</option>
+      <option value="oldest">Oldest first</option>
+      <option value="rating">Highest rated</option>
+      <option value="az">A → Z</option>
+      <option value="za">Z → A</option>
+    </select>
+    <div style="flex:1;"></div>
+    <span class="mono" id="wl-count" style="font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">{{ items|length }} titles</span>
+    <a href="/watchlist/export" class="btn-ghost" style="padding:4px 10px; font-size:0.6rem; letter-spacing:0.06em;">Export CSV</a>
+  </div>
+</div>
+
+{% if items %}
+<div id="wl-list" style="display:flex; flex-direction:column; gap:6px;">
+  {% for item in items %}
+  <div id="wl-item-{{ loop.index }}"
+    class="wl-item"
+    data-type="{{ item.content_type }}"
+    data-title="{{ item.title | lower }}"
+    data-saved="{{ item.saved_at or '' }}"
+    data-rating="{{ item.vote_average }}"
+    style="display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:0.75rem 1rem; border-radius:6px; background:var(--surface); border:1px solid var(--border);">
+    <div style="display:flex; align-items:baseline; gap:0.5rem; min-width:0;">
+      <span style="font-family:'DM Serif Display',serif; font-size:1.05rem; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ item.title }}</span>
+      <span class="badge {{ 'badge-tv' if item.content_type == 'tv' else 'badge-movie' }}" style="flex-shrink:0;">{{ item.content_type }}</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:0.4rem; flex-shrink:0;">
+      <form hx-post="/watchlist/watched" hx-target="#wl-item-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="title" value="{{ item.title }}">
+        <input type="hidden" name="content_type" value="{{ item.content_type }}">
+        {% if item.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ item.tmdb_id }}">{% endif %}
+        <button type="submit" class="wl-btn wl-btn--watched">Mark as watched</button>
+      </form>
+      <form hx-post="/watchlist/dismiss" hx-target="#wl-item-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="title" value="{{ item.title }}">
+        <input type="hidden" name="content_type" value="{{ item.content_type }}">
+        {% if item.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ item.tmdb_id }}">{% endif %}
+        <button type="submit" class="wl-btn wl-btn--dismiss">Won't watch</button>
+      </form>
+      <form hx-post="/watchlist/remove" hx-target="#wl-item-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="title" value="{{ item.title }}">
+        <input type="hidden" name="content_type" value="{{ item.content_type }}">
+        {% if item.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ item.tmdb_id }}">{% endif %}
+        <button type="submit" class="wl-btn wl-btn--remove" title="Remove">&times;</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div id="wl-empty" style="display:none; padding:4rem 2rem; text-align:center; border:1px dashed var(--border); border-radius:8px;">
+  <p class="mono" style="font-size:0.68rem; color:var(--muted); letter-spacing:0.08em;">No titles match this filter</p>
+</div>
+
+{% else %}
+<div style="padding:4rem 2rem; text-align:center; border:1px dashed var(--border); border-radius:8px;">
+  <p class="mono" style="font-size:0.68rem; color:var(--muted); letter-spacing:0.08em;">Nothing saved yet</p>
+  <p style="font-size:0.85rem; color:var(--muted); margin-top:0.5rem;">Search for something and use <span class="mono" style="font-size:0.75rem; color:var(--body);">+ Save</span> to add it here.</p>
+  <a href="/" class="btn-ghost" style="display:inline-block; margin-top:1.25rem; padding:0.5rem 1.1rem;">Go to search</a>
+</div>
+{% endif %}
+
+<style>
+  .wl-pill {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+  }
+  .wl-pill:hover { color: var(--text); }
+  .wl-pill.active { color: var(--teal); background: rgba(58,184,160,0.1); }
+</style>
+
+<script>
+let _filter = 'all';
+
+function setFilter(type) {
+  _filter = type;
+  document.querySelectorAll('.wl-pill').forEach(p =>
+    p.classList.toggle('active', p.dataset.type === type));
+  _apply();
+}
+
+function setSort(val) {
+  _apply(val);
+}
+
+function _apply(sortVal) {
+  const sort = sortVal || document.getElementById('wl-sort').value;
+  const list = document.getElementById('wl-list');
+  if (!list) return;
+
+  const items = [...list.querySelectorAll('.wl-item')];
+
+  items.forEach(el => {
+    const show = _filter === 'all' || el.dataset.type === _filter;
+    el.style.display = show ? '' : 'none';
+  });
+
+  const visible = items.filter(el => el.style.display !== 'none');
+
+  visible.sort((a, b) => {
+    if (sort === 'az') return a.dataset.title.localeCompare(b.dataset.title);
+    if (sort === 'za') return b.dataset.title.localeCompare(a.dataset.title);
+    if (sort === 'newest') return (b.dataset.saved || '').localeCompare(a.dataset.saved || '');
+    if (sort === 'oldest') return (a.dataset.saved || '').localeCompare(b.dataset.saved || '');
+    if (sort === 'rating') return parseFloat(b.dataset.rating || 0) - parseFloat(a.dataset.rating || 0);
+    return 0;
+  });
+  visible.forEach(el => list.appendChild(el));
+
+  const countEl = document.getElementById('wl-count');
+  if (countEl) countEl.textContent = visible.length + ' title' + (visible.length !== 1 ? 's' : '');
+
+  const emptyEl = document.getElementById('wl-empty');
+  if (emptyEl) emptyEl.style.display = visible.length === 0 ? '' : 'none';
+}
+</script>
+{% endblock %}

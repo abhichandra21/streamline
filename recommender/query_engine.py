@@ -12,6 +12,7 @@ from .ingestion.base import WatchEvent
 from .llm import LLMClient
 from .models import Recommendation
 from .tmdb_client import TmdbClient, TmdbMetadata
+from .user_state import UserStateIndex
 from .watch_index import WatchIndex
 
 log = logging.getLogger("recommender.query")
@@ -82,6 +83,7 @@ class RecommendContext:
     providers_cache_dir: str
     watch_region: str
     streaming_platforms: list[str]
+    user_state: "UserStateIndex | None"
     _events_loader: Callable[[], list[WatchEvent]] | None
     _events_resolved: list[WatchEvent] | None
 
@@ -89,7 +91,8 @@ class RecommendContext:
                  events: list[WatchEvent] | None = None,
                  _events_loader: Callable[[], list[WatchEvent]] | None = None,
                  providers_cache_dir="", watch_region="US",
-                 streaming_platforms: list[str] | None = None):
+                 streaming_platforms: list[str] | None = None,
+                 user_state: "UserStateIndex | None" = None):
         self.taste_profile = taste_profile
         self.watch_index = watch_index
         self.tmdb_client = tmdb_client
@@ -100,6 +103,7 @@ class RecommendContext:
         self.streaming_platforms = streaming_platforms or []
         self._events_loader = _events_loader
         self._events_resolved = events  # None = lazy, list = eager
+        self.user_state = user_state
 
     @property
     def events(self) -> list[WatchEvent]:
@@ -351,6 +355,26 @@ def _handle_why_not(title: str, ctx: RecommendContext) -> list[Recommendation]:
         )]
     lines.append("  Watch index: [green]Not watched[/green] — not in watch history.")
 
+    # Step 2b: Manual archive and dismissed check
+    if ctx.user_state:
+        if ctx.user_state.is_manually_watched(meta):
+            lines.append("  User state: [yellow]WATCHED[/yellow] — manually added to archive.")
+            lines.append("  → Excluded because you marked it as watched.")
+            return [Recommendation(
+                title=meta.title, content_type=meta.content_type,
+                score=0.0, vote_average=meta.vote_average, genres=meta.genres,
+                explanation="\n".join(lines),
+            )]
+        if ctx.user_state.is_dismissed(meta):
+            lines.append("  User state: [yellow]DISMISSED[/yellow] — marked as won't watch.")
+            lines.append("  → Excluded because you dismissed this title.")
+            return [Recommendation(
+                title=meta.title, content_type=meta.content_type,
+                score=0.0, vote_average=meta.vote_average, genres=meta.genres,
+                explanation="\n".join(lines),
+            )]
+        lines.append("  User state: [green]OK[/green] — not dismissed or manually archived.")
+
     # Step 3: Popularity / vote threshold
     if meta.vote_count < config.MIN_VOTE_COUNT:
         lines.append(
@@ -482,7 +506,10 @@ def ask(
     pre_filter = len(candidates)
     candidates = [
         c for c in candidates
-        if not ctx.watch_index.is_watched(c) and c.title not in extra_excludes
+        if not ctx.watch_index.is_watched(c)
+        and c.title not in extra_excludes
+        and not (ctx.user_state and ctx.user_state.is_manually_watched(c))
+        and not (ctx.user_state and ctx.user_state.is_dismissed(c))
     ]
     log.debug("Watch filter: %d -> %d candidates (%d excluded)",
               pre_filter, len(candidates), pre_filter - len(candidates))
@@ -507,7 +534,10 @@ def ask(
     for title in suggestions:
         for ct in content_types:
             meta = ctx.tmdb_client.get_metadata(title, ct)
-            if meta and meta.tmdb_id not in seen_ids and not ctx.watch_index.is_watched(meta) and meta.title not in extra_excludes:
+            if (meta and meta.tmdb_id not in seen_ids and not ctx.watch_index.is_watched(meta)
+                    and meta.title not in extra_excludes
+                    and not (ctx.user_state and ctx.user_state.is_manually_watched(meta))
+                    and not (ctx.user_state and ctx.user_state.is_dismissed(meta))):
                 if config.MIN_RATING > 0 and meta.vote_average < config.MIN_RATING:
                     continue
                 if config.MIN_YEAR > 0 and meta.release_year and meta.release_year < config.MIN_YEAR:

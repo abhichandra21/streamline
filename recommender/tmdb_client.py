@@ -206,6 +206,16 @@ class TmdbClient:
             pass
         return '', title
 
+    def get_cached_by_id(self, tmdb_id: int, content_type: str) -> TmdbMetadata | None:
+        """Return metadata from local cache by TMDB ID, without making any API calls.
+
+        Returns None if the title is not in the cache.
+        """
+        cached = self._load_cache(content_type, tmdb_id)
+        if cached:
+            return self._parse_metadata(cached, content_type)
+        return None
+
     def get_metadata(self, title: str, content_type: str) -> TmdbMetadata | None:
         """Fetch and cache metadata for a single title. Returns None if not found.
 

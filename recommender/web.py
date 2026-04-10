@@ -1,6 +1,8 @@
 """Flask web UI for Streamline — taste profile dashboard, watch history, and recommendation search."""
 
+import csv
 import importlib
+import io
 import json
 import logging
 import os
@@ -18,6 +20,7 @@ from markupsafe import Markup, escape
 
 import config
 from recommender import history as query_history
+from recommender import user_store
 from recommender import watch_index as wi
 from recommender import event_store
 from recommender.event_store import load_events
@@ -44,6 +47,23 @@ setup_logging()
 _ctx: RecommendContext | None = None
 _ctx_lock = threading.Lock()
 _config_reload_pending = False
+
+# ── User store initialization ─────────────────────────────────────────────────
+# Run once per process. ensure_user_store does IF-NOT-EXISTS DDL + migration
+# checks — cheap but not free. A flag prevents the overhead on every request.
+_user_store_ready = False
+_user_store_lock = threading.Lock()
+
+
+def _ensure_user_store_once() -> None:
+    global _user_store_ready
+    if _user_store_ready:
+        return
+    with _user_store_lock:
+        if _user_store_ready:
+            return
+        user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+        _user_store_ready = True
 
 
 def _get_context() -> RecommendContext:
@@ -81,6 +101,7 @@ def _get_job_context() -> RecommendContext:
     """
     ctx = copy(_get_context())
     ctx.llm = create_client()
+    ctx.user_state = _load_user_state()
     return ctx
 
 
@@ -89,17 +110,17 @@ def _get_job_context() -> RecommendContext:
 def _run_recommend_job(query: str) -> dict:
     ctx = _get_job_context()
     results = ask(query, ctx)
-
+    items = _build_result_items(results, ctx)
     try:
-        query_history.record(query, results, ctx.llm.provider, ctx.llm.usage.summary())
+        query_history.record(query, items, ctx.llm.provider, ctx.llm.usage.summary())
     except OSError as exc:
         log.warning("Failed to persist query history for %r: %s", query, exc)
-
-    return {"items": _build_result_items(results, ctx), "query": query}
+    return {"items": items, "query": query}
 
 
 def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
     items = []
+    us = _load_user_state()
     for r in results:
         meta = ctx.tmdb_client.get_metadata(r.title, r.content_type)
         poster = _get_poster_url(meta.tmdb_id, r.content_type) if meta else None
@@ -117,6 +138,8 @@ def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
             if not imdb_url:
                 from urllib.parse import quote
                 imdb_url = f"https://www.imdb.com/find/?q={quote(r.title)}"
+        tmdb_id_val = meta.tmdb_id if meta else None
+        state = _title_state(r.title, r.content_type, us, tmdb_id_val)
         items.append({
             "title": r.title,
             "content_type": r.content_type,
@@ -128,11 +151,20 @@ def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
             "poster": poster,
             "tmdb_url": tmdb_url,
             "imdb_url": imdb_url,
+            "tmdb_id": tmdb_id_val,
+            "user_state": state,
         })
     return items
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _norm_title(title: str) -> str:
+    """Normalize a title for dedup (same rule as user_store._normalize)."""
+    title = title.lower()
+    title = re.sub(r'\s*\([^)]*\)', '', title)
+    return title.strip()
+
 
 def _load_enrichments() -> dict[str, str]:
     index_path = Path(config.ENRICHMENT_CACHE_DIR) / "index.json"
@@ -219,6 +251,16 @@ def _inject_footer() -> dict:
     }
 
 
+@app.context_processor
+def _inject_watchlist_count() -> dict:
+    try:
+        _ensure_user_store_once()
+        items = user_store.list_saved_titles(config.EVENT_DB_PATH, status="watchlist")
+        return {"watchlist_count": len(items)}
+    except Exception:
+        return {"watchlist_count": 0}
+
+
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 @app.before_request
@@ -302,31 +344,62 @@ def history() -> str:
     enrichments = _load_enrichments()
     q = request.args.get("q", "").lower()
     ct_filter = request.args.get("type", "")
+    sort = request.args.get("sort", "az")
 
     entries = list(ctx.watch_index.entries)
+
+    # Union manual archive entries that aren't already in the watch index
+    _ensure_user_store_once()
+    manual = user_store.list_manual_archive(config.EVENT_DB_PATH)
+
+    existing_norm = {
+        (_norm_title(e.get("title", "")), e.get("content_type", "tv"))
+        for e in entries
+    }
+    for m in manual:
+        key = (_norm_title(m["title"]), m["content_type"])
+        if key not in existing_norm:
+            entries.append({
+                "title": m["title"],
+                "content_type": m["content_type"],
+                "tmdb_id": m.get("tmdb_id"),
+                "source": m["source"],
+            })
+
     if q:
         entries = [e for e in entries if q in e["title"].lower()]
     if ct_filter in ("tv", "movie"):
         entries = [e for e in entries if e.get("content_type") == ct_filter]
 
-    entries.sort(key=lambda e: e["title"].lower())
-    items = [
-        {
+    if sort == "za":
+        entries.sort(key=lambda e: e["title"].lower(), reverse=True)
+    else:
+        entries.sort(key=lambda e: e["title"].lower())
+    us = _load_user_state()
+    items = []
+    for e in entries:
+        class _M:
+            pass
+        m = _M()
+        m.title = e["title"]
+        m.content_type = e.get("content_type", "tv")
+        m.tmdb_id = e.get("tmdb_id")
+        items.append({
             "title": e["title"],
             "content_type": e.get("content_type", ""),
             "tmdb_id": e.get("tmdb_id"),
             "description": enrichments.get(e["title"], ""),
             "poster": _get_poster_url(e.get("tmdb_id", 0), e.get("content_type", "movie"), "w185")
                       if e.get("tmdb_id") else None,
-        }
-        for e in entries
-    ]
-    return render_template("history.html", items=items, q=q, ct_filter=ct_filter, total=len(entries))
+            "rating": us.get_rating(m),
+        })
+    return render_template("history.html", items=items, q=q, ct_filter=ct_filter, sort=sort, total=len(entries))
 
 
 @app.route("/searches")
 def searches() -> str:
     entries = query_history.load()
+    us = _load_user_state()
     for e in entries:
         ts = e.get("timestamp", "")
         try:
@@ -348,6 +421,8 @@ def searches() -> str:
                 e["timestamp_display"] = dt.strftime("%b %d, %Y")
         except (ValueError, TypeError):
             e["timestamp_display"] = ts[:19]
+        for r in e.get("results", []):
+            r["user_state"] = _title_state(r["title"], r["content_type"], us, r.get("tmdb_id"))
     return render_template("searches.html", entries=entries)
 
 
@@ -385,11 +460,11 @@ def recommend_post() -> str:
     try:
         ctx = _get_job_context()
         results = ask(query, ctx)
+        items = _build_result_items(results, ctx)
         try:
-            query_history.record(query, results, ctx.llm.provider, ctx.llm.usage.summary())
+            query_history.record(query, items, ctx.llm.provider, ctx.llm.usage.summary())
         except OSError as exc:
             log.warning("Failed to persist query history for %r: %s", query, exc)
-        items = _build_result_items(results, ctx)
         return render_template("recommend.html", query=query, results=items)
     except Exception as exc:
         log.exception("Error during recommendation")
@@ -420,9 +495,7 @@ def title_detail(tmdb_id: int) -> str:
     enrichments = _load_enrichments()
     meta = None
     try:
-        cached = ctx.tmdb_client._load_cache(ct, tmdb_id)
-        if cached:
-            meta = ctx.tmdb_client._parse_metadata(cached, ct)
+        meta = ctx.tmdb_client.get_cached_by_id(tmdb_id, ct)
     except Exception:
         pass
 
@@ -434,10 +507,226 @@ def title_detail(tmdb_id: int) -> str:
         if cache_path.exists():
             raw = json.loads(cache_path.read_text())
             overview = raw.get("overview", "")
+    us = _load_user_state()
+    state = _title_state(meta.title if meta else "", ct, us, tmdb_id if meta else None)
+    # Also count watch-index entries (imported from Netflix/Prime/etc.) as archived
+    if not state["in_archive"] and meta:
+        wi_ctx = _get_context()
+        if tmdb_id in wi_ctx.watch_index.tmdb_ids:
+            state["in_archive"] = True
     return render_template(
         "title.html", meta=meta, description=description, overview=overview,
-        tmdb_id=tmdb_id, ct=ct, poster=poster,
+        tmdb_id=tmdb_id, ct=ct, poster=poster, user_state=state,
     )
+
+
+def _load_user_state():
+    """Load fresh user state snapshot for the current request."""
+    _ensure_user_store_once()
+    from recommender.user_state import UserStateIndex
+    return UserStateIndex.load(config.EVENT_DB_PATH)
+
+
+def _title_state(title: str, content_type: str, us: "UserStateIndex",
+                 tmdb_id: int | None = None) -> dict:
+    """Return user state for a title, used across templates."""
+    class _Meta:
+        pass
+    meta = _Meta()
+    meta.title = title
+    meta.content_type = content_type
+    meta.tmdb_id = tmdb_id
+    return {
+        "in_archive": us.is_manually_watched(meta),
+        "in_watchlist": us.is_in_watchlist(meta),
+        "is_dismissed": us.is_dismissed(meta),
+        "rating": us.get_rating(meta),
+    }
+
+
+def _watchlist_saved_fragment(title: str, ct: str, tmdb_id: int | None, target_id: str) -> str:
+    """HTML fragment: 'Saved ×' toggle, used when saving from searches history."""
+    csrf = _get_csrf_token()
+    t = escape(title)
+    tid = escape(target_id)
+    tmdb_val = tmdb_id if tmdb_id is not None else ""
+    return Markup(
+        f'<span id="{tid}" style="display:inline-flex; align-items:center; gap:0.3rem;">'
+        f'<span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>'
+        f'<form hx-post="/watchlist/unsave" hx-target="#{tid}" hx-swap="outerHTML" style="margin:0; display:inline;">'
+        f'<input type="hidden" name="_csrf_token" value="{csrf}">'
+        f'<input type="hidden" name="title" value="{t}">'
+        f'<input type="hidden" name="content_type" value="{escape(ct)}">'
+        f'<input type="hidden" name="tmdb_id" value="{tmdb_val}">'
+        f'<input type="hidden" name="target_id" value="{tid}">'
+        f'<button type="submit" class="mono" style="font-size:0.55rem; background:none; border:none; cursor:pointer; color:var(--muted); padding:0 2px;" title="Remove from watchlist">&times;</button>'
+        f'</form></span>'
+    )
+
+
+def _watchlist_save_fragment(title: str, ct: str, tmdb_id: int | None, target_id: str) -> str:
+    """HTML fragment: '+ Save' toggle, returned after unsaving from searches history."""
+    csrf = _get_csrf_token()
+    t = escape(title)
+    tid = escape(target_id)
+    tmdb_val = tmdb_id if tmdb_id is not None else ""
+    return Markup(
+        f'<span id="{tid}" style="display:inline-flex; align-items:center;">'
+        f'<form hx-post="/watchlist/save" hx-target="#{tid}" hx-swap="outerHTML" style="margin:0; display:inline;">'
+        f'<input type="hidden" name="_csrf_token" value="{csrf}">'
+        f'<input type="hidden" name="title" value="{t}">'
+        f'<input type="hidden" name="content_type" value="{escape(ct)}">'
+        f'<input type="hidden" name="tmdb_id" value="{tmdb_val}">'
+        f'<input type="hidden" name="mode" value="toggle">'
+        f'<input type="hidden" name="target_id" value="{tid}">'
+        f'<button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;">+ Save</button>'
+        f'</form></span>'
+    )
+
+
+# ── Watchlist routes ──────────────────────────────────────────────────────────
+
+@app.route("/watchlist")
+def watchlist_page() -> str:
+    _ensure_user_store_once()
+    items = user_store.list_saved_titles(config.EVENT_DB_PATH, status="watchlist")
+    try:
+        ctx = _get_context()
+        for item in items:
+            vote_average = 0.0
+            if item.get("tmdb_id"):
+                try:
+                    meta = ctx.tmdb_client.get_cached_by_id(item["tmdb_id"], item["content_type"])
+                    if meta:
+                        vote_average = meta.vote_average or 0.0
+                except Exception:
+                    pass
+            item["vote_average"] = vote_average
+    except Exception:
+        for item in items:
+            item.setdefault("vote_average", 0.0)
+    return render_template("watchlist.html", items=items)
+
+
+@app.route("/watchlist/export")
+def watchlist_export():
+    _ensure_user_store_once()
+    items = user_store.list_saved_titles(config.EVENT_DB_PATH, status="watchlist")
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["title", "content_type", "tmdb_id", "saved_at"])
+    for item in items:
+        writer.writerow([item["title"], item["content_type"],
+                         item.get("tmdb_id") or "", item.get("saved_at") or ""])
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=watchlist.csv"},
+    )
+
+
+@app.route("/watchlist/save", methods=["POST"])
+def watchlist_save() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    mode = request.form.get("mode", "")
+    target_id = (request.form.get("target_id") or "").strip()
+    if not title:
+        return "Missing title", 400
+    _ensure_user_store_once()
+    user_store.save_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+    if mode == "toggle" and target_id:
+        return _watchlist_saved_fragment(title, ct, tmdb_id, target_id)
+    return '<span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>'
+
+
+@app.route("/watchlist/unsave", methods=["POST"])
+def watchlist_unsave() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    target_id = (request.form.get("target_id") or "").strip()
+    if not title:
+        return "Missing title", 400
+    _ensure_user_store_once()
+    user_store.remove_saved_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+    return _watchlist_save_fragment(title, ct, tmdb_id, target_id)
+
+
+@app.route("/watchlist/dismiss", methods=["POST"])
+def watchlist_dismiss() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    if not title:
+        return "Missing title", 400
+    _ensure_user_store_once()
+    user_store.dismiss_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+    return ""
+
+
+@app.route("/watchlist/remove", methods=["POST"])
+def watchlist_remove() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    if not title:
+        return "Missing title", 400
+    _ensure_user_store_once()
+    user_store.remove_saved_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+    return ""
+
+
+@app.route("/watchlist/watched", methods=["POST"])
+def watchlist_watched() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    if not title:
+        return "Missing title", 400
+    _ensure_user_store_once()
+    user_store.mark_watched_from_watchlist(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+    uid = f"wl-{hash(title) & 0xFFFFFF:06x}"
+    return render_template("_rating_prompt.html", title=title, content_type=ct,
+                           tmdb_id=tmdb_id, uid=uid, context="watchlist")
+
+
+# ── Archive routes ────────────────────────────────────────────────────────────
+
+@app.route("/archive/add", methods=["POST"])
+def archive_add() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    if not title:
+        return "Missing title", 400
+    _ensure_user_store_once()
+    user_store.add_to_archive(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id, source="web")
+    uid = f"aa-{hash(title) & 0xFFFFFF:06x}"
+    return render_template("_rating_prompt.html", title=title, content_type=ct,
+                           tmdb_id=tmdb_id, uid=uid)
+
+
+@app.route("/archive/rate", methods=["POST"])
+def archive_rate() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    rating = request.form.get("rating", "")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    context = request.form.get("context", "")
+    if not title:
+        return "Missing title", 400
+    if rating == "skip":
+        return "" if context == "watchlist" else '<span class="mono" style="font-size:0.58rem; color:var(--teal);">added</span>'
+    _ensure_user_store_once()
+    user_store.rate_title(config.EVENT_DB_PATH, title, ct, rating, tmdb_id=tmdb_id)
+    if context == "watchlist":
+        return ""
+    current = None if rating == "clear" else rating
+    uid = f"rt-{hash(title) & 0xFFFFFF:06x}"
+    return render_template("_rating_state.html", title=title, content_type=ct,
+                           tmdb_id=tmdb_id, current_rating=current, uid=uid)
 
 
 @app.route("/help")

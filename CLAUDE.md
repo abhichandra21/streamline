@@ -70,7 +70,9 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `recommender/signals.py` — Scoring: completion (50%) + rewatch (30%) + true half-life recency decay (20%).
 - `recommender/query_engine.py` — Full online pipeline. "Why not X?" trace mode, conversational context, platform filtering.
 - `recommender/overrides.py` — Title override system (data/overrides.json). Auto-detects changes and triggers rebuild.
-- `recommender/feedback.py` — Liked/disliked ratings, title additions. Score multipliers applied at profile rebuild.
+- `recommender/feedback.py` — (Deprecated) Original JSON-based feedback storage. Migrated to `user_store.py` SQLite tables.
+- `recommender/user_store.py` — SQLite storage for watchlist (`saved_titles`), ratings (`title_ratings`), and manual archive additions (`manual_archive_entries`). Migration from `feedback.json`.
+- `recommender/user_state.py` — `UserStateIndex` snapshot for TMDB-ID-first matching in query filtering and UI rendering.
 - `recommender/web.py` — Flask web UI with HTMX search, poster grid, taste profile clusters.
 - `recommender/main.py` — Rich CLI with spinners, panels, stderr/stdout separation, REPL with inline feedback, usage stats.
 
@@ -81,7 +83,7 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `UsageStats` — accumulated token counts and cost per query
 
 ### Cache Layout
-All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ index.json), `providers/`, `watch_index.json`, `taste_profile.txt` (+ timestamped backups), `feedback.json`.
+All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ index.json), `providers/`, `watch_index.json`, `taste_profile.txt` (+ timestamped backups), `feedback.json`. User-managed state (watchlist, ratings, manual archive) lives in the same SQLite database as imported watch events (`events.db`).
 
 ## Configuration
 

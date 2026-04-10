@@ -518,3 +518,229 @@ class TestEventStoreStatus:
         assert payload["status"] == "ok"
         assert payload["event_store_ready"] is False
         assert payload["event_store_import_count"] == 0
+
+
+class TestWatchlistRoutes:
+
+    def test_save_to_watchlist(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, list_saved_titles
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.post("/watchlist/save", data={
+            **_csrf_form(),
+            "title": "Breaking Bad",
+            "content_type": "tv",
+        })
+        assert resp.status_code == 200
+        items = list_saved_titles(db, status="watchlist")
+        assert len(items) == 1
+
+    def test_dismiss_title(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title, list_saved_titles
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "Bad Show", "tv")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.post("/watchlist/dismiss", data={
+            **_csrf_form(),
+            "title": "Bad Show",
+            "content_type": "tv",
+        })
+        assert resp.status_code == 200
+        assert len(list_saved_titles(db, status="dismissed")) == 1
+
+    def test_remove_from_watchlist(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title, list_saved_titles
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "Some Show", "tv")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.post("/watchlist/remove", data={
+            **_csrf_form(),
+            "title": "Some Show",
+            "content_type": "tv",
+        })
+        assert resp.status_code == 200
+        assert list_saved_titles(db) == []
+
+    def test_mark_watched_returns_rating_prompt(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "The Wire", "tv")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.post("/watchlist/watched", data={
+            **_csrf_form(),
+            "title": "The Wire",
+            "content_type": "tv",
+        })
+        assert resp.status_code == 200
+        assert len(list_manual_archive(db)) == 1
+        # Response should contain rating prompt
+        assert b"liked" in resp.data or b"thumbs" in resp.data.lower()
+
+
+class TestArchiveRoutes:
+
+    def test_add_to_archive(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.post("/archive/add", data={
+            **_csrf_form(),
+            "title": "The Bear",
+            "content_type": "tv",
+        })
+        assert resp.status_code == 200
+        assert len(list_manual_archive(db)) == 1
+
+    def test_rate_archive_title(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, load_ratings
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.post("/archive/rate", data={
+            **_csrf_form(),
+            "title": "Breaking Bad",
+            "content_type": "tv",
+            "rating": "liked",
+        })
+        assert resp.status_code == 200
+        ratings = load_ratings(db)
+        assert len(ratings) == 1
+        assert ratings[0]["rating"] == "liked"
+
+    def test_clear_rating(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, rate_title, load_ratings
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        rate_title(db, "Breaking Bad", "tv", "liked")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.post("/archive/rate", data={
+            **_csrf_form(),
+            "title": "Breaking Bad",
+            "content_type": "tv",
+            "rating": "clear",
+        })
+        assert resp.status_code == 200
+        assert load_ratings(db) == []
+
+
+class TestRenderedState:
+
+    def test_watchlist_badge_count(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "Show A", "tv")
+        save_title(db, "Show B", "tv")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.get("/watchlist")
+        assert resp.status_code == 200
+        # Badge count and items|length both render "2" on the page
+        assert b"2" in resp.data
+
+    def test_watchlist_page_renders_items(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "Breaking Bad", "tv")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        resp = client.get("/watchlist")
+        assert b"Breaking Bad" in resp.data
+        assert b"Mark as watched" in resp.data  # action button present
+        assert b"Won&#39;t watch" in resp.data or b"Won't watch" in resp.data
+
+    def test_archive_rate_shows_thumbs_state(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, rate_title
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        rate_title(db, "Breaking Bad", "tv", "liked")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        # Rate endpoint should return the _rating_state partial
+        resp = client.post("/archive/rate", data={
+            **_csrf_form(),
+            "title": "Breaking Bad",
+            "content_type": "tv",
+            "rating": "liked",
+        })
+        assert resp.status_code == 200
+        # Should show the liked state (clear button for liked thumb)
+        assert b"clear" in resp.data
+
+    def test_history_dedup_does_not_double_show_manual_entry(self, client, tmp_path, monkeypatch):
+        """A manual archive entry already in the watch index should not appear twice."""
+        from recommender.user_store import init_db, add_to_archive
+        from unittest.mock import MagicMock, patch
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        add_to_archive(db, "Duplicate Show", "tv", source="web")
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+        # Simulate watch index already having the same title
+        mock_ctx = MagicMock()
+        mock_ctx.watch_index.entries = [
+            {"title": "Duplicate Show", "content_type": "tv", "tmdb_id": None}
+        ]
+
+        with patch("recommender.web._get_context", return_value=mock_ctx):
+            resp = client.get("/history")
+
+        assert resp.status_code == 200
+        # hist-1 is the uid for the first item; hist-2 would only appear if there are two items
+        assert b"Duplicate Show" in resp.data
+        assert b"hist-2" not in resp.data  # only one item in the deduped list
+
+
+def test_history_includes_manual_archive_entries(client, tmp_path, monkeypatch):
+    from recommender.user_store import init_db, add_to_archive
+    from unittest.mock import MagicMock, patch
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    add_to_archive(db, "Manual Show", "tv", source="web")
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = []
+
+    with patch("recommender.web._get_context", return_value=mock_ctx):
+        resp = client.get("/history")
+
+    assert resp.status_code == 200
+    assert b"Manual Show" in resp.data

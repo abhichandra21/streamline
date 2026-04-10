@@ -1,0 +1,18 @@
+<span id="rating-{{ uid }}" style="display:inline-flex; align-items:center; gap:0.3rem;">
+  <form hx-post="/archive/rate" hx-target="#rating-{{ uid }}" hx-swap="outerHTML" style="margin:0; display:inline-flex; gap:2px;">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="title" value="{{ title }}">
+    <input type="hidden" name="content_type" value="{{ content_type }}">
+    <input type="hidden" name="tmdb_id" value="{{ tmdb_id or '' }}">
+    {% if current_rating == "liked" %}
+    <button type="submit" name="rating" value="clear" class="btn-thumb btn-thumb--liked" title="Remove rating">liked</button>
+    <button type="submit" name="rating" value="disliked" class="btn-thumb btn-thumb--dislike" title="Disliked">disliked</button>
+    {% elif current_rating == "disliked" %}
+    <button type="submit" name="rating" value="liked" class="btn-thumb btn-thumb--like" title="Liked">liked</button>
+    <button type="submit" name="rating" value="clear" class="btn-thumb btn-thumb--disliked" title="Remove rating">disliked</button>
+    {% else %}
+    <button type="submit" name="rating" value="liked" class="btn-thumb btn-thumb--like" title="Liked">liked</button>
+    <button type="submit" name="rating" value="disliked" class="btn-thumb btn-thumb--dislike" title="Disliked">disliked</button>
+    {% endif %}
+  </form>
+</span>

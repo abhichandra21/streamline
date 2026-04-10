@@ -4,14 +4,47 @@
 </div>
 
 {% elif results %}
-<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem;">
+<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.6rem;">
   <span class="mono" style="font-size:0.6rem; color:var(--muted);">{{ results|length }} results for "{{ query }}"</span>
   <button onclick="document.getElementById('results').innerHTML=''; document.getElementById('query-input').value=''; document.getElementById('query-input').focus();"
     class="btn-ghost" style="padding:3px 10px; font-size:0.55rem; cursor:pointer;">Clear</button>
 </div>
-<div style="display:flex; flex-direction:column; gap:10px;">
+
+<!-- Filter / sort bar -->
+<div id="lr-controls" style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap; margin-bottom:0.75rem; padding:0.5rem 0.75rem; background:var(--surface); border:1px solid var(--border); border-radius:5px;">
+  <!-- Type pills -->
+  <div style="display:flex; gap:2px;">
+    <button class="lr-pill active" data-type="all" onclick="lrSetType('all')">All</button>
+    <button class="lr-pill" data-type="tv" onclick="lrSetType('tv')">TV</button>
+    <button class="lr-pill" data-type="movie" onclick="lrSetType('movie')">Film</button>
+  </div>
+  <span style="color:var(--border);">·</span>
+  <!-- Sort -->
+  <select id="lr-sort" class="input-field mono" onchange="lrApply()"
+    style="padding:3px 7px; font-size:0.6rem; border-radius:3px;">
+    <option value="score">Best match</option>
+    <option value="rating">Highest rated</option>
+    <option value="az">A → Z</option>
+  </select>
+  <span style="color:var(--border);">·</span>
+  <!-- Provider filter -->
+  <select id="lr-provider" class="input-field mono" onchange="lrApply()"
+    style="padding:3px 7px; font-size:0.6rem; border-radius:3px; display:none;">
+    <option value="">All providers</option>
+  </select>
+  <div style="flex:1;"></div>
+  <span class="mono" id="lr-count" style="font-size:0.55rem; color:var(--muted);"></span>
+</div>
+
+<div id="lr-list" style="display:flex; flex-direction:column; gap:10px;">
   {% for r in results %}
-  <div class="result-card" style="display:flex; gap:1rem; padding:1.25rem; background:var(--surface); border-radius:6px; border:1px solid var(--border); transition:border-color 0.2s;"
+  <div class="result-card lr-card"
+    data-type="{{ r.content_type }}"
+    data-rating="{{ r.vote_average }}"
+    data-score="{{ r.score }}"
+    data-title="{{ r.title | lower }}"
+    data-providers="{{ r.streaming_providers | join(',') | lower }}"
+    style="display:flex; gap:1rem; padding:1.25rem; background:var(--surface); border-radius:6px; border:1px solid var(--border); transition:border-color 0.2s;"
     onmouseover="this.style.borderColor='var(--accent)'"
     onmouseout="this.style.borderColor='var(--border)'"
   >
@@ -58,6 +91,21 @@
         {% if r.imdb_url %}
         <a href="{{ r.imdb_url }}" target="_blank" rel="noopener" class="mono result-link">IMDB</a>
         {% endif %}
+        {% if not r.user_state.in_archive and not r.user_state.in_watchlist %}
+        <span id="save-{{ loop.index }}">
+          <form hx-post="/watchlist/save" hx-target="#save-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="title" value="{{ r.title }}">
+            <input type="hidden" name="content_type" value="{{ r.content_type }}">
+            {% if r.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ r.tmdb_id }}">{% endif %}
+            <button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;">+ Save</button>
+          </form>
+        </span>
+        {% elif r.user_state.in_watchlist %}
+        <span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>
+        {% elif r.user_state.in_archive %}
+        <span class="mono" style="font-size:0.58rem; color:var(--muted);">Watched</span>
+        {% endif %}
       </div>
     </div>
   </div>
@@ -65,16 +113,77 @@
 </div>
 
 <style>
-  .result-link {
-    font-size: 0.58rem;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--muted);
-    text-decoration: none;
-    transition: color 0.15s;
+  .lr-pill {
+    background: none; border: none; cursor: pointer;
+    font-family: 'JetBrains Mono', monospace; font-size: 0.6rem;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--muted); padding: 3px 8px; border-radius: 3px;
+    transition: color 0.15s, background 0.15s;
   }
-  .result-link:hover { color: var(--accent); text-decoration: none; }
+  .lr-pill:hover { color: var(--text); }
+  .lr-pill.active { color: var(--accent); background: rgba(232,93,74,0.08); }
 </style>
+
+<script>
+(function() {
+  let _lrType = 'all';
+
+  window.lrSetType = function(type) {
+    _lrType = type;
+    document.querySelectorAll('.lr-pill').forEach(p =>
+      p.classList.toggle('active', p.dataset.type === type));
+    lrApply();
+  };
+
+  window.lrApply = function() {
+    const sort = document.getElementById('lr-sort').value;
+    const provider = (document.getElementById('lr-provider').value || '').toLowerCase();
+    const list = document.getElementById('lr-list');
+    const cards = [...list.querySelectorAll('.lr-card')];
+
+    cards.forEach(c => {
+      const typeOk = _lrType === 'all' || c.dataset.type === _lrType;
+      const providerOk = !provider || (c.dataset.providers || '').includes(provider);
+      c.style.display = (typeOk && providerOk) ? '' : 'none';
+    });
+
+    const visible = cards.filter(c => c.style.display !== 'none');
+    visible.sort((a, b) => {
+      if (sort === 'rating') return parseFloat(b.dataset.rating) - parseFloat(a.dataset.rating);
+      if (sort === 'az') return a.dataset.title.localeCompare(b.dataset.title);
+      return parseFloat(b.dataset.score) - parseFloat(a.dataset.score); // score (default)
+    });
+    visible.forEach(c => list.appendChild(c));
+
+    const countEl = document.getElementById('lr-count');
+    if (countEl) {
+      countEl.textContent = visible.length < cards.length
+        ? visible.length + ' of ' + cards.length + ' shown'
+        : '';
+    }
+  };
+
+  // Build provider dropdown from rendered data
+  (function() {
+    const providers = new Set();
+    document.querySelectorAll('.lr-card').forEach(c => {
+      (c.dataset.providers || '').split(',').forEach(p => {
+        const t = p.trim();
+        if (t) providers.add(t);
+      });
+    });
+    if (providers.size === 0) return;
+    const sel = document.getElementById('lr-provider');
+    [...providers].sort().forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p;
+      opt.textContent = p.charAt(0).toUpperCase() + p.slice(1);
+      sel.appendChild(opt);
+    });
+    sel.style.display = '';
+  })();
+})();
+</script>
 
 {% elif query %}
 <div style="padding:3rem; text-align:center;">

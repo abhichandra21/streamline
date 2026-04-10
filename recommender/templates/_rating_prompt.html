@@ -1,0 +1,13 @@
+<div id="rating-{{ uid }}" style="display:inline-flex; align-items:center; gap:0.5rem;">
+  <span class="mono" style="font-size:0.6rem; color:var(--muted);">Rate?</span>
+  <form hx-post="/archive/rate" hx-target="#rating-{{ uid }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="title" value="{{ title }}">
+    <input type="hidden" name="content_type" value="{{ content_type }}">
+    <input type="hidden" name="tmdb_id" value="{{ tmdb_id or '' }}">
+    {% if context %}<input type="hidden" name="context" value="{{ context }}">{% endif %}
+    <button type="submit" name="rating" value="liked" class="btn-thumb btn-thumb--like" title="Liked">liked</button>
+    <button type="submit" name="rating" value="disliked" class="btn-thumb btn-thumb--dislike" title="Disliked">disliked</button>
+    <button type="submit" name="rating" value="skip" class="btn-thumb btn-thumb--skip" title="Skip">skip</button>
+  </form>
+</div>

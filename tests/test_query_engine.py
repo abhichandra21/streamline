@@ -218,3 +218,61 @@ def test_recommend_context_events_no_loader_returns_empty():
         cache_dir="/tmp",
     )
     assert ctx.events == []
+
+
+def test_user_state_excludes_dismissed_and_manual_archive():
+    """ask() drops dismissed and manually-watched titles from the candidate pool."""
+    meta_dismissed = make_meta("Dismissed Show", tmdb_id=111)
+    meta_manual = make_meta("Already Watched", tmdb_id=222)
+    meta_new = make_meta("Fresh Pick", tmdb_id=333)
+
+    mock_tmdb = MagicMock()
+    mock_tmdb.search_by_filters.return_value = [meta_dismissed, meta_manual, meta_new]
+    mock_tmdb.get_metadata.return_value = None
+
+    intent_json = json.dumps({
+        "genres": ["crime"], "origin_countries": ["GB"], "languages": [],
+        "mood_descriptors": [], "similar_to": [], "max_runtime_minutes": None,
+        "year_from": None, "year_to": None,
+        "unwatched_only": True, "special_intent": None, "content_type": "tv",
+        "top_n": 1, "platforms": [],
+    })
+    suggestions_json = json.dumps([])
+    ranked_json = json.dumps([
+        {"title": "Fresh Pick", "explanation": "Still eligible.", "score": 0.91}
+    ])
+    mock_llm = make_mock_llm_sequence([intent_json, suggestions_json, ranked_json])
+
+    class FakeUserState:
+        def is_manually_watched(self, meta):
+            return meta.tmdb_id == 222
+
+        def is_dismissed(self, meta):
+            return meta.tmdb_id == 111
+
+        def has_rating(self, meta):
+            return False
+
+        def get_rating(self, meta):
+            return None
+
+        def is_in_watchlist(self, meta):
+            return False
+
+    ctx = RecommendContext(
+        taste_profile="taste profile text",
+        watch_index=WatchIndex(tmdb_ids=set(), normalized_titles=set(), entries=[]),
+        events=[],
+        tmdb_client=mock_tmdb,
+        llm=mock_llm,
+        cache_dir="/tmp/test_cache",
+        user_state=FakeUserState(),
+    )
+
+    with patch("recommender.query_engine.enrich_batch", return_value={"Fresh Pick": "Eligible"}):
+        results = ask("British crime drama", ctx)
+
+    titles = [r.title for r in results]
+    assert "Dismissed Show" not in titles
+    assert "Already Watched" not in titles
+    assert titles == ["Fresh Pick"]

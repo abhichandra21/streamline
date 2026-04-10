@@ -156,6 +156,54 @@
     }
     .btn-ghost:hover { border-color: var(--accent); color: var(--text); text-decoration: none; }
 
+    /* Thumb rating buttons */
+    .btn-thumb {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 2px 4px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: var(--muted);
+      transition: color 0.15s, opacity 0.15s;
+    }
+    .btn-thumb--like:hover  { color: var(--teal); }
+    .btn-thumb--dislike:hover { color: var(--accent); }
+    .btn-thumb--liked  { color: var(--teal); }
+    .btn-thumb--liked:hover  { opacity: 0.5; }
+    .btn-thumb--disliked { color: var(--accent); }
+    .btn-thumb--disliked:hover { opacity: 0.5; }
+    .btn-thumb--skip { font-size: 0.6rem; }
+    .btn-thumb--skip:hover { color: var(--text); }
+
+    /* Watchlist action buttons */
+    .wl-btn {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.58rem;
+      background: none;
+      cursor: pointer;
+      padding: 3px 8px;
+      border-radius: 3px;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .wl-btn--watched { border: 1px solid var(--teal); color: var(--teal); }
+    .wl-btn--watched:hover { background: rgba(58,184,160,0.1); }
+    .wl-btn--dismiss { border: 1px solid var(--border); color: var(--muted); }
+    .wl-btn--dismiss:hover { border-color: var(--muted); color: var(--text); }
+    .wl-btn--remove { border: none; color: var(--muted); padding: 3px 6px; }
+    .wl-btn--remove:hover { color: var(--text); }
+
+    /* Nav count badge */
+    .nav-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.5rem;
+      background: var(--teal);
+      color: var(--bg);
+      padding: 1px 5px;
+      border-radius: 8px;
+      line-height: 1.3;
+    }
+
     /* Badge */
     .badge {
       font-family: 'JetBrains Mono', monospace;
@@ -216,6 +264,16 @@
     ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    .result-link {
+      font-size: 0.58rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .result-link:hover { color: var(--accent); text-decoration: none; }
   </style>
 </head>
 
@@ -226,6 +284,10 @@
     <div class="nav-group" style="margin-left:0.5rem;">
       <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">Home</a>
       <a href="/searches" class="nav-link {% if request.path == '/searches' %}active{% endif %}">Searches</a>
+      <a href="/watchlist" class="nav-link {% if request.path == '/watchlist' %}active{% endif %}" style="display:flex; align-items:center; gap:0.3rem;">
+        Watchlist
+        {% if watchlist_count %}<span class="nav-badge">{{ watchlist_count }}</span>{% endif %}
+      </a>
       <a href="/history" class="nav-link {% if request.path.startswith('/history') or request.path.startswith('/title') %}active{% endif %}">Archive</a>
     </div>
     <div class="nav-group-system">
