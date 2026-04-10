@@ -505,6 +505,20 @@ def title_detail(tmdb_id: int) -> str:
     except Exception:
         pass
 
+    # Fallback: if the requested type has no cache, check if the watch index
+    # has this tmdb_id under the alternate type (content-type mismatch fix).
+    if meta is None:
+        alt_ct = "movie" if ct == "tv" else "tv"
+        try:
+            alt_meta = ctx.tmdb_client.get_cached_by_id(tmdb_id, alt_ct)
+        except Exception:
+            alt_meta = None
+        if alt_meta:
+            # Only accept if the watch index actually has an entry for this ID
+            if (alt_ct, tmdb_id) in ctx.watch_index.tmdb_keys:
+                meta = alt_meta
+                ct = alt_ct
+
     description = ""
     enrichment_path = Path(config.ENRICHMENT_CACHE_DIR) / ct / f"{tmdb_id}.txt"
     if enrichment_path.exists():
@@ -523,8 +537,7 @@ def title_detail(tmdb_id: int) -> str:
     state = _title_state(meta.title if meta else "", ct, us, tmdb_id if meta else None)
     # Also count watch-index entries (imported from Netflix/Prime/etc.) as archived
     if not state["in_archive"] and meta:
-        wi_ctx = _get_context()
-        if tmdb_id in wi_ctx.watch_index.tmdb_ids:
+        if (ct, tmdb_id) in ctx.watch_index.tmdb_keys:
             state["in_archive"] = True
     return render_template(
         "title.html", meta=meta, description=description, overview=overview,
