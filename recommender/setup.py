@@ -15,8 +15,13 @@ from recommender.ingestion.prime import parse as parse_prime
 from recommender.ingestion.apple_tv import parse as parse_apple_tv
 from recommender.ingestion.manual import parse as parse_manual
 from recommender.signals import compute_scores
-from recommender.tmdb_client import TmdbClient
-from recommender.enricher import enrich_batch
+from recommender.tmdb_client import TmdbClient, TmdbMetadata
+from recommender.enricher import (
+    enrich_batch,
+    enrichment_key,
+    enrichment_key_from_parts,
+    is_identity_enrichment_index,
+)
 from recommender.taste_profile_builder import build as build_taste_profile
 from recommender.llm import create_client
 from recommender import watch_index as wi
@@ -41,6 +46,39 @@ def _compute_file_sha256(path: str) -> str:
         while chunk := f.read(8192):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _title_keyed_enrichments(
+    raw_enrichments: dict[str, str],
+    watch_entries: list[dict],
+    metadata: dict[str, TmdbMetadata],
+) -> dict[str, str]:
+    """Return the title-keyed view expected by taste_profile_builder.build()."""
+    if not is_identity_enrichment_index(raw_enrichments):
+        return raw_enrichments
+
+    title_keyed: dict[str, str] = {}
+
+    # Works in refresh-profile-only mode, where metadata may be empty but watch_index exists.
+    for entry in watch_entries:
+        title = entry.get("title", "")
+        if not title:
+            continue
+        key = enrichment_key_from_parts(
+            entry.get("content_type"),
+            entry.get("tmdb_id"),
+            title,
+        )
+        if key in raw_enrichments:
+            title_keyed[title] = raw_enrichments[key]
+
+    # Works in refresh-data mode, where metadata has just been rebuilt.
+    for title, meta in metadata.items():
+        key = enrichment_key(meta)
+        if key in raw_enrichments:
+            title_keyed[title] = raw_enrichments[key]
+
+    return title_keyed
 
 
 def _load_platform_events_by_provider(
@@ -217,7 +255,9 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
 
     if not refresh_data and index_path.exists():
         console.print("\nWatch index exists, skipping data fetch (use --refresh-data to rebuild).")
-        enrichments = json.loads(enrichments_index_path.read_text()) if enrichments_index_path.exists() else {}
+        raw_enrichments = json.loads(enrichments_index_path.read_text()) if enrichments_index_path.exists() else {}
+        index = wi.load(config.WATCH_INDEX_PATH)
+        enrichments = _title_keyed_enrichments(raw_enrichments, index.entries, metadata)
     else:
         console.print("\nFetching TMDB metadata...")
         tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
@@ -316,9 +356,11 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                           f"{removed['providers']} provider files)")
 
         with console.status(f"[bold magenta]Enriching {len(metadata)} titles with Claude Haiku...[/bold magenta]", spinner="dots"):
-            enrichments = enrich_batch(metadata, config.ENRICHMENT_CACHE_DIR, llm)
-        enrichments_index_path.write_text(json.dumps(enrichments))
-        console.print(f"  {len(enrichments)} descriptions cached → {config.ENRICHMENT_CACHE_DIR}")
+            raw_enrichments = enrich_batch(metadata, config.ENRICHMENT_CACHE_DIR, llm)
+        enrichments_index_path.write_text(json.dumps(raw_enrichments))
+        console.print(f"  {len(raw_enrichments)} descriptions cached → {config.ENRICHMENT_CACHE_DIR}")
+
+        enrichments = _title_keyed_enrichments(raw_enrichments, index.entries, metadata)
 
     profile_path = Path(config.TASTE_PROFILE_PATH)
     if refresh_profile or not profile_path.exists():

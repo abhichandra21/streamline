@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .ingestion.base import WatchEvent
+from .enricher import enrichment_key_from_parts, is_identity_enrichment_index
 from .tmdb_client import TmdbMetadata
 
 log = logging.getLogger("recommender.index")
@@ -151,7 +152,22 @@ def cleanup_stale_cache(
     if index_json.exists():
         enrichments = json.loads(index_json.read_text())
         before = len(enrichments)
-        enrichments = {k: v for k, v in enrichments.items() if k in valid_titles}
+        if is_identity_enrichment_index(enrichments):
+            valid_keys = {
+                enrichment_key_from_parts(
+                    e.get("content_type", "movie"),
+                    e.get("tmdb_id"),
+                    e.get("title", ""),
+                )
+                for e in index.entries
+                if e.get("title")
+            }
+            enrichments = {
+                k: v for k, v in enrichments.items()
+                if k in valid_keys or k.startswith("unknown/")
+            }
+        else:
+            enrichments = {k: v for k, v in enrichments.items() if k in valid_titles}
         after = len(enrichments)
         if after < before:
             index_json.write_text(json.dumps(enrichments))

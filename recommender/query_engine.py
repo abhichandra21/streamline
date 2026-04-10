@@ -7,7 +7,7 @@ from typing import Callable
 
 import config
 
-from .enricher import enrich, enrich_batch
+from .enricher import enrich, enrich_batch, enrichment_key
 from .ingestion.base import WatchEvent
 from .llm import LLMClient
 from .models import Recommendation
@@ -227,7 +227,7 @@ def rank_candidates(
     meta_by_title = {c.title: c for c in candidates}
 
     cands_str = '\n'.join(
-        f"{i+1}. {c.title} (rating: {c.vote_average:.1f}): {enrichments.get(c.title, ' '.join(c.genres))}"
+        f"{i+1}. {c.title} (rating: {c.vote_average:.1f}): {enrichments.get(enrichment_key(c), ' '.join(c.genres))}"
         for i, c in enumerate(candidates)
     )
     log.debug("Candidate list sent to ranker:\n%s", cands_str)

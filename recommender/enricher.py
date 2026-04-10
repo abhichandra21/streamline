@@ -9,12 +9,43 @@ from .tmdb_client import TmdbMetadata
 
 log = logging.getLogger("recommender.enricher")
 
+_IDENTITY_KEY_RE = re.compile(r"^(tv|movie)/[0-9]+$")
+_UNKNOWN_KEY_RE = re.compile(r"^unknown/[a-z0-9-]+$")
+
+
+def _slug(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+
+
+def enrichment_key(metadata: TmdbMetadata) -> str:
+    return enrichment_key_from_parts(
+        metadata.content_type,
+        metadata.tmdb_id,
+        metadata.title,
+    )
+
+
+def enrichment_key_from_parts(
+    content_type: str | None,
+    tmdb_id: int | None,
+    title: str,
+) -> str:
+    if tmdb_id is not None and content_type in ("tv", "movie"):
+        return f"{content_type}/{tmdb_id}"
+    return f"unknown/{_slug(title)}"
+
+
+def is_identity_enrichment_key(key: str) -> bool:
+    return bool(_IDENTITY_KEY_RE.match(key) or _UNKNOWN_KEY_RE.match(key))
+
+
+def is_identity_enrichment_index(enrichments: dict[str, str]) -> bool:
+    return all(is_identity_enrichment_key(k) for k in enrichments)
+
 
 def _cache_path(metadata: TmdbMetadata, cache_dir: str) -> Path:
-    if metadata.tmdb_id:
-        return Path(cache_dir) / metadata.content_type / f"{metadata.tmdb_id}.txt"
-    slug = re.sub(r'[^a-z0-9]+', '-', metadata.title.lower()).strip('-')
-    return Path(cache_dir) / 'unknown' / f"{slug}.txt"
+    key = enrichment_key(metadata)
+    return Path(cache_dir) / f"{key}.txt"
 
 
 def _fallback_description(metadata: TmdbMetadata) -> str:
@@ -88,7 +119,7 @@ def enrich_batch(
     for i, (title, metadata) in enumerate(titles_metadata.items()):
         cache_path = _cache_path(metadata, cache_dir)
         needs_api = not cache_path.exists()
-        result[title] = enrich(metadata, cache_dir, client)
+        result[enrichment_key(metadata)] = enrich(metadata, cache_dir, client)
         if needs_api and throttle:
             api_calls += 1
             time.sleep(throttle)

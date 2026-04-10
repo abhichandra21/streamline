@@ -27,6 +27,7 @@ from recommender.event_store import load_events
 from recommender.jobs import registry as job_registry
 from recommender.llm import create_client
 from recommender.log import setup_logging
+from recommender.enricher import enrichment_key_from_parts
 from recommender.query_engine import RecommendContext, ask
 from recommender.tmdb_client import TmdbClient
 
@@ -388,7 +389,10 @@ def history() -> str:
             "title": e["title"],
             "content_type": e.get("content_type", ""),
             "tmdb_id": e.get("tmdb_id"),
-            "description": enrichments.get(e["title"], ""),
+            "description": enrichments.get(
+                enrichment_key_from_parts(e.get("content_type", "movie"), e.get("tmdb_id"), e["title"]),
+                "",
+            ),
             "poster": _get_poster_url(e.get("tmdb_id", 0), e.get("content_type", "movie"), "w185")
                       if e.get("tmdb_id") else None,
             "rating": us.get_rating(m),
@@ -504,7 +508,8 @@ def title_detail(tmdb_id: int) -> str:
     if enrichment_path.exists():
         description = enrichment_path.read_text()
     elif meta:
-        description = enrichments.get(meta.title, "")
+        key = enrichment_key_from_parts(ct, tmdb_id, meta.title)
+        description = enrichments.get(key, "")
     poster = _get_poster_url(tmdb_id, ct, "w500") if meta else None
     overview = ""
     if meta:
