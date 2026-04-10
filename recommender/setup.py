@@ -51,9 +51,12 @@ def _compute_file_sha256(path: str) -> str:
 def _title_keyed_enrichments(
     raw_enrichments: dict[str, str],
     watch_entries: list[dict],
-    metadata: dict[str, TmdbMetadata],
+    metadata: dict,
 ) -> dict[str, str]:
-    """Return the title-keyed view expected by taste_profile_builder.build()."""
+    """Return the title-keyed view expected by taste_profile_builder.build().
+
+    metadata may be keyed by title string or (title, content_type) tuple.
+    """
     if not is_identity_enrichment_index(raw_enrichments):
         return raw_enrichments
 
@@ -73,10 +76,11 @@ def _title_keyed_enrichments(
             title_keyed[title] = raw_enrichments[key]
 
     # Works in refresh-data mode, where metadata has just been rebuilt.
-    for title, meta in metadata.items():
+    for meta_key, meta in metadata.items():
+        display_title = meta_key[0] if isinstance(meta_key, tuple) else meta_key
         key = enrichment_key(meta)
         if key in raw_enrichments:
-            title_keyed[title] = raw_enrichments[key]
+            title_keyed[display_title] = raw_enrichments[key]
 
     return title_keyed
 
@@ -267,10 +271,10 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         if title_overrides:
             console.print(f"  Loaded {len(title_overrides)} title overrides")
 
-        title_type: dict[str, str] = {}
+        title_type: dict[tuple[str, str], str] = {}
         for e in events:
             key = e.series_name if e.content_type == 'tv' else e.title
-            title_type[key] = e.content_type
+            title_type[(key, e.content_type)] = e.content_type
 
         # Apply overrides: collect skips and content_type corrections
         skip_titles: set[str] = set()
@@ -297,12 +301,12 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
             title_type = {}
             for e in events:
                 key = e.series_name if e.content_type == 'tv' else e.title
-                title_type[key] = e.content_type
+                title_type[(key, e.content_type)] = e.content_type
 
         metadata = {}
         skipped = len(skip_titles)
         with console.status("[bold magenta]Fetching TMDB metadata...[/bold magenta]", spinner="dots"):
-            for i, (title, ct) in enumerate(title_type.items()):
+            for i, ((title, _), ct) in enumerate(title_type.items()):
                 if title in skip_titles:
                     continue
                 # Check overrides
@@ -314,23 +318,23 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                     if override.get("tmdb_id"):
                         cached = tmdb._load_cache(ct, override["tmdb_id"])
                         if cached:
-                            metadata[title] = tmdb._parse_metadata(cached, ct)
+                            metadata[(title, ct)] = tmdb._parse_metadata(cached, ct)
                         else:
                             try:
                                 data = tmdb._fetch_details(override["tmdb_id"], ct)
                                 tmdb._save_cache(ct, override["tmdb_id"], data)
-                                metadata[title] = tmdb._parse_metadata(data, ct)
+                                metadata[(title, ct)] = tmdb._parse_metadata(data, ct)
                             except Exception as exc:
                                 log.warning("Override TMDB fetch failed for %s (ID %d): %s",
                                             title, override["tmdb_id"], exc)
                     else:
                         meta = tmdb.get_metadata(search_title, ct)
                         if meta:
-                            metadata[title] = meta
+                            metadata[(title, ct)] = meta
                 else:
                     meta = tmdb.get_metadata(title, ct)
                     if meta:
-                        metadata[title] = meta
+                        metadata[(title, ct)] = meta
                 if (i + 1) % 50 == 0:
                     console.print(f"  {i+1}/{len(title_type)} titles processed...")
         console.print(f"  {len(metadata)} titles with TMDB metadata")

@@ -149,6 +149,26 @@ def test_deduplicate_merges_same_typed_identity():
     assert len(deduped.entries) == 1
 
 
+def test_build_dual_existence_titles():
+    """Two events with same title but different content_type should produce separate entries."""
+    events = [
+        make_event("Breathe", content_type="movie"),
+        make_event("Breathe", series_name="Breathe", content_type="tv"),
+    ]
+    meta_movie = make_meta(tmdb_id=407445, title="Breathe", content_type="movie")
+    meta_tv = make_meta(tmdb_id=79145, title="Breathe", content_type="tv")
+    metadata = {
+        ("Breathe", "movie"): meta_movie,
+        ("Breathe", "tv"): meta_tv,
+    }
+    index = wi.build(events, metadata)
+    assert len(index.entries) == 2
+    types = {e["content_type"] for e in index.entries}
+    assert types == {"movie", "tv"}
+    ids = {e["tmdb_id"] for e in index.entries}
+    assert ids == {407445, 79145}
+
+
 def test_save_and_load_roundtrip(tmp_path):
     path = str(tmp_path / "index.json")
     events = [make_event("Fleabag", series_name="Fleabag", content_type="tv")]

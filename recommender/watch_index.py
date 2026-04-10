@@ -32,22 +32,28 @@ class WatchIndex:
         return (_normalize(candidate.title), candidate.content_type) in self.normalized_titles
 
 
-def build(events: list[WatchEvent], metadata: dict[str, TmdbMetadata]) -> WatchIndex:
-    """Build exclusion index from watch events. metadata provides TMDB IDs."""
+def build(events: list[WatchEvent], metadata: dict) -> WatchIndex:
+    """Build exclusion index from watch events. metadata provides TMDB IDs.
+
+    metadata may be keyed by title string or by (title, content_type) tuple.
+    Typed keys are checked first to support dual-existence titles (e.g. "Breathe"
+    existing as both TV and movie).
+    """
     tmdb_ids: set[int] = set()
     tmdb_keys: set[tuple[str, int]] = set()
     normalized_titles: set[tuple[str, str]] = set()
     entries: list[dict] = []
-    seen_keys: set[str] = set()
+    seen_keys: set[tuple[str, str]] = set()
 
     for e in events:
         key = e.series_name if e.content_type == 'tv' else e.title
         normalized_titles.add((_normalize(e.title), e.content_type))
         if e.content_type == 'tv':
             normalized_titles.add((_normalize(e.series_name), e.content_type))
-        if key not in seen_keys:
-            seen_keys.add(key)
-            meta = metadata.get(key)
+        dedup_key = (key, e.content_type)
+        if dedup_key not in seen_keys:
+            seen_keys.add(dedup_key)
+            meta = metadata.get((key, e.content_type)) or metadata.get(key)
             tmdb_id = meta.tmdb_id if meta else 0
             ct = meta.content_type if meta else e.content_type
             if tmdb_id:
