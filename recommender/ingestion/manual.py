@@ -51,6 +51,8 @@ def parse(tv_path: str, movies_path: str) -> list[WatchEvent]:
             raw = line.strip()
             if not raw:
                 continue
+            year_match = _YEAR_RE.search(raw)
+            year_hint = int(year_match.group().strip()) if year_match else None
             title = _strip_year(raw)
             if not title or title in seen_movies:
                 continue
@@ -64,6 +66,7 @@ def parse(tv_path: str, movies_path: str) -> list[WatchEvent]:
                 total_duration=movie_duration,
                 timestamp=timestamp,
                 profile='',
+                release_year_hint=year_hint,
             ))
 
     return events

@@ -17,6 +17,7 @@ class WatchEvent:
     total_duration: timedelta | None   # filled by TMDB lookup
     timestamp: datetime
     profile: str
+    release_year_hint: int | None = None  # source year for TMDB matching
 
 
 def classify_title(title: str) -> tuple[str, str]:

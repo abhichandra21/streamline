@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from recommender.ingestion.prime import parse as parse_prime
 from recommender.ingestion.apple_tv import parse as parse_apple_tv
 from recommender.ingestion.manual import parse as parse_manual
 from recommender.signals import compute_scores
-from recommender.tmdb_client import TmdbClient, TmdbMetadata
+from recommender.tmdb_client import TmdbClient, TmdbMetadata, MatchHints
 from recommender.enricher import (
     enrich_batch,
     enrichment_key,
@@ -85,10 +86,84 @@ def _title_keyed_enrichments(
     return title_keyed
 
 
-def _audit_cache_mismatches(index, cache_dir: str) -> None:
-    """Report watch-index entries whose TMDB cache is under the wrong content type."""
+def _normalize_audit_title(title: str) -> str:
+    title = title.lower()
+    title = re.sub(r'\s*\([^)]*\)', '', title)
+    return title.strip()
+
+
+def _cache_title(cache_path: Path) -> str:
+    try:
+        raw = json.loads(cache_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        log.debug("Unable to inspect TMDB cache %s: %s", cache_path, exc)
+        return ""
+    return raw.get("name") or raw.get("title") or ""
+
+
+def _titles_are_compatible(index_title: str, cache_title: str) -> bool:
+    index_norm = _normalize_audit_title(index_title)
+    cache_norm = _normalize_audit_title(cache_title)
+    if not index_norm or not cache_norm:
+        return False
+    if index_norm == cache_norm:
+        return True
+    if len(cache_norm) < 4:
+        return False
+    return cache_norm in index_norm
+
+
+def _build_hints_map(events: list) -> dict[tuple[str, str], MatchHints]:
+    """Build per-title MatchHints from source event data."""
+    hints_map: dict[tuple[str, str], MatchHints] = {}
+    for e in events:
+        key_title = e.series_name if e.content_type == 'tv' else e.title
+        map_key = (key_title, e.content_type)
+        if map_key in hints_map:
+            continue
+
+        release_year = getattr(e, 'release_year_hint', None)
+
+        runtime_minutes = None
+        runtime_is_exact = False
+
+        if e.platform == 'apple_tv' and e.total_duration:
+            runtime_minutes = int(e.total_duration.total_seconds() / 60)
+            runtime_is_exact = True
+        elif e.platform in ('netflix', 'prime') and e.content_type == 'movie':
+            if e.watched_duration and e.watched_duration.total_seconds() >= 3600:
+                runtime_minutes = int(e.watched_duration.total_seconds() / 60)
+                runtime_is_exact = False
+        # Do not use manual default durations as runtime hints (they are synthetic)
+
+        if release_year or runtime_minutes:
+            hints_map[map_key] = MatchHints(
+                release_year=release_year,
+                runtime_minutes=runtime_minutes,
+                runtime_is_exact=runtime_is_exact,
+            )
+
+    return hints_map
+
+
+def _audit_cache_mismatches(
+    index, cache_dir: str, hints_map: dict | None = None,
+) -> None:
+    """Report watch-index entries whose TMDB cache is suspicious.
+
+    Checks: content-type mismatch, title mismatch, year mismatch,
+    runtime mismatch, and weak matches (no poster, zero votes).
+    """
+    if hints_map is None:
+        hints_map = {}
+
     mismatched = []
+    title_mismatches = []
+    year_mismatches = []
+    runtime_mismatches = []
+    weak_matches = []
     missing = []
+
     for e in index.entries:
         tmdb_id = e.get("tmdb_id")
         ct = e.get("content_type", "movie")
@@ -96,7 +171,51 @@ def _audit_cache_mismatches(index, cache_dir: str) -> None:
             continue
         cache_path = Path(cache_dir) / ct / f"{tmdb_id}.json"
         if cache_path.exists():
+            try:
+                raw = json.loads(cache_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            cache_title = raw.get("name") or raw.get("title") or ""
+            if cache_title and not _titles_are_compatible(e["title"], cache_title):
+                title_mismatches.append((e["title"], ct, tmdb_id, cache_title))
+
+            # Year mismatch check
+            hints = hints_map.get((e["title"], ct))
+            if hints and hints.release_year:
+                date_str = raw.get("first_air_date") if ct == "tv" else raw.get("release_date")
+                if date_str and len(date_str) >= 4:
+                    cache_year = int(date_str[:4])
+                    if abs(cache_year - hints.release_year) > 2:
+                        year_mismatches.append((
+                            e["title"], ct, tmdb_id, cache_title,
+                            hints.release_year, cache_year,
+                        ))
+
+            # Runtime mismatch check
+            if hints and hints.runtime_minutes:
+                if ct == "tv":
+                    runtimes = raw.get("episode_run_time", [])
+                    cache_runtime = runtimes[0] if runtimes else None
+                else:
+                    cache_runtime = raw.get("runtime")
+                if cache_runtime and cache_runtime > 0 and hints.runtime_minutes > 0:
+                    ratio = min(cache_runtime, hints.runtime_minutes) / max(cache_runtime, hints.runtime_minutes)
+                    if ratio < 0.7:
+                        runtime_mismatches.append((
+                            e["title"], ct, tmdb_id, cache_title,
+                            hints.runtime_minutes, cache_runtime,
+                        ))
+
+            # Weak match check
+            poster = raw.get("poster_path")
+            vote_count = raw.get("vote_count", 0)
+            popularity = raw.get("popularity", 0)
+            if not poster and vote_count == 0 and popularity < 2:
+                weak_matches.append((e["title"], ct, tmdb_id, cache_title))
+
             continue
+
         alt_ct = "movie" if ct == "tv" else "tv"
         alt_path = Path(cache_dir) / alt_ct / f"{tmdb_id}.json"
         if alt_path.exists():
@@ -104,13 +223,31 @@ def _audit_cache_mismatches(index, cache_dir: str) -> None:
         else:
             missing.append((e["title"], ct, tmdb_id))
 
-    if mismatched:
-        console.print(f"\n  [yellow]{len(mismatched)} entries with content-type cache mismatch "
-                      f"(consider adding overrides):[/yellow]")
-        for title, idx_ct, cache_ct, tid in mismatched[:10]:
-            console.print(f"    {title} — index says {idx_ct}, cache at {cache_ct}/{tid}")
-        if len(mismatched) > 10:
-            console.print(f"    ... and {len(mismatched) - 10} more")
+    def _report(label, items, formatter, limit=10):
+        if not items:
+            return
+        console.print(f"\n  [yellow]{len(items)} {label} (consider adding overrides):[/yellow]")
+        for item in items[:limit]:
+            console.print(f"    {formatter(item)}")
+        if len(items) > limit:
+            console.print(f"    ... and {len(items) - limit} more")
+
+    _report("content-type cache mismatches",
+            mismatched,
+            lambda x: f"{x[0]} — index says {x[1]}, cache at {x[2]}/{x[3]}")
+    _report("title mismatches",
+            title_mismatches,
+            lambda x: f"{x[0]} -> {x[1]}/{x[2]} cached as {x[3]}")
+    _report("year mismatches",
+            year_mismatches,
+            lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]}): source year {x[4]}, cached year {x[5]}")
+    _report("runtime mismatches (>30% off)",
+            runtime_mismatches,
+            lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]}): source {x[4]}min, cached {x[5]}min")
+    _report("weak TMDB matches (no poster, zero votes)",
+            weak_matches,
+            lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]})")
+
     if missing:
         log.debug("%d entries with no TMDB cache at all", len(missing))
 
@@ -333,6 +470,9 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                 key = e.series_name if e.content_type == 'tv' else e.title
                 title_type[(key, e.content_type)] = e.content_type
 
+        # Build source hints for TMDB candidate ranking
+        hints_map = _build_hints_map(events)
+
         metadata = {}
         skipped = len(skip_titles)
         with console.status("[bold magenta]Fetching TMDB metadata...[/bold magenta]", spinner="dots"):
@@ -358,11 +498,13 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                                 log.warning("Override TMDB fetch failed for %s (ID %d): %s",
                                             title, override["tmdb_id"], exc)
                     else:
-                        meta = tmdb.get_metadata(search_title, ct)
+                        hints = hints_map.get((title, ct))
+                        meta = tmdb.get_metadata(search_title, ct, hints=hints)
                         if meta:
                             metadata[(title, ct)] = meta
                 else:
-                    meta = tmdb.get_metadata(title, ct)
+                    hints = hints_map.get((title, ct))
+                    meta = tmdb.get_metadata(title, ct, hints=hints)
                     if meta:
                         metadata[(title, ct)] = meta
                 if (i + 1) % 50 == 0:
@@ -381,7 +523,7 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         ov.report_unmatched(unmatched, config.OVERRIDES_PATH)
 
         # Audit: report cache mismatches (wrong TMDB match candidates)
-        _audit_cache_mismatches(index, config.CACHE_DIR)
+        _audit_cache_mismatches(index, config.CACHE_DIR, hints_map)
 
         # Clean up stale cache files for removed/deduped entries
         removed = wi.cleanup_stale_cache(index, config.ENRICHMENT_CACHE_DIR, config.PROVIDERS_CACHE_DIR)

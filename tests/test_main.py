@@ -973,3 +973,197 @@ def test_add_writes_to_sqlite(tmp_path, monkeypatch):
 
     archive = list_manual_archive(db)
     assert any(a["title"] == "The Bear" for a in archive)
+
+
+def test_cache_audit_reports_existing_cache_with_mismatched_title(tmp_path, capsys):
+    import json
+    import recommender.setup as setup
+    from recommender.watch_index import WatchIndex
+
+    cache_path = tmp_path / "tv" / "55063.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({
+        "id": 55063,
+        "name": "Man on the Moon: The Epic Journey of Apollo 11",
+    }))
+    index = WatchIndex(
+        tmdb_ids={55063},
+        tmdb_keys={("tv", 55063)},
+        normalized_titles={("apollo 11", "tv")},
+        entries=[{"tmdb_id": 55063, "title": "Apollo 11", "content_type": "tv"}],
+    )
+
+    setup._audit_cache_mismatches(index, str(tmp_path))
+
+    err = capsys.readouterr().err
+    assert "Apollo 11" in err
+    assert "Man on the Moon" in err
+
+
+def test_cache_audit_allows_exact_short_title_match(tmp_path, capsys):
+    import json
+    import recommender.setup as setup
+    from recommender.watch_index import WatchIndex
+
+    cache_path = tmp_path / "movie" / "11.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({
+        "id": 11,
+        "title": "Up",
+        "release_date": "2009-05-28",
+    }))
+    index = WatchIndex(
+        tmdb_ids={11},
+        tmdb_keys={("movie", 11)},
+        normalized_titles={("up", "movie")},
+        entries=[{"tmdb_id": 11, "title": "Up", "content_type": "movie"}],
+    )
+
+    setup._audit_cache_mismatches(index, str(tmp_path))
+
+    err = capsys.readouterr().err
+    assert "possible wrong TMDB match" not in err
+    assert "title mismatch" not in err
+
+
+def test_build_hints_map_manual_year():
+    from datetime import datetime, timedelta
+    import recommender.setup as setup
+    from recommender.ingestion.base import WatchEvent
+
+    event = WatchEvent(
+        platform='manual', title='Honeyland', content_type='movie',
+        series_name='Honeyland', watched_duration=timedelta(minutes=120),
+        total_duration=timedelta(minutes=120), timestamp=datetime.now(),
+        profile='', release_year_hint=2019,
+    )
+    hints_map = setup._build_hints_map([event])
+    assert ('Honeyland', 'movie') in hints_map
+    assert hints_map[('Honeyland', 'movie')].release_year == 2019
+
+
+def test_build_hints_map_manual_no_year():
+    from datetime import datetime, timedelta
+    import recommender.setup as setup
+    from recommender.ingestion.base import WatchEvent
+
+    event = WatchEvent(
+        platform='manual', title='Some Movie', content_type='movie',
+        series_name='Some Movie', watched_duration=timedelta(minutes=120),
+        total_duration=timedelta(minutes=120), timestamp=datetime.now(),
+        profile='',
+    )
+    hints_map = setup._build_hints_map([event])
+    assert ('Some Movie', 'movie') not in hints_map
+
+
+def test_build_hints_map_apple_tv_runtime():
+    from datetime import datetime, timedelta
+    import recommender.setup as setup
+    from recommender.ingestion.base import WatchEvent
+
+    event = WatchEvent(
+        platform='apple_tv', title='Test Movie', content_type='movie',
+        series_name='Test Movie', watched_duration=timedelta(minutes=100),
+        total_duration=timedelta(minutes=142), timestamp=datetime.now(),
+        profile='testuser',
+    )
+    hints_map = setup._build_hints_map([event])
+    hints = hints_map[('Test Movie', 'movie')]
+    assert hints.runtime_minutes == 142
+    assert hints.runtime_is_exact is True
+
+
+def test_build_hints_map_manual_duration_not_used():
+    """Manual default durations should not be passed as runtime hints."""
+    from datetime import datetime, timedelta
+    import recommender.setup as setup
+    from recommender.ingestion.base import WatchEvent
+
+    event = WatchEvent(
+        platform='manual', title='Generic Movie', content_type='movie',
+        series_name='Generic Movie', watched_duration=timedelta(minutes=120),
+        total_duration=timedelta(minutes=120), timestamp=datetime.now(),
+        profile='',
+    )
+    hints_map = setup._build_hints_map([event])
+    # No year hint and manual platform -> no hints entry
+    assert ('Generic Movie', 'movie') not in hints_map
+
+
+def test_audit_reports_year_mismatch(tmp_path, capsys):
+    import json
+    import recommender.setup as setup
+    from recommender.watch_index import WatchIndex
+    from recommender.tmdb_client import MatchHints
+
+    cache_path = tmp_path / "movie" / "111.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({
+        "id": 111, "title": "Iceland", "release_date": "1942-01-01",
+        "runtime": 90, "vote_count": 50, "popularity": 5, "poster_path": "/p.jpg",
+    }))
+    index = WatchIndex(
+        tmdb_ids={111},
+        tmdb_keys={("movie", 111)},
+        normalized_titles={("iceland", "movie")},
+        entries=[{"tmdb_id": 111, "title": "Iceland", "content_type": "movie"}],
+    )
+    hints_map = {("Iceland", "movie"): MatchHints(release_year=2016)}
+
+    setup._audit_cache_mismatches(index, str(tmp_path), hints_map)
+
+    err = capsys.readouterr().err
+    assert "year mismatch" in err.lower() or "source year 2016" in err
+
+
+def test_audit_reports_runtime_mismatch(tmp_path, capsys):
+    import json
+    import recommender.setup as setup
+    from recommender.watch_index import WatchIndex
+    from recommender.tmdb_client import MatchHints
+
+    cache_path = tmp_path / "movie" / "555.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({
+        "id": 555, "title": "Hum Tum", "release_date": "2004-05-28",
+        "runtime": 80, "vote_count": 100, "popularity": 10, "poster_path": "/p.jpg",
+    }))
+    index = WatchIndex(
+        tmdb_ids={555},
+        tmdb_keys={("movie", 555)},
+        normalized_titles={("hum tum", "movie")},
+        entries=[{"tmdb_id": 555, "title": "Hum Tum", "content_type": "movie"}],
+    )
+    hints_map = {("Hum Tum", "movie"): MatchHints(runtime_minutes=140, runtime_is_exact=True)}
+
+    setup._audit_cache_mismatches(index, str(tmp_path), hints_map)
+
+    err = capsys.readouterr().err
+    assert "runtime" in err.lower() or "source 140min" in err
+
+
+def test_audit_existing_title_mismatch_still_works(tmp_path, capsys):
+    """Existing title mismatch audit continues to work."""
+    import json
+    import recommender.setup as setup
+    from recommender.watch_index import WatchIndex
+
+    cache_path = tmp_path / "movie" / "700.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({
+        "id": 700, "title": "The King", "release_date": "2019-10-11",
+        "runtime": 140, "vote_count": 2000, "popularity": 50, "poster_path": "/p.jpg",
+    }))
+    index = WatchIndex(
+        tmdb_ids={700},
+        tmdb_keys={("movie", 700)},
+        normalized_titles={("kesari", "movie")},
+        entries=[{"tmdb_id": 700, "title": "Kesari", "content_type": "movie"}],
+    )
+
+    setup._audit_cache_mismatches(index, str(tmp_path))
+
+    err = capsys.readouterr().err
+    assert "Kesari" in err
+    assert "The King" in err

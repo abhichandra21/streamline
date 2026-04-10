@@ -167,6 +167,29 @@ def _norm_title(title: str) -> str:
     return title.strip()
 
 
+def _title_matches_legacy_entry(entry_title: str, meta_title: str) -> bool:
+    """Return True when alternate-type metadata is title-compatible with an old index entry."""
+    entry_norm = _norm_title(entry_title)
+    meta_norm = _norm_title(meta_title)
+    if not entry_norm or not meta_norm:
+        return False
+    if entry_norm == meta_norm:
+        return True
+    if len(meta_norm) < 4:
+        return False
+    return meta_norm in entry_norm
+
+
+def _can_use_alternate_title_cache(watch_index, tmdb_id: int, alt_ct: str, alt_title: str) -> bool:
+    """Allow alternate-type title details only for typed or title-compatible legacy entries."""
+    if (alt_ct, tmdb_id) in getattr(watch_index, "tmdb_keys", set()):
+        return True
+    return any(
+        e.get("tmdb_id") == tmdb_id and _title_matches_legacy_entry(e.get("title", ""), alt_title)
+        for e in getattr(watch_index, "entries", [])
+    )
+
+
 def _load_enrichments() -> dict[str, str]:
     index_path = Path(config.ENRICHMENT_CACHE_DIR) / "index.json"
     if index_path.exists():
@@ -514,9 +537,7 @@ def title_detail(tmdb_id: int) -> str:
         except Exception:
             alt_meta = None
         if alt_meta:
-            # Accept if the watch index has this tmdb_id under either type
-            # (old indexes may store the wrong content_type for the ID)
-            if tmdb_id in ctx.watch_index.tmdb_ids:
+            if _can_use_alternate_title_cache(ctx.watch_index, tmdb_id, alt_ct, alt_meta.title):
                 meta = alt_meta
                 ct = alt_ct
 

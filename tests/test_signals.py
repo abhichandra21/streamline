@@ -52,6 +52,14 @@ def test_full_completion_scores_high():
     assert scores["Show"] > 0.6
 
 
+def test_typed_metadata_keys_use_runtime():
+    events = [make_event("Short Movie", "Short Movie", "movie", 45, 0)]
+    string_keyed = {"Short Movie": make_movie_meta("Short Movie", runtime=45)}
+    typed_keyed = {("Short Movie", "movie"): make_movie_meta("Short Movie", runtime=45)}
+
+    assert compute_scores(events, typed_keyed)["Short Movie"] == compute_scores(events, string_keyed)["Short Movie"]
+
+
 def test_partial_watch_scores_lower():
     full_events = [make_event("Show: Season 1: Ep1 (Episode 1)", "Show", "tv", 23, 1)]
     partial_events = [make_event("Show: Season 1: Ep1 (Episode 1)", "Show", "tv", 5, 1)]

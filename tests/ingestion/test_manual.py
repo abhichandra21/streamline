@@ -96,3 +96,45 @@ def test_skips_blank_lines():
         assert len(events) == 2
     finally:
         os.unlink(tv); os.unlink(movies)
+
+
+def test_release_year_hint_extracted():
+    tv = write_tmp("")
+    movies = write_tmp("Honeyland 2019\n")
+    try:
+        events = parse(tv, movies)
+        assert events[0].title == "Honeyland"
+        assert events[0].release_year_hint == 2019
+    finally:
+        os.unlink(tv); os.unlink(movies)
+
+
+def test_release_year_hint_none_without_year():
+    tv = write_tmp("")
+    movies = write_tmp("Some Movie\n")
+    try:
+        events = parse(tv, movies)
+        assert events[0].release_year_hint is None
+    finally:
+        os.unlink(tv); os.unlink(movies)
+
+
+def test_numeric_title_not_treated_as_year():
+    tv = write_tmp("")
+    movies = write_tmp("1917\n")
+    try:
+        events = parse(tv, movies)
+        assert events[0].title == "1917"
+        assert events[0].release_year_hint is None
+    finally:
+        os.unlink(tv); os.unlink(movies)
+
+
+def test_tv_titles_no_year_hint():
+    tv = write_tmp("Broadchurch\n")
+    movies = write_tmp("")
+    try:
+        events = parse(tv, movies)
+        assert events[0].release_year_hint is None
+    finally:
+        os.unlink(tv); os.unlink(movies)

@@ -2,7 +2,7 @@ import json
 import os
 import tempfile
 from unittest.mock import patch, MagicMock
-from recommender.tmdb_client import TmdbClient, TmdbMetadata
+from recommender.tmdb_client import TmdbClient, TmdbMetadata, MatchHints, _title_similarity
 
 
 def make_client(tmp_dir):
@@ -76,7 +76,7 @@ def test_cache_hit_avoids_api_call():
 
         with patch.object(client, "_get") as mock_get:
             mock_get.side_effect = Exception("Should not call API")
-            with patch.object(client, "_search", return_value=42):
+            with patch.object(client, "_ranked_search", return_value=42):
                 meta = client.get_metadata("Avatar: The Last Airbender", "tv")
 
         assert meta is not None
@@ -168,3 +168,186 @@ def test_search_by_filters_movie():
         discover_call = mock_get.call_args_list[0]
         assert discover_call[0][0] == "discover/movie"
         assert discover_call[1]['params']['with_original_language'] == "hi"
+
+
+# --- Candidate ranking tests ---
+
+def test_title_similarity_exact():
+    assert _title_similarity("Honeyland", "Honeyland") == 1.0
+
+
+def test_title_similarity_case_insensitive():
+    assert _title_similarity("honeyland", "Honeyland") == 1.0
+
+
+def test_title_similarity_articles_stripped():
+    assert _title_similarity("The Matrix", "Matrix") == 1.0
+
+
+def test_title_similarity_low_for_mismatch():
+    sim = _title_similarity("Kesari", "The King")
+    assert sim < 0.5
+
+
+def _make_search_result(tmdb_id, title, release_date="", poster_path=None,
+                        vote_count=100, popularity=20):
+    return {
+        "id": tmdb_id,
+        "title": title,
+        "release_date": release_date,
+        "poster_path": poster_path,
+        "vote_count": vote_count,
+        "popularity": popularity,
+    }
+
+
+def _make_details(tmdb_id, title, runtime=None, release_date=""):
+    return {
+        "id": tmdb_id,
+        "title": title,
+        "runtime": runtime,
+        "release_date": release_date,
+        "genres": [],
+        "keywords": {"keywords": []},
+        "credits": {"cast": [], "crew": []},
+        "original_language": "en",
+        "vote_average": 7.0,
+        "vote_count": 100,
+    }
+
+
+def test_year_hint_selects_correct_candidate():
+    """Iceland with release_year=2016 should pick 2016 over 1942."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        hints = MatchHints(release_year=2016)
+
+        cand_1942 = _make_search_result(111, "Iceland", "1942-01-01", "/poster.jpg")
+        cand_2016 = _make_search_result(222, "Iceland", "2016-06-15", "/poster.jpg")
+
+        details_1942 = _make_details(111, "Iceland", runtime=90, release_date="1942-01-01")
+        details_2016 = _make_details(222, "Iceland", runtime=95, release_date="2016-06-15")
+
+        def fake_get(endpoint, params=None):
+            if "search" in endpoint:
+                if params and params.get("primary_release_year") == 2016:
+                    return {"results": [cand_2016]}
+                return {"results": [cand_1942, cand_2016]}
+            if "111" in endpoint:
+                return details_1942
+            if "222" in endpoint:
+                return details_2016
+            return {}
+
+        with patch.object(client, "_get", side_effect=fake_get):
+            meta = client.get_metadata("Iceland", "movie", hints=hints)
+
+        assert meta is not None
+        assert meta.tmdb_id == 222
+
+
+def test_year_hint_selects_honeyland_2019():
+    """Honeyland with release_year=2019 should pick 2019 over 1935."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        hints = MatchHints(release_year=2019)
+
+        cand_1935 = _make_search_result(333, "Honeyland", "1935-01-01", None, vote_count=5, popularity=1)
+        cand_2019 = _make_search_result(444, "Honeyland", "2019-02-01", "/poster.jpg", vote_count=800, popularity=30)
+
+        details_1935 = _make_details(333, "Honeyland", runtime=70, release_date="1935-01-01")
+        details_2019 = _make_details(444, "Honeyland", runtime=85, release_date="2019-02-01")
+
+        def fake_get(endpoint, params=None):
+            if "search" in endpoint:
+                if params and params.get("primary_release_year") == 2019:
+                    return {"results": [cand_2019]}
+                return {"results": [cand_1935, cand_2019]}
+            if "333" in endpoint:
+                return details_1935
+            if "444" in endpoint:
+                return details_2019
+            return {}
+
+        with patch.object(client, "_get", side_effect=fake_get):
+            meta = client.get_metadata("Honeyland", "movie", hints=hints)
+
+        assert meta is not None
+        assert meta.tmdb_id == 444
+
+
+def test_runtime_hint_selects_correct_hum_tum():
+    """Hum Tum with runtime ~140 should pick the 142-min movie over the 123-min one."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        hints = MatchHints(runtime_minutes=140, runtime_is_exact=True)
+
+        cand_123 = _make_search_result(555, "Hum Tum", "2004-05-28", "/poster.jpg")
+        cand_142 = _make_search_result(556, "Hum Tum", "2004-05-28", "/poster.jpg")
+
+        details_123 = _make_details(555, "Hum Tum", runtime=123, release_date="2004-05-28")
+        details_142 = _make_details(556, "Hum Tum", runtime=142, release_date="2004-05-28")
+
+        def fake_get(endpoint, params=None):
+            if "search" in endpoint:
+                return {"results": [cand_123, cand_142]}
+            if "555" in endpoint:
+                return details_123
+            if "556" in endpoint:
+                return details_142
+            return {}
+
+        with patch.object(client, "_get", side_effect=fake_get):
+            meta = client.get_metadata("Hum Tum", "movie", hints=hints)
+
+        assert meta is not None
+        assert meta.tmdb_id == 556
+
+
+def test_title_mismatch_deprioritized():
+    """Kesari should not match 'The King' despite it being first result."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+
+        cand_king = _make_search_result(700, "The King", "2019-10-11", "/poster.jpg", vote_count=2000)
+        cand_kesari = _make_search_result(701, "Kesari", "2019-03-21", "/poster.jpg", vote_count=300)
+
+        details_king = _make_details(700, "The King", runtime=140, release_date="2019-10-11")
+        details_kesari = _make_details(701, "Kesari", runtime=150, release_date="2019-03-21")
+
+        def fake_get(endpoint, params=None):
+            if "search" in endpoint:
+                return {"results": [cand_king, cand_kesari]}
+            if "700" in endpoint:
+                return details_king
+            if "701" in endpoint:
+                return details_kesari
+            return {}
+
+        with patch.object(client, "_get", side_effect=fake_get):
+            meta = client.get_metadata("Kesari", "movie")
+
+        assert meta is not None
+        assert meta.tmdb_id == 701
+
+
+def test_no_hints_still_works():
+    """get_metadata without hints should still return a result."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+
+        cand = _make_search_result(800, "Inception", "2010-07-16", "/poster.jpg")
+        details = _make_details(800, "Inception", runtime=148, release_date="2010-07-16")
+
+        def fake_get(endpoint, params=None):
+            if "search" in endpoint:
+                return {"results": [cand]}
+            if "800" in endpoint:
+                return details
+            return {}
+
+        with patch.object(client, "_get", side_effect=fake_get):
+            meta = client.get_metadata("Inception", "movie")
+
+        assert meta is not None
+        assert meta.tmdb_id == 800
