@@ -4,6 +4,7 @@ import re
 import shutil
 import time
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import requests
@@ -46,6 +47,35 @@ class TmdbMetadata:
     release_year: int | None = None
 
 
+@dataclass
+class MatchHints:
+    """Source hints for ranking TMDB search candidates."""
+    release_year: int | None = None
+    runtime_minutes: int | None = None
+    runtime_is_exact: bool = False
+
+
+def _normalize_for_match(s: str) -> str:
+    """Lowercase, strip articles and punctuation for title comparison."""
+    s = s.lower().strip()
+    s = re.sub(r'^(the|a|an)\s+', '', s)
+    s = re.sub(r'[^\w\s]', '', s)
+    return s.strip()
+
+
+def _title_similarity(query: str, candidate: str) -> float:
+    """Score 0.0-1.0 for how well the candidate title matches the query."""
+    nq = _normalize_for_match(query)
+    nc = _normalize_for_match(candidate)
+    if nq == nc:
+        return 1.0
+    ratio = SequenceMatcher(None, nq, nc).ratio()
+    # Bonus for containment
+    if nq in nc or nc in nq:
+        ratio = max(ratio, 0.85)
+    return ratio
+
+
 class TmdbClient:
     def __init__(self, api_key: str, cache_dir: str = "recommender/cache/tmdb"):
         self.api_key = api_key
@@ -83,6 +113,144 @@ class TmdbClient:
             return None
         results = data.get("results", [])
         return results[0]["id"] if results else None
+
+    def _search_candidates(
+        self, title: str, content_type: str, hints: MatchHints | None = None,
+    ) -> list[dict]:
+        """Return up to 5 TMDB search results. Uses year hint when available."""
+        endpoint = "search/tv" if content_type == "tv" else "search/movie"
+        params: dict = {"query": title}
+
+        # Try year-hinted search first
+        if hints and hints.release_year:
+            year_param = "first_air_date_year" if content_type == "tv" else "primary_release_year"
+            hinted_params = {**params, year_param: hints.release_year}
+            try:
+                data = self._get(endpoint, hinted_params)
+                results = data.get("results", [])[:5]
+                if results:
+                    return results
+            except Exception as exc:
+                log.debug("TMDB hinted search error for %r: %s", title, exc)
+
+        # Fall back to unhinted search
+        try:
+            data = self._get(endpoint, params)
+            return data.get("results", [])[:5]
+        except Exception as exc:
+            log.debug("TMDB search error for %r (%s): %s", title, content_type, exc)
+            return []
+
+    def _score_candidate(
+        self, candidate: dict, title: str, content_type: str,
+        hints: MatchHints | None = None, details: dict | None = None,
+    ) -> float:
+        """Score a TMDB search result. Higher is better."""
+        score = 0.0
+
+        # Title similarity (0-40 points)
+        cand_title = candidate.get("name") or candidate.get("title") or ""
+        sim = _title_similarity(title, cand_title)
+        score += sim * 40.0
+
+        # Year match (0-25 points)
+        if hints and hints.release_year:
+            date_str = (candidate.get("first_air_date") or
+                        candidate.get("release_date") or "")
+            if date_str and len(date_str) >= 4:
+                cand_year = int(date_str[:4])
+                year_diff = abs(cand_year - hints.release_year)
+                if year_diff == 0:
+                    score += 25.0
+                elif year_diff == 1:
+                    score += 15.0
+                elif year_diff <= 3:
+                    score += 5.0
+                # >3 years off: no bonus
+
+        # Runtime match (0-15 points) - needs details
+        if hints and hints.runtime_minutes and details:
+            if content_type == "tv":
+                runtimes = details.get("episode_run_time", [])
+                cand_runtime = runtimes[0] if runtimes else None
+            else:
+                cand_runtime = details.get("runtime")
+            if cand_runtime and cand_runtime > 0:
+                runtime_ratio = min(cand_runtime, hints.runtime_minutes) / max(cand_runtime, hints.runtime_minutes)
+                if hints.runtime_is_exact:
+                    score += runtime_ratio * 15.0
+                else:
+                    score += runtime_ratio * 8.0
+
+        # Poster present (0-3 points, weak signal)
+        if candidate.get("poster_path"):
+            score += 3.0
+
+        # Popularity/votes as tiebreakers (0-7 points)
+        vote_count = candidate.get("vote_count", 0)
+        if vote_count >= 100:
+            score += 4.0
+        elif vote_count >= 10:
+            score += 2.0
+        popularity = candidate.get("popularity", 0)
+        if popularity >= 20:
+            score += 3.0
+        elif popularity >= 5:
+            score += 1.0
+
+        return score
+
+    def _ranked_search(
+        self, title: str, content_type: str, hints: MatchHints | None = None,
+    ) -> int | None:
+        """Search TMDB and return the best-matching ID using candidate ranking."""
+        candidates = self._search_candidates(title, content_type, hints)
+        if not candidates:
+            return None
+
+        if len(candidates) == 1 and not hints:
+            return candidates[0]["id"]
+
+        # Score candidates, fetching details for top 3 to get runtime
+        scored: list[tuple[float, int, str]] = []
+        for i, cand in enumerate(candidates[:3]):
+            details = None
+            if hints and (hints.runtime_minutes or hints.release_year):
+                cand_id = cand["id"]
+                cached = self._load_cache(content_type, cand_id)
+                if cached:
+                    details = cached
+                else:
+                    try:
+                        details = self._fetch_details(cand_id, content_type)
+                        self._save_cache(content_type, cand_id, details)
+                    except Exception:
+                        pass
+            s = self._score_candidate(cand, title, content_type, hints, details)
+            cand_title = cand.get("name") or cand.get("title") or ""
+            scored.append((s, cand["id"], cand_title))
+
+        # Score remaining candidates without details
+        for cand in candidates[3:]:
+            s = self._score_candidate(cand, title, content_type, hints)
+            cand_title = cand.get("name") or cand.get("title") or ""
+            scored.append((s, cand["id"], cand_title))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        best_score, best_id, best_title = scored[0]
+
+        # Log low-confidence selections
+        if best_score < 30.0:
+            log.warning("Low-confidence TMDB match: %r -> %r (id=%d, score=%.1f)",
+                        title, best_title, best_id, best_score)
+        elif len(scored) > 1:
+            second_score = scored[1][0]
+            if best_score - second_score < 5.0:
+                log.debug("Close TMDB match: %r -> %r (%.1f) vs %r (%.1f)",
+                          title, best_title, best_score,
+                          scored[1][2], second_score)
+
+        return best_id
 
     def _fetch_details(self, tmdb_id: int, content_type: str) -> dict:
         endpoint = f"tv/{tmdb_id}" if content_type == "tv" else f"movie/{tmdb_id}"
@@ -216,11 +384,15 @@ class TmdbClient:
             return self._parse_metadata(cached, content_type)
         return None
 
-    def get_metadata(self, title: str, content_type: str) -> TmdbMetadata | None:
+    def get_metadata(
+        self, title: str, content_type: str, hints: MatchHints | None = None,
+    ) -> TmdbMetadata | None:
         """Fetch and cache metadata for a single title. Returns None if not found.
 
         Uses guessit to detect misclassified episodes and tries cleaned
-        title variants if the original search fails.
+        title variants if the original search fails. When hints are provided,
+        ranks candidates by title similarity, year, and runtime instead of
+        blindly taking the first result.
         """
         # Let guessit override content_type if it detects an episode
         detected_type, detected_title = self.classify_title(title)
@@ -231,8 +403,8 @@ class TmdbClient:
 
         alt_type = "tv" if content_type == "movie" else "movie"
         for variant in self._clean_title_variants(title):
-            # Try the requested content type first
-            tmdb_id = self._search(variant, content_type)
+            # Try the requested content type first, with ranked search
+            tmdb_id = self._ranked_search(variant, content_type, hints)
             if tmdb_id is not None:
                 if variant != title:
                     log.debug("TMDB search hit via variant: %r -> %r -> ID %d", title, variant, tmdb_id)
@@ -240,7 +412,7 @@ class TmdbClient:
                     log.debug("TMDB search hit: %r -> ID %d", title, tmdb_id)
                 break
             # Try the alternate content type (misclassified episodes, etc.)
-            tmdb_id = self._search(variant, alt_type)
+            tmdb_id = self._ranked_search(variant, alt_type, hints)
             if tmdb_id is not None:
                 content_type = alt_type
                 log.debug("TMDB search hit via alt type: %r -> %r (%s) -> ID %d", title, variant, alt_type, tmdb_id)

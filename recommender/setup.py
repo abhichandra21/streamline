@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -15,8 +16,13 @@ from recommender.ingestion.prime import parse as parse_prime
 from recommender.ingestion.apple_tv import parse as parse_apple_tv
 from recommender.ingestion.manual import parse as parse_manual
 from recommender.signals import compute_scores
-from recommender.tmdb_client import TmdbClient
-from recommender.enricher import enrich_batch
+from recommender.tmdb_client import TmdbClient, TmdbMetadata, MatchHints
+from recommender.enricher import (
+    enrich_batch,
+    enrichment_key,
+    enrichment_key_from_parts,
+    is_identity_enrichment_index,
+)
 from recommender.taste_profile_builder import build as build_taste_profile
 from recommender.llm import create_client
 from recommender import watch_index as wi
@@ -41,6 +47,209 @@ def _compute_file_sha256(path: str) -> str:
         while chunk := f.read(8192):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _title_keyed_enrichments(
+    raw_enrichments: dict[str, str],
+    watch_entries: list[dict],
+    metadata: dict,
+) -> dict[str, str]:
+    """Return the title-keyed view expected by taste_profile_builder.build().
+
+    metadata may be keyed by title string or (title, content_type) tuple.
+    """
+    if not is_identity_enrichment_index(raw_enrichments):
+        return raw_enrichments
+
+    title_keyed: dict[str, str] = {}
+
+    # Works in refresh-profile-only mode, where metadata may be empty but watch_index exists.
+    for entry in watch_entries:
+        title = entry.get("title", "")
+        if not title:
+            continue
+        key = enrichment_key_from_parts(
+            entry.get("content_type"),
+            entry.get("tmdb_id"),
+            title,
+        )
+        if key in raw_enrichments:
+            title_keyed[title] = raw_enrichments[key]
+
+    # Works in refresh-data mode, where metadata has just been rebuilt.
+    for meta_key, meta in metadata.items():
+        display_title = meta_key[0] if isinstance(meta_key, tuple) else meta_key
+        key = enrichment_key(meta)
+        if key in raw_enrichments:
+            title_keyed[display_title] = raw_enrichments[key]
+
+    return title_keyed
+
+
+def _normalize_audit_title(title: str) -> str:
+    title = title.lower()
+    title = re.sub(r'\s*\([^)]*\)', '', title)
+    return title.strip()
+
+
+def _cache_title(cache_path: Path) -> str:
+    try:
+        raw = json.loads(cache_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        log.debug("Unable to inspect TMDB cache %s: %s", cache_path, exc)
+        return ""
+    return raw.get("name") or raw.get("title") or ""
+
+
+def _titles_are_compatible(index_title: str, cache_title: str) -> bool:
+    index_norm = _normalize_audit_title(index_title)
+    cache_norm = _normalize_audit_title(cache_title)
+    if not index_norm or not cache_norm:
+        return False
+    if index_norm == cache_norm:
+        return True
+    if len(cache_norm) < 4:
+        return False
+    return cache_norm in index_norm
+
+
+def _build_hints_map(events: list) -> dict[tuple[str, str], MatchHints]:
+    """Build per-title MatchHints from source event data."""
+    hints_map: dict[tuple[str, str], MatchHints] = {}
+    for e in events:
+        key_title = e.series_name if e.content_type == 'tv' else e.title
+        map_key = (key_title, e.content_type)
+        if map_key in hints_map:
+            continue
+
+        release_year = getattr(e, 'release_year_hint', None)
+
+        runtime_minutes = None
+        runtime_is_exact = False
+
+        if e.platform == 'apple_tv' and e.total_duration:
+            runtime_minutes = int(e.total_duration.total_seconds() / 60)
+            runtime_is_exact = True
+        elif e.platform in ('netflix', 'prime') and e.content_type == 'movie':
+            if e.watched_duration and e.watched_duration.total_seconds() >= 3600:
+                runtime_minutes = int(e.watched_duration.total_seconds() / 60)
+                runtime_is_exact = False
+        # Do not use manual default durations as runtime hints (they are synthetic)
+
+        if release_year or runtime_minutes:
+            hints_map[map_key] = MatchHints(
+                release_year=release_year,
+                runtime_minutes=runtime_minutes,
+                runtime_is_exact=runtime_is_exact,
+            )
+
+    return hints_map
+
+
+def _audit_cache_mismatches(
+    index, cache_dir: str, hints_map: dict | None = None,
+) -> None:
+    """Report watch-index entries whose TMDB cache is suspicious.
+
+    Checks: content-type mismatch, title mismatch, year mismatch,
+    runtime mismatch, and weak matches (no poster, zero votes).
+    """
+    if hints_map is None:
+        hints_map = {}
+
+    mismatched = []
+    title_mismatches = []
+    year_mismatches = []
+    runtime_mismatches = []
+    weak_matches = []
+    missing = []
+
+    for e in index.entries:
+        tmdb_id = e.get("tmdb_id")
+        ct = e.get("content_type", "movie")
+        if not tmdb_id:
+            continue
+        cache_path = Path(cache_dir) / ct / f"{tmdb_id}.json"
+        if cache_path.exists():
+            try:
+                raw = json.loads(cache_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            cache_title = raw.get("name") or raw.get("title") or ""
+            if cache_title and not _titles_are_compatible(e["title"], cache_title):
+                title_mismatches.append((e["title"], ct, tmdb_id, cache_title))
+
+            # Year mismatch check
+            hints = hints_map.get((e["title"], ct))
+            if hints and hints.release_year:
+                date_str = raw.get("first_air_date") if ct == "tv" else raw.get("release_date")
+                if date_str and len(date_str) >= 4:
+                    cache_year = int(date_str[:4])
+                    if abs(cache_year - hints.release_year) > 2:
+                        year_mismatches.append((
+                            e["title"], ct, tmdb_id, cache_title,
+                            hints.release_year, cache_year,
+                        ))
+
+            # Runtime mismatch check
+            if hints and hints.runtime_minutes:
+                if ct == "tv":
+                    runtimes = raw.get("episode_run_time", [])
+                    cache_runtime = runtimes[0] if runtimes else None
+                else:
+                    cache_runtime = raw.get("runtime")
+                if cache_runtime and cache_runtime > 0 and hints.runtime_minutes > 0:
+                    ratio = min(cache_runtime, hints.runtime_minutes) / max(cache_runtime, hints.runtime_minutes)
+                    if ratio < 0.7:
+                        runtime_mismatches.append((
+                            e["title"], ct, tmdb_id, cache_title,
+                            hints.runtime_minutes, cache_runtime,
+                        ))
+
+            # Weak match check
+            poster = raw.get("poster_path")
+            vote_count = raw.get("vote_count", 0)
+            popularity = raw.get("popularity", 0)
+            if not poster and vote_count == 0 and popularity < 2:
+                weak_matches.append((e["title"], ct, tmdb_id, cache_title))
+
+            continue
+
+        alt_ct = "movie" if ct == "tv" else "tv"
+        alt_path = Path(cache_dir) / alt_ct / f"{tmdb_id}.json"
+        if alt_path.exists():
+            mismatched.append((e["title"], ct, alt_ct, tmdb_id))
+        else:
+            missing.append((e["title"], ct, tmdb_id))
+
+    def _report(label, items, formatter, limit=10):
+        if not items:
+            return
+        console.print(f"\n  [yellow]{len(items)} {label} (consider adding overrides):[/yellow]")
+        for item in items[:limit]:
+            console.print(f"    {formatter(item)}")
+        if len(items) > limit:
+            console.print(f"    ... and {len(items) - limit} more")
+
+    _report("content-type cache mismatches",
+            mismatched,
+            lambda x: f"{x[0]} — index says {x[1]}, cache at {x[2]}/{x[3]}")
+    _report("title mismatches",
+            title_mismatches,
+            lambda x: f"{x[0]} -> {x[1]}/{x[2]} cached as {x[3]}")
+    _report("year mismatches",
+            year_mismatches,
+            lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]}): source year {x[4]}, cached year {x[5]}")
+    _report("runtime mismatches (>30% off)",
+            runtime_mismatches,
+            lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]}): source {x[4]}min, cached {x[5]}min")
+    _report("weak TMDB matches (no poster, zero votes)",
+            weak_matches,
+            lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]})")
+
+    if missing:
+        log.debug("%d entries with no TMDB cache at all", len(missing))
 
 
 def _load_platform_events_by_provider(
@@ -217,7 +426,9 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
 
     if not refresh_data and index_path.exists():
         console.print("\nWatch index exists, skipping data fetch (use --refresh-data to rebuild).")
-        enrichments = json.loads(enrichments_index_path.read_text()) if enrichments_index_path.exists() else {}
+        raw_enrichments = json.loads(enrichments_index_path.read_text()) if enrichments_index_path.exists() else {}
+        index = wi.load(config.WATCH_INDEX_PATH)
+        enrichments = _title_keyed_enrichments(raw_enrichments, index.entries, metadata)
     else:
         console.print("\nFetching TMDB metadata...")
         tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
@@ -227,10 +438,10 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         if title_overrides:
             console.print(f"  Loaded {len(title_overrides)} title overrides")
 
-        title_type: dict[str, str] = {}
+        title_type: dict[tuple[str, str], str] = {}
         for e in events:
             key = e.series_name if e.content_type == 'tv' else e.title
-            title_type[key] = e.content_type
+            title_type[(key, e.content_type)] = e.content_type
 
         # Apply overrides: collect skips and content_type corrections
         skip_titles: set[str] = set()
@@ -257,12 +468,15 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
             title_type = {}
             for e in events:
                 key = e.series_name if e.content_type == 'tv' else e.title
-                title_type[key] = e.content_type
+                title_type[(key, e.content_type)] = e.content_type
+
+        # Build source hints for TMDB candidate ranking
+        hints_map = _build_hints_map(events)
 
         metadata = {}
         skipped = len(skip_titles)
         with console.status("[bold magenta]Fetching TMDB metadata...[/bold magenta]", spinner="dots"):
-            for i, (title, ct) in enumerate(title_type.items()):
+            for i, ((title, _), ct) in enumerate(title_type.items()):
                 if title in skip_titles:
                     continue
                 # Check overrides
@@ -274,23 +488,25 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                     if override.get("tmdb_id"):
                         cached = tmdb._load_cache(ct, override["tmdb_id"])
                         if cached:
-                            metadata[title] = tmdb._parse_metadata(cached, ct)
+                            metadata[(title, ct)] = tmdb._parse_metadata(cached, ct)
                         else:
                             try:
                                 data = tmdb._fetch_details(override["tmdb_id"], ct)
                                 tmdb._save_cache(ct, override["tmdb_id"], data)
-                                metadata[title] = tmdb._parse_metadata(data, ct)
+                                metadata[(title, ct)] = tmdb._parse_metadata(data, ct)
                             except Exception as exc:
                                 log.warning("Override TMDB fetch failed for %s (ID %d): %s",
                                             title, override["tmdb_id"], exc)
                     else:
-                        meta = tmdb.get_metadata(search_title, ct)
+                        hints = hints_map.get((title, ct))
+                        meta = tmdb.get_metadata(search_title, ct, hints=hints)
                         if meta:
-                            metadata[title] = meta
+                            metadata[(title, ct)] = meta
                 else:
-                    meta = tmdb.get_metadata(title, ct)
+                    hints = hints_map.get((title, ct))
+                    meta = tmdb.get_metadata(title, ct, hints=hints)
                     if meta:
-                        metadata[title] = meta
+                        metadata[(title, ct)] = meta
                 if (i + 1) % 50 == 0:
                     console.print(f"  {i+1}/{len(title_type)} titles processed...")
         console.print(f"  {len(metadata)} titles with TMDB metadata")
@@ -306,6 +522,9 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         unmatched = [e for e in index.entries if not e.get("tmdb_id")]
         ov.report_unmatched(unmatched, config.OVERRIDES_PATH)
 
+        # Audit: report cache mismatches (wrong TMDB match candidates)
+        _audit_cache_mismatches(index, config.CACHE_DIR, hints_map)
+
         # Clean up stale cache files for removed/deduped entries
         removed = wi.cleanup_stale_cache(index, config.ENRICHMENT_CACHE_DIR, config.PROVIDERS_CACHE_DIR)
         total_removed = sum(removed.values())
@@ -316,9 +535,11 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                           f"{removed['providers']} provider files)")
 
         with console.status(f"[bold magenta]Enriching {len(metadata)} titles with Claude Haiku...[/bold magenta]", spinner="dots"):
-            enrichments = enrich_batch(metadata, config.ENRICHMENT_CACHE_DIR, llm)
-        enrichments_index_path.write_text(json.dumps(enrichments))
-        console.print(f"  {len(enrichments)} descriptions cached → {config.ENRICHMENT_CACHE_DIR}")
+            raw_enrichments = enrich_batch(metadata, config.ENRICHMENT_CACHE_DIR, llm)
+        enrichments_index_path.write_text(json.dumps(raw_enrichments))
+        console.print(f"  {len(raw_enrichments)} descriptions cached → {config.ENRICHMENT_CACHE_DIR}")
+
+        enrichments = _title_keyed_enrichments(raw_enrichments, index.entries, metadata)
 
     profile_path = Path(config.TASTE_PROFILE_PATH)
     if refresh_profile or not profile_path.exists():

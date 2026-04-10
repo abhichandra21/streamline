@@ -27,6 +27,7 @@ from recommender.event_store import load_events
 from recommender.jobs import registry as job_registry
 from recommender.llm import create_client
 from recommender.log import setup_logging
+from recommender.enricher import enrichment_key_from_parts
 from recommender.query_engine import RecommendContext, ask
 from recommender.tmdb_client import TmdbClient
 
@@ -164,6 +165,29 @@ def _norm_title(title: str) -> str:
     title = title.lower()
     title = re.sub(r'\s*\([^)]*\)', '', title)
     return title.strip()
+
+
+def _title_matches_legacy_entry(entry_title: str, meta_title: str) -> bool:
+    """Return True when alternate-type metadata is title-compatible with an old index entry."""
+    entry_norm = _norm_title(entry_title)
+    meta_norm = _norm_title(meta_title)
+    if not entry_norm or not meta_norm:
+        return False
+    if entry_norm == meta_norm:
+        return True
+    if len(meta_norm) < 4:
+        return False
+    return meta_norm in entry_norm
+
+
+def _can_use_alternate_title_cache(watch_index, tmdb_id: int, alt_ct: str, alt_title: str) -> bool:
+    """Allow alternate-type title details only for typed or title-compatible legacy entries."""
+    if (alt_ct, tmdb_id) in getattr(watch_index, "tmdb_keys", set()):
+        return True
+    return any(
+        e.get("tmdb_id") == tmdb_id and _title_matches_legacy_entry(e.get("title", ""), alt_title)
+        for e in getattr(watch_index, "entries", [])
+    )
 
 
 def _load_enrichments() -> dict[str, str]:
@@ -388,7 +412,12 @@ def history() -> str:
             "title": e["title"],
             "content_type": e.get("content_type", ""),
             "tmdb_id": e.get("tmdb_id"),
-            "description": enrichments.get(e["title"], ""),
+            "description": (
+                enrichments.get(
+                    enrichment_key_from_parts(e.get("content_type", "movie"), e.get("tmdb_id"), e["title"]),
+                )
+                or enrichments.get(e["title"], "")
+            ),
             "poster": _get_poster_url(e.get("tmdb_id", 0), e.get("content_type", "movie"), "w185")
                       if e.get("tmdb_id") else None,
             "rating": us.get_rating(m),
@@ -499,7 +528,26 @@ def title_detail(tmdb_id: int) -> str:
     except Exception:
         pass
 
-    description = enrichments.get(meta.title, "") if meta else ""
+    # Fallback: if the requested type has no cache, check if the watch index
+    # has this tmdb_id under the alternate type (content-type mismatch fix).
+    if meta is None:
+        alt_ct = "movie" if ct == "tv" else "tv"
+        try:
+            alt_meta = ctx.tmdb_client.get_cached_by_id(tmdb_id, alt_ct)
+        except Exception:
+            alt_meta = None
+        if alt_meta:
+            if _can_use_alternate_title_cache(ctx.watch_index, tmdb_id, alt_ct, alt_meta.title):
+                meta = alt_meta
+                ct = alt_ct
+
+    description = ""
+    enrichment_path = Path(config.ENRICHMENT_CACHE_DIR) / ct / f"{tmdb_id}.txt"
+    if enrichment_path.exists():
+        description = enrichment_path.read_text()
+    elif meta:
+        key = enrichment_key_from_parts(ct, tmdb_id, meta.title)
+        description = enrichments.get(key) or enrichments.get(meta.title, "")
     poster = _get_poster_url(tmdb_id, ct, "w500") if meta else None
     overview = ""
     if meta:
@@ -511,8 +559,7 @@ def title_detail(tmdb_id: int) -> str:
     state = _title_state(meta.title if meta else "", ct, us, tmdb_id if meta else None)
     # Also count watch-index entries (imported from Netflix/Prime/etc.) as archived
     if not state["in_archive"] and meta:
-        wi_ctx = _get_context()
-        if tmdb_id in wi_ctx.watch_index.tmdb_ids:
+        if (ct, tmdb_id) in ctx.watch_index.tmdb_keys:
             state["in_archive"] = True
     return render_template(
         "title.html", meta=meta, description=description, overview=overview,

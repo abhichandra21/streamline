@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .ingestion.base import WatchEvent
+from .enricher import enrichment_key_from_parts, is_identity_enrichment_index
 from .tmdb_client import TmdbMetadata
 
 log = logging.getLogger("recommender.index")
@@ -20,63 +21,76 @@ def _normalize(title: str) -> str:
 @dataclass
 class WatchIndex:
     tmdb_ids: set[int]
+    tmdb_keys: set[tuple[str, int]]
     normalized_titles: set[tuple[str, str]]
     entries: list[dict]
 
     def is_watched(self, candidate: TmdbMetadata) -> bool:
-        """Check by TMDB ID first; fall back to content-type-aware normalized title match."""
-        if candidate.tmdb_id and candidate.tmdb_id in self.tmdb_ids:
+        """Check by typed TMDB identity first; fall back to content-type-aware normalized title match."""
+        if candidate.tmdb_id and (candidate.content_type, candidate.tmdb_id) in self.tmdb_keys:
             return True
         return (_normalize(candidate.title), candidate.content_type) in self.normalized_titles
 
 
-def build(events: list[WatchEvent], metadata: dict[str, TmdbMetadata]) -> WatchIndex:
-    """Build exclusion index from watch events. metadata provides TMDB IDs."""
+def build(events: list[WatchEvent], metadata: dict) -> WatchIndex:
+    """Build exclusion index from watch events. metadata provides TMDB IDs.
+
+    metadata may be keyed by title string or by (title, content_type) tuple.
+    Typed keys are checked first to support dual-existence titles (e.g. "Breathe"
+    existing as both TV and movie).
+    """
     tmdb_ids: set[int] = set()
+    tmdb_keys: set[tuple[str, int]] = set()
     normalized_titles: set[tuple[str, str]] = set()
     entries: list[dict] = []
-    seen_keys: set[str] = set()
+    seen_keys: set[tuple[str, str]] = set()
 
     for e in events:
         key = e.series_name if e.content_type == 'tv' else e.title
         normalized_titles.add((_normalize(e.title), e.content_type))
         if e.content_type == 'tv':
             normalized_titles.add((_normalize(e.series_name), e.content_type))
-        if key not in seen_keys:
-            seen_keys.add(key)
-            meta = metadata.get(key)
+        dedup_key = (key, e.content_type)
+        if dedup_key not in seen_keys:
+            seen_keys.add(dedup_key)
+            meta = metadata.get((key, e.content_type)) or metadata.get(key)
             tmdb_id = meta.tmdb_id if meta else 0
+            ct = meta.content_type if meta else e.content_type
             if tmdb_id:
                 tmdb_ids.add(tmdb_id)
+                tmdb_keys.add((ct, tmdb_id))
             entries.append({
                 "tmdb_id": tmdb_id,
                 "title": key,
-                "content_type": e.content_type,
+                "content_type": ct,
             })
 
-    index = WatchIndex(tmdb_ids=tmdb_ids, normalized_titles=normalized_titles, entries=entries)
+    index = WatchIndex(tmdb_ids=tmdb_ids, tmdb_keys=tmdb_keys,
+                       normalized_titles=normalized_titles, entries=entries)
     return deduplicate(index)
 
 
 def deduplicate(index: WatchIndex) -> WatchIndex:
-    """Merge near-duplicate entries using TMDB ID and fuzzy title matching.
+    """Merge near-duplicate entries using typed TMDB identity and fuzzy title matching.
 
-    1. Entries with the same TMDB ID are merged (keep first occurrence).
+    1. Entries with the same (content_type, tmdb_id) are merged (keep first occurrence).
     2. Entries with no TMDB ID are fuzzy-matched against each other (threshold 90).
     """
     from rapidfuzz import fuzz
 
-    # Phase 1: merge by TMDB ID
-    seen_ids: dict[int, int] = {}  # tmdb_id -> index in deduped
+    # Phase 1: merge by typed TMDB identity (content_type, tmdb_id)
+    seen_keys: dict[tuple[str, int], int] = {}
     deduped: list[dict] = []
     for e in index.entries:
         tmdb_id = e.get("tmdb_id", 0)
-        if tmdb_id and tmdb_id in seen_ids:
-            log.debug("Dedup by TMDB ID: %r merged with %r (ID %d)",
-                       e["title"], deduped[seen_ids[tmdb_id]]["title"], tmdb_id)
-            continue
+        ct = e.get("content_type", "movie")
         if tmdb_id:
-            seen_ids[tmdb_id] = len(deduped)
+            typed_key = (ct, tmdb_id)
+            if typed_key in seen_keys:
+                log.debug("Dedup by typed TMDB ID: %r merged with %r (%s/%d)",
+                           e["title"], deduped[seen_keys[typed_key]]["title"], ct, tmdb_id)
+                continue
+            seen_keys[typed_key] = len(deduped)
         deduped.append(e)
 
     # Phase 2: fuzzy dedup for entries without TMDB ID
@@ -104,11 +118,16 @@ def deduplicate(index: WatchIndex) -> WatchIndex:
 
     # Rebuild sets from deduped entries
     tmdb_ids = {e["tmdb_id"] for e in final if e.get("tmdb_id")}
+    tmdb_keys = {
+        (e.get("content_type", "movie"), e["tmdb_id"])
+        for e in final if e.get("tmdb_id")
+    }
     normalized_titles = set()
     for e in final:
         normalized_titles.add((_normalize(e["title"]), e.get("content_type", "movie")))
 
-    return WatchIndex(tmdb_ids=tmdb_ids, normalized_titles=normalized_titles, entries=final)
+    return WatchIndex(tmdb_ids=tmdb_ids, tmdb_keys=tmdb_keys,
+                      normalized_titles=normalized_titles, entries=final)
 
 
 def cleanup_stale_cache(
@@ -151,7 +170,22 @@ def cleanup_stale_cache(
     if index_json.exists():
         enrichments = json.loads(index_json.read_text())
         before = len(enrichments)
-        enrichments = {k: v for k, v in enrichments.items() if k in valid_titles}
+        if is_identity_enrichment_index(enrichments):
+            valid_keys = {
+                enrichment_key_from_parts(
+                    e.get("content_type", "movie"),
+                    e.get("tmdb_id"),
+                    e.get("title", ""),
+                )
+                for e in index.entries
+                if e.get("title")
+            }
+            enrichments = {
+                k: v for k, v in enrichments.items()
+                if k in valid_keys or k.startswith("unknown/")
+            }
+        else:
+            enrichments = {k: v for k, v in enrichments.items() if k in valid_titles}
         after = len(enrichments)
         if after < before:
             index_json.write_text(json.dumps(enrichments))
@@ -193,5 +227,10 @@ def save(index: WatchIndex, path: str) -> None:
 def load(path: str) -> WatchIndex:
     entries = json.loads(Path(path).read_text())
     tmdb_ids = {e["tmdb_id"] for e in entries if e.get("tmdb_id")}
+    tmdb_keys = {
+        (e.get("content_type", "movie"), e["tmdb_id"])
+        for e in entries if e.get("tmdb_id")
+    }
     normalized_titles = {(_normalize(e["title"]), e.get("content_type", "movie")) for e in entries}
-    return WatchIndex(tmdb_ids=tmdb_ids, normalized_titles=normalized_titles, entries=entries)
+    return WatchIndex(tmdb_ids=tmdb_ids, tmdb_keys=tmdb_keys,
+                      normalized_titles=normalized_titles, entries=entries)

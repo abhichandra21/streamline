@@ -92,7 +92,7 @@ def make_meta(title, tmdb_id=1, content_type="tv", genres=None, vote_avg=8.0):
 
 def test_rank_candidates_returns_recommendations():
     candidates = [make_meta("Broadchurch", tmdb_id=1), make_meta("Hinterland", tmdb_id=2)]
-    enrichments = {"Broadchurch": "Dark coastal crime.", "Hinterland": "Welsh noir."}
+    enrichments = {"tv/1": "Dark coastal crime.", "tv/2": "Welsh noir."}
     ranked = [
         {"title": "Broadchurch", "explanation": "Fits your taste.", "score": 0.92},
         {"title": "Hinterland", "explanation": "Similar tone.", "score": 0.85},
@@ -107,7 +107,7 @@ def test_rank_candidates_returns_recommendations():
 
 def test_rank_candidates_uses_reason_role():
     candidates = [make_meta("Broadchurch")]
-    enrichments = {"Broadchurch": "Desc."}
+    enrichments = {"tv/1": "Desc."}
     ranked = [{"title": "Broadchurch", "explanation": "Good.", "score": 0.9}]
     client = make_mock_llm(json.dumps(ranked))
     rank_candidates("query", "profile", candidates, enrichments, client)
@@ -117,7 +117,7 @@ def test_rank_candidates_uses_reason_role():
 
 def test_rank_candidates_skips_unknown_titles():
     candidates = [make_meta("Broadchurch")]
-    enrichments = {"Broadchurch": "Desc."}
+    enrichments = {"tv/1": "Desc."}
     ranked = [
         {"title": "Broadchurch", "explanation": "Good.", "score": 0.9},
         {"title": "Phantom Title", "explanation": "Hallucinated.", "score": 0.95},
@@ -153,14 +153,14 @@ def test_ask_excludes_watched_titles():
 
     ctx = RecommendContext(
         taste_profile="taste profile text",
-        watch_index=WatchIndex(tmdb_ids={1}, normalized_titles={("broadchurch", "tv")}, entries=[]),
+        watch_index=WatchIndex(tmdb_ids={1}, tmdb_keys={("tv", 1)}, normalized_titles={("broadchurch", "tv")}, entries=[]),
         events=[],
         tmdb_client=mock_tmdb,
         llm=mock_llm,
         cache_dir="/tmp/test_cache",
     )
 
-    with patch('recommender.query_engine.enrich_batch', return_value={"Hinterland": "Welsh noir."}):
+    with patch('recommender.query_engine.enrich_batch', return_value={"tv/2": "Welsh noir."}):
         results = ask("British crime drama", ctx)
 
     titles = [r.title for r in results]
@@ -173,7 +173,7 @@ def test_recommend_context_events_eager():
     mock_llm = make_mock_llm("")
     ctx = RecommendContext(
         taste_profile="profile",
-        watch_index=WatchIndex(tmdb_ids=set(), normalized_titles=set(), entries=[]),
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
         events=[],
         tmdb_client=MagicMock(),
         llm=mock_llm,
@@ -194,7 +194,7 @@ def test_recommend_context_events_lazy_loads_once():
     mock_llm = make_mock_llm("")
     ctx = RecommendContext(
         taste_profile="profile",
-        watch_index=WatchIndex(tmdb_ids=set(), normalized_titles=set(), entries=[]),
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
         tmdb_client=MagicMock(),
         llm=mock_llm,
         cache_dir="/tmp",
@@ -212,7 +212,7 @@ def test_recommend_context_events_no_loader_returns_empty():
     mock_llm = make_mock_llm("")
     ctx = RecommendContext(
         taste_profile="profile",
-        watch_index=WatchIndex(tmdb_ids=set(), normalized_titles=set(), entries=[]),
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
         tmdb_client=MagicMock(),
         llm=mock_llm,
         cache_dir="/tmp",
@@ -261,7 +261,7 @@ def test_user_state_excludes_dismissed_and_manual_archive():
 
     ctx = RecommendContext(
         taste_profile="taste profile text",
-        watch_index=WatchIndex(tmdb_ids=set(), normalized_titles=set(), entries=[]),
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
         events=[],
         tmdb_client=mock_tmdb,
         llm=mock_llm,
@@ -269,7 +269,7 @@ def test_user_state_excludes_dismissed_and_manual_archive():
         user_state=FakeUserState(),
     )
 
-    with patch("recommender.query_engine.enrich_batch", return_value={"Fresh Pick": "Eligible"}):
+    with patch("recommender.query_engine.enrich_batch", return_value={"tv/333": "Eligible"}):
         results = ask("British crime drama", ctx)
 
     titles = [r.title for r in results]

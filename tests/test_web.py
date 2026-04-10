@@ -209,6 +209,121 @@ class TestStatusObservability:
         assert "ingestion_errors" not in payload
 
 
+class TestTitleDetailFallback:
+    @patch("recommender.web._load_enrichments", return_value={})
+    @patch("recommender.web._load_user_state")
+    @patch("recommender.web._get_context")
+    def test_title_detail_rejects_unrelated_alternate_type_cache(
+        self, mock_ctx, mock_user_state, _mock_enrichments, client
+    ):
+        from recommender.tmdb_client import TmdbMetadata
+
+        user_state = MagicMock()
+        user_state.is_manually_watched.return_value = False
+        user_state.is_in_watchlist.return_value = False
+        user_state.is_dismissed.return_value = False
+        user_state.get_rating.return_value = None
+        mock_user_state.return_value = user_state
+
+        alt_meta = TmdbMetadata(
+            tmdb_id=55063,
+            content_type="tv",
+            title="Man on the Moon: The Epic Journey of Apollo 11",
+        )
+        tmdb_client = MagicMock()
+        tmdb_client.get_cached_by_id.side_effect = lambda tmdb_id, ct: alt_meta if ct == "tv" else None
+
+        mock_ctx.return_value = MagicMock(
+            tmdb_client=tmdb_client,
+            watch_index=MagicMock(
+                tmdb_ids={55063},
+                tmdb_keys={("movie", 55063)},
+                entries=[{"tmdb_id": 55063, "title": "Apollo 11", "content_type": "movie"}],
+            ),
+        )
+
+        resp = client.get("/title/55063?type=movie")
+
+        html = resp.data.decode()
+        assert resp.status_code == 200
+        assert "Title not found in cache" in html
+        assert "Man on the Moon" not in html
+
+    @patch("recommender.web._load_enrichments", return_value={})
+    @patch("recommender.web._load_user_state")
+    @patch("recommender.web._get_context")
+    def test_title_detail_accepts_episode_title_alternate_type_cache(
+        self, mock_ctx, mock_user_state, _mock_enrichments, client
+    ):
+        from recommender.tmdb_client import TmdbMetadata
+
+        user_state = MagicMock()
+        user_state.is_manually_watched.return_value = False
+        user_state.is_in_watchlist.return_value = False
+        user_state.is_dismissed.return_value = False
+        user_state.get_rating.return_value = None
+        mock_user_state.return_value = user_state
+
+        alt_meta = TmdbMetadata(tmdb_id=66732, content_type="tv", title="Stranger Things")
+        tmdb_client = MagicMock()
+        tmdb_client.get_cached_by_id.side_effect = lambda tmdb_id, ct: alt_meta if ct == "tv" else None
+
+        mock_ctx.return_value = MagicMock(
+            tmdb_client=tmdb_client,
+            watch_index=MagicMock(
+                tmdb_ids={66732},
+                tmdb_keys={("movie", 66732)},
+                entries=[{
+                    "tmdb_id": 66732,
+                    "title": "Stranger Things: Stranger Things 4: Chapter One: The Hellfire Club (Episode 1)",
+                    "content_type": "movie",
+                }],
+            ),
+        )
+
+        resp = client.get("/title/66732?type=movie")
+
+        html = resp.data.decode()
+        assert resp.status_code == 200
+        assert "Stranger Things" in html
+        assert "Title not found in cache" not in html
+
+    @patch("recommender.web._load_enrichments", return_value={})
+    @patch("recommender.web._load_user_state")
+    @patch("recommender.web._get_context")
+    def test_title_detail_accepts_exact_short_title_alternate_type_cache(
+        self, mock_ctx, mock_user_state, _mock_enrichments, client
+    ):
+        from recommender.tmdb_client import TmdbMetadata
+
+        user_state = MagicMock()
+        user_state.is_manually_watched.return_value = False
+        user_state.is_in_watchlist.return_value = False
+        user_state.is_dismissed.return_value = False
+        user_state.get_rating.return_value = None
+        mock_user_state.return_value = user_state
+
+        alt_meta = TmdbMetadata(tmdb_id=11, content_type="tv", title="Up")
+        tmdb_client = MagicMock()
+        tmdb_client.get_cached_by_id.side_effect = lambda tmdb_id, ct: alt_meta if ct == "tv" else None
+
+        mock_ctx.return_value = MagicMock(
+            tmdb_client=tmdb_client,
+            watch_index=MagicMock(
+                tmdb_ids={11},
+                tmdb_keys={("movie", 11)},
+                entries=[{"tmdb_id": 11, "title": "Up", "content_type": "movie"}],
+            ),
+        )
+
+        resp = client.get("/title/11?type=movie")
+
+        html = resp.data.decode()
+        assert resp.status_code == 200
+        assert "Up" in html
+        assert "Title not found in cache" not in html
+
+
 # ── /recommend progressive enhancement ────────────────────────────────────────
 
 class TestRecommendProgressive:

@@ -49,7 +49,7 @@ def test_enrich_fallback_on_api_error(tmp_path):
 
 def test_enrich_unknown_title_uses_slug_cache(tmp_path):
     meta = TmdbMetadata(
-        tmdb_id=0, content_type="movie", title="My Unknown Film",
+        tmdb_id=None, content_type="movie", title="My Unknown Film",
         genres=["Drama"], keywords=[], cast=[],
         original_language="en", vote_average=0.0, vote_count=0,
     )
@@ -65,6 +65,36 @@ def test_enrich_batch_skips_failed(tmp_path):
     client = make_mock_llm("")
     client.generate.side_effect = ["Good description.", Exception("fail")]
     result = enrich_batch({"Show A": meta1, "Show B": meta2}, str(tmp_path), client)
-    assert "Show A" in result
-    assert "Show B" in result
-    assert result["Show A"] == "Good description."
+    assert "tv/1" in result
+    assert "tv/2" in result
+    assert result["tv/1"] == "Good description."
+
+
+def test_enrichment_key_for_movie():
+    from recommender.enricher import enrichment_key
+    meta = TmdbMetadata(
+        tmdb_id=601337, content_type="movie", title="83",
+        genres=["Drama"], keywords=[], cast=[],
+        original_language="en", vote_average=0.0, vote_count=0,
+    )
+    assert enrichment_key(meta) == "movie/601337"
+
+
+def test_enrichment_key_from_parts_unknown():
+    from recommender.enricher import enrichment_key_from_parts
+    assert enrichment_key_from_parts("movie", None, "Some Title!") == "unknown/some-title"
+
+
+def test_is_identity_enrichment_index_true():
+    from recommender.enricher import is_identity_enrichment_index
+    assert is_identity_enrichment_index({"movie/601337": "Desc", "tv/1396": "Desc2"})
+
+
+def test_is_identity_enrichment_index_false_for_slash_title():
+    from recommender.enricher import is_identity_enrichment_index
+    assert not is_identity_enrichment_index({"Frost/Nixon": "Desc"})
+
+
+def test_is_identity_enrichment_index_empty():
+    from recommender.enricher import is_identity_enrichment_index
+    assert is_identity_enrichment_index({})

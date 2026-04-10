@@ -9,7 +9,7 @@ from .tmdb_client import TmdbMetadata
 
 def compute_scores(
     events: list[WatchEvent],
-    metadata: dict[str, TmdbMetadata],
+    metadata: dict[str | tuple[str, str], TmdbMetadata],
     recency_half_life_days: int = 90,
 ) -> dict[str, float]:
     """
@@ -27,7 +27,7 @@ def compute_scores(
     scores: dict[str, float] = {}
     for key, evts in grouped.items():
         content_type = evts[0].content_type
-        meta = metadata.get(key)
+        meta = metadata.get((key, content_type)) or metadata.get(key)
 
         # Runtime
         if meta and meta.runtime_minutes:
