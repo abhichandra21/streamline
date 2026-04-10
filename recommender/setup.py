@@ -85,6 +85,36 @@ def _title_keyed_enrichments(
     return title_keyed
 
 
+def _audit_cache_mismatches(index, cache_dir: str) -> None:
+    """Report watch-index entries whose TMDB cache is under the wrong content type."""
+    mismatched = []
+    missing = []
+    for e in index.entries:
+        tmdb_id = e.get("tmdb_id")
+        ct = e.get("content_type", "movie")
+        if not tmdb_id:
+            continue
+        cache_path = Path(cache_dir) / ct / f"{tmdb_id}.json"
+        if cache_path.exists():
+            continue
+        alt_ct = "movie" if ct == "tv" else "tv"
+        alt_path = Path(cache_dir) / alt_ct / f"{tmdb_id}.json"
+        if alt_path.exists():
+            mismatched.append((e["title"], ct, alt_ct, tmdb_id))
+        else:
+            missing.append((e["title"], ct, tmdb_id))
+
+    if mismatched:
+        console.print(f"\n  [yellow]{len(mismatched)} entries with content-type cache mismatch "
+                      f"(consider adding overrides):[/yellow]")
+        for title, idx_ct, cache_ct, tid in mismatched[:10]:
+            console.print(f"    {title} — index says {idx_ct}, cache at {cache_ct}/{tid}")
+        if len(mismatched) > 10:
+            console.print(f"    ... and {len(mismatched) - 10} more")
+    if missing:
+        log.debug("%d entries with no TMDB cache at all", len(missing))
+
+
 def _load_platform_events_by_provider(
     fail_on_error: bool = True,
     emit_console: bool = True,
@@ -349,6 +379,9 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         # Report unmatched titles
         unmatched = [e for e in index.entries if not e.get("tmdb_id")]
         ov.report_unmatched(unmatched, config.OVERRIDES_PATH)
+
+        # Audit: report cache mismatches (wrong TMDB match candidates)
+        _audit_cache_mismatches(index, config.CACHE_DIR)
 
         # Clean up stale cache files for removed/deduped entries
         removed = wi.cleanup_stale_cache(index, config.ENRICHMENT_CACHE_DIR, config.PROVIDERS_CACHE_DIR)
