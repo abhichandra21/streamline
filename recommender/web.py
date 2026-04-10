@@ -422,7 +422,33 @@ def history() -> str:
                       if e.get("tmdb_id") else None,
             "rating": us.get_rating(m),
         })
-    return render_template("history.html", items=items, q=q, ct_filter=ct_filter, sort=sort, total=len(entries))
+    total = len(items)
+    ALLOWED_PAGE_SIZES = (30, 60, 120)
+    try:
+        per_page = int(request.args.get("per_page", "60"))
+    except (ValueError, TypeError):
+        per_page = 60
+    if per_page not in ALLOWED_PAGE_SIZES:
+        per_page = 60
+    try:
+        page = max(1, int(request.args.get("page", "1")))
+    except (ValueError, TypeError):
+        page = 1
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    start = (page - 1) * per_page
+    paged_items = items[start : start + per_page]
+    return render_template(
+        "history.html",
+        items=paged_items,
+        q=q,
+        ct_filter=ct_filter,
+        sort=sort,
+        total=total,
+        page=page,
+        total_pages=total_pages,
+        per_page=per_page,
+    )
 
 
 @app.route("/searches")

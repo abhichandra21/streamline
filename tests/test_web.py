@@ -859,3 +859,25 @@ def test_history_includes_manual_archive_entries(client, tmp_path, monkeypatch):
 
     assert resp.status_code == 200
     assert b"Manual Show" in resp.data
+
+
+def test_history_pagination_url_encodes_query(client):
+    from unittest.mock import MagicMock, patch
+
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = [
+        {"title": f"Law & Order Case {i:02d}", "content_type": "tv", "tmdb_id": None}
+        for i in range(61)
+    ]
+
+    with patch("recommender.web._get_context", return_value=mock_ctx), \
+         patch("recommender.web._load_user_state") as mock_user_state, \
+         patch("recommender.web.user_store.list_manual_archive", return_value=[]):
+        user_state = MagicMock()
+        user_state.get_rating.return_value = None
+        mock_user_state.return_value = user_state
+        resp = client.get("/history?q=law+%26+order&per_page=30")
+
+    assert resp.status_code == 200
+    assert b"page=2" in resp.data
+    assert b"q=law+%26+order" in resp.data
