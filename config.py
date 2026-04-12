@@ -125,24 +125,48 @@ STREAMING_PLATFORMS: list[str] = _cfg.get("streaming_platforms", [])
 _paths = _cfg.get("platform_paths", {})
 
 
-def _resolve_platform_path(platform: str, default: str | None) -> str | None:
-    # Missing keys should keep repo defaults; explicit null/empty disables the source.
+def _resolve_platform_paths(platform: str, default: str | None) -> list[str]:
+    """Normalize a platform_paths entry to a list of absolute path strings.
+
+    Input shapes accepted (from config.yaml or config.local.yaml):
+      - string        -> one path (wrapped in list)
+      - list[str]     -> multiple paths
+      - null / ""     -> disabled (empty list)
+      - empty list    -> disabled (empty list)
+      - missing key   -> repo default path (wrapped in list), or empty list if no default
+
+    Returns an empty list to signal "disabled".
+    """
     if platform not in _paths:
-        return str(_ROOT / default) if default is not None else None
+        # Missing key: keep repo default if one exists.
+        if default is None:
+            return []
+        return [str(_ROOT / default)]
 
-    configured_path = _paths[platform]
-    if configured_path in (None, ""):
-        return None
+    raw = _paths[platform]
 
-    return str(_ROOT / configured_path)
+    # Explicit null or empty string disables the source.
+    if raw in (None, ""):
+        return []
+
+    # Normalize to list.
+    if isinstance(raw, str):
+        paths = [raw]
+    elif isinstance(raw, list):
+        paths = raw
+    else:
+        raise TypeError(f"platform_paths.{platform} must be a string, list, or null, got {type(raw).__name__}")
+
+    # Filter out any empty strings, then resolve against _ROOT.
+    return [str(_ROOT / p) for p in paths if p]
 
 
-PLATFORM_PATHS = {
-    "netflix": _resolve_platform_path("netflix", "data/netflix/export.zip"),
-    "prime": _resolve_platform_path("prime", "data/prime_video/Prime Video.zip"),
-    "apple_tv": _resolve_platform_path("apple_tv", "data/AppleTV/Apple Media Services Information Part 1 of 2.zip"),
-    "disney": None,
-    "hbo": None,
+PLATFORM_PATHS: dict[str, list[str]] = {
+    "netflix": _resolve_platform_paths("netflix", "data/netflix/export.zip"),
+    "prime": _resolve_platform_paths("prime", "data/prime_video/Prime Video.zip"),
+    "apple_tv": _resolve_platform_paths("apple_tv", "data/AppleTV/Apple Media Services Information Part 1 of 2.zip"),
+    "disney": [],
+    "hbo": [],
 }
 MANUAL_TV_PATH = str(_ROOT / _cfg.get("manual_tv_path", "data/manual/tv.csv"))
 MANUAL_MOVIES_PATH = str(_ROOT / _cfg.get("manual_movies_path", "data/manual/movies.csv"))

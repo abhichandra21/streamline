@@ -109,7 +109,7 @@ def test_load_context_returns_lazy_context_regardless_of_platform_paths(monkeypa
     profile_path.write_text('taste profile')
     db_path = str(tmp_path / 'streamline.db')
 
-    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': '/tmp/missing.zip', 'prime': None, 'apple_tv': None})
+    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': ['/tmp/missing.zip'], 'prime': [], 'apple_tv': []})
     monkeypatch.setattr(config, 'MANUAL_TV_PATH', None)
     monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', None)
     monkeypatch.setattr(config, 'WATCH_INDEX_PATH', str(index_path))
@@ -141,7 +141,7 @@ def test_load_context_fallback_does_not_recreate_db(monkeypatch, tmp_path):
     profile_path.write_text("taste profile")
     db_path = tmp_path / "streamline.db"
 
-    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": ["/tmp/export.zip"], "prime": [], "apple_tv": []})
     monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
     monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
     monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(index_path))
@@ -178,19 +178,19 @@ def test_resolve_platform_path_uses_default_when_key_missing(monkeypatch):
 
     monkeypatch.setattr(config, '_paths', {})
 
-    resolved = config._resolve_platform_path('netflix', 'data/netflix/export.zip')
+    resolved = config._resolve_platform_paths('netflix', 'data/netflix/export.zip')
 
-    assert resolved == str(config._ROOT / 'data/netflix/export.zip')
+    assert resolved == [str(config._ROOT / 'data/netflix/export.zip')]
 
 
 def test_resolve_platform_path_allows_explicit_disable(monkeypatch):
     import config
 
     monkeypatch.setattr(config, '_paths', {'netflix': None})
-    assert config._resolve_platform_path('netflix', 'data/netflix/export.zip') is None
+    assert config._resolve_platform_paths('netflix', 'data/netflix/export.zip') == []
 
     monkeypatch.setattr(config, '_paths', {'netflix': ''})
-    assert config._resolve_platform_path('netflix', 'data/netflix/export.zip') is None
+    assert config._resolve_platform_paths('netflix', 'data/netflix/export.zip') == []
 
 
 def test_merge_dicts_applies_local_overrides_recursively():
@@ -217,7 +217,7 @@ def test_run_ingest_only_exits_if_no_provider_zips_are_configured(monkeypatch, c
     import config
     import recommender.setup as setup
 
-    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': None, 'prime': None, 'apple_tv': None})
+    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': [], 'prime': [], 'apple_tv': []})
     monkeypatch.setattr(config, 'MANUAL_TV_PATH', 'manual-tv.csv')
     monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', 'manual-movies.csv')
     monkeypatch.setattr(setup, 'parse_manual', lambda *_args: [object()])
@@ -258,7 +258,7 @@ def test_run_ingest_only_accepts_empty_provider_export(monkeypatch, capsys, tmp_
     import config
     import recommender.setup as setup
 
-    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': '/tmp/export.zip', 'prime': None, 'apple_tv': None})
+    monkeypatch.setattr(config, 'PLATFORM_PATHS', {'netflix': ['/tmp/export.zip'], 'prime': [], 'apple_tv': []})
     monkeypatch.setattr(config, 'MANUAL_TV_PATH', None)
     monkeypatch.setattr(config, 'MANUAL_MOVIES_PATH', None)
     monkeypatch.setattr(config, 'EVENT_DB_PATH', str(tmp_path / 'streamline.db'))
@@ -604,7 +604,7 @@ def test_apple_tv_key_present_in_platform_paths():
 def test_resolve_platform_path_with_none_default_returns_none_when_key_missing(monkeypatch):
     import config
     monkeypatch.setattr(config, "_paths", {})
-    assert config._resolve_platform_path("apple_tv", None) is None
+    assert config._resolve_platform_paths("apple_tv", None) == []
 
 
 # ── 3d: config.local.yaml overrides config.yaml when both present ─────────
@@ -704,7 +704,7 @@ def test_run_ingest_only_prints_tv_and_movie_summary(monkeypatch, capsys, tmp_pa
             ),
         ]
 
-    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": ["/tmp/export.zip"], "prime": [], "apple_tv": []})
     monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
     monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
     monkeypatch.setattr(config, "EVENT_DB_PATH", str(tmp_path / "streamline.db"))
@@ -726,7 +726,7 @@ def test_run_setup_exits_with_no_watch_events_message(monkeypatch, capsys, tmp_p
 
     db_path = str(tmp_path / "streamline.db")
     monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
-    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": ["/tmp/export.zip"], "prime": [], "apple_tv": []})
     monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
     monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
     monkeypatch.setattr(config, "TMDB_API_KEY", "fake-tmdb-key")
@@ -757,7 +757,7 @@ def test_load_context_works_with_no_configured_providers(monkeypatch, tmp_path):
     profile_path.write_text("taste profile")
     db_path = tmp_path / "streamline.db"
 
-    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": None, "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": [], "prime": [], "apple_tv": []})
     monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
     monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
     monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(index_path))
@@ -795,7 +795,7 @@ def test_refresh_data_reingests_configured_exports(monkeypatch, capsys, tmp_path
 
     monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
     # Provide a non-None path so the current zip loop WOULD call the parser (making pre-fix test fail)
-    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": "/tmp/netflix_export.zip", "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": ["/tmp/netflix_export.zip"], "prime": [], "apple_tv": []})
     monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
     monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
     monkeypatch.setattr(config, "TMDB_API_KEY", "fake-tmdb-key")
@@ -856,7 +856,7 @@ def test_run_setup_zero_events_persists_imports_before_exit(monkeypatch, capsys,
 
     db_path = str(tmp_path / "streamline.db")
     monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
-    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": ["/tmp/export.zip"], "prime": [], "apple_tv": []})
     monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
     monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
     monkeypatch.setattr(config, "TMDB_API_KEY", "fake-tmdb-key")
@@ -891,7 +891,7 @@ def test_load_context_does_not_parse_zips(monkeypatch, tmp_path):
     profile_path.write_text("taste profile")
     db_path = str(tmp_path / "streamline.db")
 
-    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": ["/tmp/export.zip"], "prime": [], "apple_tv": []})
     monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
     monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
     monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(index_path))
@@ -921,7 +921,7 @@ def test_load_context_debug_log_does_not_force_events_load(monkeypatch, tmp_path
     profile_path.write_text("taste profile")
     db_path = str(tmp_path / "streamline.db")
 
-    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": None, "prime": None, "apple_tv": None})
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": [], "prime": [], "apple_tv": []})
     monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
     monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
     monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(index_path))

@@ -49,6 +49,14 @@ def _compute_file_sha256(path: str) -> str:
     return h.hexdigest()
 
 
+def _compute_paths_sha256(paths: list[str]) -> str:
+    """Compute a combined SHA-256 over all files in paths, sorted for stability."""
+    h = hashlib.sha256()
+    for path in sorted(paths):
+        h.update(_compute_file_sha256(path).encode())
+    return h.hexdigest()
+
+
 def _title_keyed_enrichments(
     raw_enrichments: dict[str, str],
     watch_entries: list[dict],
@@ -255,34 +263,40 @@ def _audit_cache_mismatches(
 def _load_platform_events_by_provider(
     fail_on_error: bool = True,
     emit_console: bool = True,
-) -> dict[str, tuple[list, str]]:
+) -> dict[str, tuple[list, list[str]]]:
     """Parse configured provider exports without touching SQLite."""
-    platform_events_by_provider: dict[str, tuple[list, str]] = {}
+    platform_events_by_provider: dict[str, tuple[list, list[str]]] = {}
     ok = True
 
     for platform, parser in _PLATFORM_PARSERS:
-        path = config.PLATFORM_PATHS.get(platform)
-        if not path:
+        paths = config.PLATFORM_PATHS.get(platform) or []
+        if not paths:
             if emit_console:
                 console.print(f"  {platform}: [dim]disabled[/dim]")
             continue
-        try:
-            pevents = parser(path)
-        except (FileNotFoundError, ValueError) as exc:
-            if emit_console:
-                console.print(f"  {platform}: [red]FAIL[/red] {exc}")
-            else:
-                log.warning("Failed to parse %s export during runtime fallback: %s", platform, exc)
-            ok = False
+        all_pevents: list = []
+        platform_ok = True
+        for path in paths:
+            try:
+                all_pevents.extend(parser(path))
+            except (FileNotFoundError, ValueError) as exc:
+                if emit_console:
+                    console.print(f"  {platform}: [red]FAIL[/red] {exc}")
+                else:
+                    log.warning("Failed to parse %s export during runtime fallback: %s", platform, exc)
+                ok = False
+                platform_ok = False
+                break
+        if not platform_ok:
             continue
-        platform_events_by_provider[platform] = (pevents, path)
-        if not pevents:
+        platform_events_by_provider[platform] = (all_pevents, paths)
+        if not all_pevents:
             if emit_console:
                 console.print(f"  {platform}: [green]ok[/green] 0 events (no qualifying watch activity)")
         else:
             if emit_console:
-                dates = [e.timestamp for e in pevents]
-                console.print(f"  {platform}: [green]ok[/green] {len(pevents)} events "
+                dates = [e.timestamp for e in all_pevents]
+                console.print(f"  {platform}: [green]ok[/green] {len(all_pevents)} events "
                               f"({min(dates):%Y-%m-%d} to {max(dates):%Y-%m-%d})")
 
     configured = sum(1 for p in _PLATFORM_PARSERS if config.PLATFORM_PATHS.get(p[0]))
@@ -338,10 +352,11 @@ def ingest_providers(fail_on_error: bool = True) -> list:
     active_platforms = list(platform_events_by_provider.keys())
     event_store.remove_disabled_providers(config.EVENT_DB_PATH, active_platforms)
 
-    for platform, (pevents, path) in platform_events_by_provider.items():
-        source_sha = _compute_file_sha256(path)
+    for platform, (pevents, paths) in platform_events_by_provider.items():
+        source_sha = _compute_paths_sha256(paths)
+        source_path = "|".join(paths)
         persisted = event_store.replace_provider_events(
-            config.EVENT_DB_PATH, platform, pevents, path, source_sha,
+            config.EVENT_DB_PATH, platform, pevents, source_path, source_sha,
         )
         console.print(f"  {platform}: {persisted} events persisted to SQLite")
 

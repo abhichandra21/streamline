@@ -152,7 +152,7 @@ class TestStatusObservability:
         profile_path.write_text("taste profile")
         db_path = tmp_path / "events.db"
 
-        monkeypatch.setattr(web.config, "PLATFORM_PATHS", {"netflix": "/tmp/export.zip", "prime": None, "apple_tv": None})
+        monkeypatch.setattr(web.config, "PLATFORM_PATHS", {"netflix": ["/tmp/export.zip"], "prime": [], "apple_tv": []})
         monkeypatch.setattr(web.config, "MANUAL_TV_PATH", None)
         monkeypatch.setattr(web.config, "MANUAL_MOVIES_PATH", None)
         monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(index_path))
