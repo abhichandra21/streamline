@@ -415,8 +415,10 @@ def ingest_providers(fail_on_error: bool = True) -> list:
 
     # Persist to SQLite
     event_store.init_db(config.EVENT_DB_PATH)
-    active_platforms = list(platform_events_by_provider.keys())
-    event_store.remove_disabled_providers(config.EVENT_DB_PATH, active_platforms)
+    # Use configured providers (those with paths set), not just successfully-parsed
+    # ones.  A parse failure should not cause removal of that provider's persisted data.
+    configured_platforms = [p for p, _ in _PLATFORM_PARSERS if config.PLATFORM_PATHS.get(p)]
+    event_store.remove_disabled_providers(config.EVENT_DB_PATH, configured_platforms)
 
     for platform, (pevents, paths) in platform_events_by_provider.items():
         manifest, snapshot_sha = _build_source_manifest(paths)

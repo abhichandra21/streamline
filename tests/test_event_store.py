@@ -155,9 +155,18 @@ def test_init_db_migrates_legacy_schema(tmp_path):
     assert "source_manifest_json" in cols
     assert "source_path" not in cols
 
-    # Legacy event data gone (tables were dropped and recreated).
+    # Legacy event data preserved (in-place migration, not drop+recreate).
     events = conn.execute("SELECT * FROM watch_events").fetchall()
-    assert events == []
+    assert len(events) == 1
+    assert events[0][1] == "netflix"  # provider
+    assert events[0][2] == "Old Show"  # title
+
+    # imports row preserved with new columns defaulted.
+    imports = conn.execute("SELECT provider, source_manifest_json, snapshot_sha256 FROM imports").fetchall()
+    assert len(imports) == 1
+    assert imports[0][0] == "netflix"
+    assert imports[0][1] == "{}"  # default from migration
+    assert imports[0][2] == "oldsha"  # renamed from source_sha256
 
     # User-store table preserved.
     rows = conn.execute("SELECT title FROM saved_titles").fetchall()

@@ -66,11 +66,17 @@ def _needs_migration(conn: sqlite3.Connection) -> bool:
 
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
-    """Drop and recreate imports + watch_events while preserving user-store tables."""
-    conn.executescript(f"""
-        DROP TABLE IF EXISTS watch_events;
-        DROP TABLE IF EXISTS imports;
-        {_SCHEMA}
+    """Migrate legacy imports schema in-place, preserving watch_events data.
+
+    Legacy schema has ``source_path`` and ``source_sha256``; new schema needs
+    ``source_manifest_json`` and ``snapshot_sha256``.  We add/rename columns
+    in-place so that watch_events rows (and their foreign-key references to
+    imports.id) are left untouched.
+    """
+    conn.executescript("""
+        ALTER TABLE imports ADD COLUMN source_manifest_json TEXT NOT NULL DEFAULT '{}';
+        ALTER TABLE imports RENAME COLUMN source_sha256 TO snapshot_sha256;
+        ALTER TABLE imports DROP COLUMN source_path;
     """)
 
 
@@ -91,8 +97,11 @@ def init_db(db_path: str) -> None:
             ).fetchall()
         }
         if "imports" in tables and _needs_migration(conn):
-            log.warning("Legacy event-store schema detected — migrating. Watch history will be re-ingested on next setup run.")
+            log.warning("Legacy event-store schema detected — migrating in-place.")
             _migrate_schema(conn)
+            # Run _SCHEMA for any tables/columns the legacy DB may be missing
+            # (CREATE TABLE IF NOT EXISTS is a no-op for existing tables).
+            conn.executescript(_SCHEMA)
         else:
             conn.executescript(_SCHEMA)
     finally:
