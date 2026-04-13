@@ -1,19 +1,23 @@
 """SQLite event store for normalized watch history."""
 
 import hashlib
+import json
+import logging
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
+
+log = logging.getLogger("recommender.event_store")
 
 from recommender.ingestion.base import WatchEvent
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS imports (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    provider      TEXT NOT NULL UNIQUE,
-    source_path   TEXT NOT NULL,
-    source_sha256 TEXT NOT NULL,
-    imported_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider             TEXT NOT NULL UNIQUE,
+    source_manifest_json TEXT NOT NULL,
+    snapshot_sha256      TEXT NOT NULL,
+    imported_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 CREATE TABLE IF NOT EXISTS watch_events (
@@ -40,22 +44,57 @@ def _connect(db_path: str) -> sqlite3.Connection:
 
 
 def _compute_source_hash(
-    provider: str, profile: str, title: str,
+    provider: str, content_type: str, series_name: str, title: str,
     timestamp_iso: str, watched_duration_seconds: int,
 ) -> str:
+    """Compute a dedup hash from event identity fields, excluding profile."""
     raw = "\0".join([
-        provider, profile, title,
+        provider, content_type, series_name, title,
         timestamp_iso, str(watched_duration_seconds),
     ])
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _needs_migration(conn: sqlite3.Connection) -> bool:
+    """Return True if the imports table has the legacy schema (source_path column)."""
+    cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(imports)").fetchall()
+    }
+    # Legacy schema has source_path; new schema has source_manifest_json.
+    return "source_path" in cols and "source_manifest_json" not in cols
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Drop and recreate imports + watch_events while preserving user-store tables."""
+    conn.executescript(f"""
+        DROP TABLE IF EXISTS watch_events;
+        DROP TABLE IF EXISTS imports;
+        {_SCHEMA}
+    """)
+
+
 def init_db(db_path: str) -> None:
-    """Create tables if not present. Create parent directories if needed."""
+    """Create tables if not present. Create parent directories if needed.
+
+    If the legacy schema is detected (source_path column present in imports),
+    drop and recreate only imports and watch_events, preserving user-store tables.
+    """
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = _connect(db_path)
     try:
-        conn.executescript(_SCHEMA)
+        # Check whether the imports table exists at all first.
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "imports" in tables and _needs_migration(conn):
+            log.warning("Legacy event-store schema detected — migrating. Watch history will be re-ingested on next setup run.")
+            _migrate_schema(conn)
+        else:
+            conn.executescript(_SCHEMA)
     finally:
         conn.close()
 
@@ -87,27 +126,43 @@ def replace_provider_events(
     db_path: str,
     provider: str,
     events: list[WatchEvent],
-    source_path: str,
-    source_sha256: str,
-) -> int:
+    source_manifest: list[dict],
+    snapshot_sha256: str,
+) -> tuple[int, int]:
     """Replace all events for a provider in a single transaction.
 
-    Returns the number of rows actually persisted (after dedup).
+    Args:
+        db_path: Path to the SQLite database.
+        provider: Provider name (e.g. "netflix").
+        events: Normalized watch events to persist.
+        source_manifest: List of {"path": str, "sha256": str} dicts describing
+            the source files that make up this snapshot.
+        snapshot_sha256: SHA-256 of the normalized manifest, used for change detection.
+
+    Returns:
+        (persisted_count, total_raw_count) tuple. Difference is duplicates removed.
     """
+    manifest_json = json.dumps(source_manifest, separators=(",", ":"))
+    total_raw = len(events)
+
     conn = _connect(db_path)
     try:
         with conn:
-            # Delete existing import for this provider (cascade removes events)
+            # Delete existing import for this provider (cascade removes events).
             conn.execute("DELETE FROM imports WHERE provider = ?", (provider,))
 
-            # Insert new import row
+            # Insert new import row.
             cursor = conn.execute(
-                "INSERT INTO imports (provider, source_path, source_sha256) VALUES (?, ?, ?)",
-                (provider, source_path, source_sha256),
+                "INSERT INTO imports (provider, source_manifest_json, snapshot_sha256) "
+                "VALUES (?, ?, ?)",
+                (provider, manifest_json, snapshot_sha256),
             )
             import_id = cursor.lastrowid
 
-            # Insert events with dedup via INSERT OR IGNORE on source_hash
+            # In-memory set to catch intra-batch duplicates before hitting the DB.
+            # First-seen profile wins for duplicate events; profile is not part of the identity key.
+            seen_hashes: set[str] = set()
+
             for event in events:
                 ts_iso = event.timestamp.isoformat(timespec="seconds")
                 duration_secs = int(event.watched_duration.total_seconds())
@@ -117,9 +172,13 @@ def replace_provider_events(
                     else None
                 )
                 source_hash = _compute_source_hash(
-                    provider, event.profile, event.title,
-                    ts_iso, duration_secs,
+                    provider, event.content_type, event.series_name,
+                    event.title, ts_iso, duration_secs,
                 )
+                if source_hash in seen_hashes:
+                    continue
+                seen_hashes.add(source_hash)
+
                 conn.execute(
                     "INSERT OR IGNORE INTO watch_events "
                     "(provider, title, content_type, series_name, "
@@ -131,12 +190,11 @@ def replace_provider_events(
                      import_id, source_hash),
                 )
 
-            # Return persisted count
-            count = conn.execute(
+            persisted = conn.execute(
                 "SELECT COUNT(*) FROM watch_events WHERE import_id = ?",
                 (import_id,),
             ).fetchone()[0]
-            return count
+            return (persisted, total_raw)
     finally:
         conn.close()
 
@@ -189,16 +247,16 @@ def get_import_info(db_path: str) -> dict[str, dict]:
     conn = _connect(db_path)
     try:
         rows = conn.execute(
-            "SELECT i.provider, i.source_path, i.source_sha256, i.imported_at, "
+            "SELECT i.provider, i.source_manifest_json, i.snapshot_sha256, i.imported_at, "
             "COUNT(e.id) as event_count "
             "FROM imports i LEFT JOIN watch_events e ON e.import_id = i.id "
             "GROUP BY i.provider"
         ).fetchall()
         result = {}
-        for provider, source_path, source_sha256, imported_at, event_count in rows:
+        for provider, manifest_json, snapshot_sha256, imported_at, event_count in rows:
             result[provider] = {
-                "source_path": source_path,
-                "source_sha256": source_sha256,
+                "source_manifest": json.loads(manifest_json),
+                "snapshot_sha256": snapshot_sha256,
                 "imported_at": imported_at,
                 "event_count": event_count,
             }
