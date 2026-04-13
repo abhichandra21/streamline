@@ -791,7 +791,7 @@ def test_refresh_data_reingests_configured_exports(monkeypatch, capsys, tmp_path
         WatchEvent(platform="netflix", title="Succession S1E1", content_type="tv",
                    series_name="Succession", watched_duration=timedelta(hours=1),
                    total_duration=None, timestamp=datetime(2026, 1, 1), profile="user"),
-    ], "/export.zip", "sha1")
+    ], [{"path": "/export.zip", "sha256": "sha1"}], "sha1")
 
     monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
     # Provide a non-None path so the current zip loop WOULD call the parser (making pre-fix test fail)

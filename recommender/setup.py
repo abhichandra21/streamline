@@ -49,12 +49,43 @@ def _compute_file_sha256(path: str) -> str:
     return h.hexdigest()
 
 
-def _compute_paths_sha256(paths: list[str]) -> str:
-    """Compute a combined SHA-256 over all files in paths, sorted for stability."""
-    h = hashlib.sha256()
-    for path in sorted(paths):
-        h.update(_compute_file_sha256(path).encode())
-    return h.hexdigest()
+def _build_source_manifest(paths: list[str]) -> tuple[list[dict], str]:
+    """Build manifest and snapshot hash for a set of source files.
+
+    Returns (manifest, snapshot_sha256) where manifest is a list of
+    {"path": str, "sha256": str} dicts sorted by path.
+    """
+    manifest = sorted(
+        [{"path": p, "sha256": _compute_file_sha256(p)} for p in paths],
+        key=lambda m: m["path"],
+    )
+    manifest_json = json.dumps(manifest, separators=(",", ":"))
+    snapshot_sha = hashlib.sha256(manifest_json.encode()).hexdigest()
+    return manifest, snapshot_sha
+
+
+def _dedup_events(events: list) -> tuple[list, int]:
+    """Deduplicate watch events in memory using identity key (excludes profile).
+
+    First-seen event wins. Returns (deduped_events, duplicate_count).
+
+    The identity key must match event_store._compute_source_hash fields.
+    """
+    seen: set[tuple] = set()
+    deduped: list = []
+    for e in events:
+        key = (
+            e.platform,
+            e.content_type,
+            e.series_name,
+            e.title,
+            e.timestamp.isoformat(timespec="seconds"),
+            int(e.watched_duration.total_seconds()),
+        )
+        if key not in seen:
+            seen.add(key)
+            deduped.append(e)
+    return deduped, len(events) - len(deduped)
 
 
 def _title_keyed_enrichments(
@@ -264,7 +295,11 @@ def _load_platform_events_by_provider(
     fail_on_error: bool = True,
     emit_console: bool = True,
 ) -> dict[str, tuple[list, list[str]]]:
-    """Parse configured provider exports without touching SQLite."""
+    """Parse configured provider exports without touching SQLite.
+
+    All-or-nothing per provider: parses ALL configured files before accepting
+    any events. If any file fails, that provider is skipped entirely.
+    """
     platform_events_by_provider: dict[str, tuple[list, list[str]]] = {}
     ok = True
 
@@ -274,11 +309,14 @@ def _load_platform_events_by_provider(
             if emit_console:
                 console.print(f"  {platform}: [dim]disabled[/dim]")
             continue
-        all_pevents: list = []
+
+        # Phase 1: parse all files, collecting per-file results
+        per_file_events: list[tuple[str, list]] = []
         platform_ok = True
         for path in paths:
             try:
-                all_pevents.extend(parser(path))
+                file_events = parser(path)
+                per_file_events.append((path, file_events))
             except (FileNotFoundError, ValueError) as exc:
                 if emit_console:
                     console.print(f"  {platform}: [red]FAIL[/red] {exc}")
@@ -287,17 +325,45 @@ def _load_platform_events_by_provider(
                 ok = False
                 platform_ok = False
                 break
+
         if not platform_ok:
             continue
-        platform_events_by_provider[platform] = (all_pevents, paths)
-        if not all_pevents:
-            if emit_console:
+
+        # Phase 2: merge all events for this provider
+        all_pevents: list = []
+        for _path, file_events in per_file_events:
+            all_pevents.extend(file_events)
+
+        # Phase 3: in-memory dedup across files
+        deduped_events, dup_count = _dedup_events(all_pevents)
+
+        platform_events_by_provider[platform] = (deduped_events, paths)
+
+        # Phase 4: console reporting
+        if emit_console:
+            multi_file = len(paths) > 1
+            if not deduped_events and not multi_file:
                 console.print(f"  {platform}: [green]ok[/green] 0 events (no qualifying watch activity)")
-        else:
-            if emit_console:
-                dates = [e.timestamp for e in all_pevents]
-                console.print(f"  {platform}: [green]ok[/green] {len(all_pevents)} events "
+            elif not multi_file:
+                dates = [e.timestamp for e in deduped_events]
+                console.print(f"  {platform}: [green]ok[/green] {len(deduped_events)} events "
                               f"({min(dates):%Y-%m-%d} to {max(dates):%Y-%m-%d})")
+            else:
+                # Multi-file: show per-file breakdown
+                console.print(f"  {platform}: {len(paths)} files")
+                for path, file_events in per_file_events:
+                    fname = Path(path).name
+                    if file_events:
+                        dates = [e.timestamp for e in file_events]
+                        console.print(f"    {fname}: {len(file_events):,} events "
+                                      f"({min(dates):%Y-%m-%d} to {max(dates):%Y-%m-%d})")
+                    else:
+                        console.print(f"    {fname}: 0 events")
+                if dup_count:
+                    console.print(f"  {platform}: {len(deduped_events):,} events after dedup "
+                                  f"({dup_count:,} duplicates removed)")
+                else:
+                    console.print(f"  {platform}: {len(deduped_events):,} events (no duplicates)")
 
     configured = sum(1 for p in _PLATFORM_PARSERS if config.PLATFORM_PATHS.get(p[0]))
     if configured == 0 and fail_on_error:
@@ -353,12 +419,11 @@ def ingest_providers(fail_on_error: bool = True) -> list:
     event_store.remove_disabled_providers(config.EVENT_DB_PATH, active_platforms)
 
     for platform, (pevents, paths) in platform_events_by_provider.items():
-        source_sha = _compute_paths_sha256(paths)
-        source_path = "|".join(paths)
-        persisted = event_store.replace_provider_events(
-            config.EVENT_DB_PATH, platform, pevents, source_path, source_sha,
+        manifest, snapshot_sha = _build_source_manifest(paths)
+        persisted, _total_raw = event_store.replace_provider_events(
+            config.EVENT_DB_PATH, platform, pevents, manifest, snapshot_sha,
         )
-        console.print(f"  {platform}: {persisted} events persisted to SQLite")
+        console.print(f"  {platform}: {persisted:,} events persisted to SQLite")
 
     all_events_from_db = event_store.load_events(config.EVENT_DB_PATH)
     all_events_from_db.extend(manual_events)
