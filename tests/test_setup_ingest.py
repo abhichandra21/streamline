@@ -197,8 +197,8 @@ def test_ingest_dedup_is_order_independent(monkeypatch, tmp_path):
 # Setup ingest: one bad file aborts that provider without deleting previous data
 # ---------------------------------------------------------------------------
 
-def test_ingest_bad_file_aborts_provider_preserves_previous_snapshot(monkeypatch, tmp_path):
-    """A bad file on re-ingest fails gracefully; prior provider snapshot is intact."""
+def test_ingest_bad_file_preserves_previous_snapshot_in_non_strict_mode(monkeypatch, tmp_path):
+    """A bad file on non-strict re-ingest keeps the prior provider snapshot intact."""
     import config
     import recommender.setup as setup
     from recommender.event_store import load_events
@@ -238,12 +238,11 @@ def test_ingest_bad_file_aborts_provider_preserves_previous_snapshot(monkeypatch
     monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("netflix", flaky_parser)])
     monkeypatch.setattr(setup, "_compute_file_sha256", lambda _path: "sha_v2")
 
-    # Should fail gracefully (not crash the process with fail_on_error=False)
-    with pytest.raises(SystemExit):
-        setup.ingest_providers(fail_on_error=True)
+    result = setup.ingest_providers(fail_on_error=False)
 
     # Previous snapshot is still intact
     loaded_after_fail = {e.title for e in load_events(db_path)}
+    assert {e.title for e in result} == {"Good Show"}
     assert "Good Show" in loaded_after_fail
 
 
