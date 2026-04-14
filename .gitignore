@@ -9,3 +9,4 @@ config.local.yaml
 logs/
 .superpowers/
 .worktrees/
+/.claude
