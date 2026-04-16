@@ -48,6 +48,7 @@ LLM_DEFAULT_API_KEY_ENVS: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "local": "OPENAI_API_KEY",  # local endpoints don't require a real key
 }
 
 # ── LLM settings ──
@@ -56,6 +57,7 @@ LLM_MODELS: dict[str, dict[str, str]] = _cfg.get("models", {
     "anthropic": {"fast": "claude-haiku-4-5-20251001", "reason": "claude-sonnet-4-6"},
     "gemini": {"fast": "gemini-2.5-flash", "reason": "gemini-2.5-flash"},
     "openai": {"fast": "gpt-4.1-mini", "reason": "gpt-4.1", "base_url": None},
+    "local": {"fast": "llama3.2", "reason": "llama3.2", "base_url": "http://localhost:11434/v1"},
 })
 
 
