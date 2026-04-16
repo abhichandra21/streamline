@@ -450,7 +450,7 @@ def run_ingest_only() -> None:
     console.print("\n[green]All configured providers validated and persisted.[/green]")
 
 
-def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provider: str | None = None) -> None:
+def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provider: str | None = None, profile_path: str | None = None) -> None:
     if not config.TMDB_API_KEY:
         console.print("[red]Error: TMDB_API_KEY not set. Export it and re-run.[/red]")
         sys.exit(1)
@@ -616,15 +616,16 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                           f"{removed['enrichment_index']} index entries, "
                           f"{removed['providers']} provider files)")
 
-        with console.status(f"[bold magenta]Enriching {len(metadata)} titles with Claude Haiku...[/bold magenta]", spinner="dots"):
+        with console.status(f"[bold magenta]Enriching {len(metadata)} titles...[/bold magenta]", spinner="dots"):
             raw_enrichments = enrich_batch(metadata, config.ENRICHMENT_CACHE_DIR, llm)
         enrichments_index_path.write_text(json.dumps(raw_enrichments))
         console.print(f"  {len(raw_enrichments)} descriptions cached → {config.ENRICHMENT_CACHE_DIR}")
 
         enrichments = _title_keyed_enrichments(raw_enrichments, index.entries, metadata)
 
-    profile_path = Path(config.TASTE_PROFILE_PATH)
-    if refresh_profile or not profile_path.exists():
+    using_custom_path = profile_path is not None
+    resolved_profile_path = Path(profile_path) if using_custom_path else Path(config.TASTE_PROFILE_PATH)
+    if refresh_profile or not resolved_profile_path.exists():
         user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
         ratings = user_store.load_ratings(config.EVENT_DB_PATH)
         liked_count = sum(1 for r in ratings if r["rating"] == "liked")
@@ -632,7 +633,7 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         if liked_count or disliked_count:
             console.print(f"  Applying feedback: {liked_count} liked, {disliked_count} disliked titles")
 
-        with console.status("[bold magenta]Building taste profile with Claude Sonnet...[/bold magenta]", spinner="dots"):
+        with console.status("[bold magenta]Building taste profile...[/bold magenta]", spinner="dots"):
             scores = compute_scores(events, metadata, config.RECENCY_HALF_LIFE_DAYS)
             scores = user_store.apply_rating_multipliers(scores, ratings)
             negative_prefs = user_store.get_disliked_titles(config.EVENT_DB_PATH)
@@ -643,16 +644,17 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                 console.print(f"\n[red]{exc}[/red]")
                 console.print("[yellow]Previous profile kept unchanged.[/yellow]")
                 sys.exit(1)
-        profile_path.parent.mkdir(parents=True, exist_ok=True)
-        # Auto-backup previous profile before overwriting
-        if profile_path.exists():
+        resolved_profile_path.parent.mkdir(parents=True, exist_ok=True)
+        # Auto-backup previous profile before overwriting, but only for the canonical path.
+        # When writing to a custom path we are creating a new file alongside the default, not replacing it.
+        if not using_custom_path and resolved_profile_path.exists():
             from datetime import datetime
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup = profile_path.with_name(f"taste_profile_{ts}.txt")
-            profile_path.rename(backup)
+            backup = resolved_profile_path.with_name(f"taste_profile_{ts}.txt")
+            resolved_profile_path.rename(backup)
             console.print(f"  Previous profile backed up → {backup.name}")
-        profile_path.write_text(profile)
-        console.print(f"  Taste profile saved → {config.TASTE_PROFILE_PATH}")
+        resolved_profile_path.write_text(profile)
+        console.print(f"  Taste profile saved → {resolved_profile_path}")
     else:
         console.print("\nTaste profile exists, skipping (use --refresh-profile to rebuild).")
 
@@ -669,8 +671,10 @@ if __name__ == "__main__":
                         help="Load and report on ingested data without TMDB or LLM calls")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
-    parser.add_argument("--provider", choices=["anthropic", "gemini", "openai"],
+    parser.add_argument("--provider", choices=["anthropic", "gemini", "openai", "local"],
                         help="LLM provider (default: from config/env)")
+    parser.add_argument("--profile-path", type=str, default=None,
+                        help="Write taste profile to this path instead of the default")
     args = parser.parse_args()
     from recommender.log import setup_logging
     setup_logging(level_override="DEBUG" if args.debug else None)
@@ -678,4 +682,4 @@ if __name__ == "__main__":
         run_ingest_only()
     else:
         run_setup(refresh_profile=args.refresh_profile, refresh_data=args.refresh_data,
-                  provider=args.provider)
+                  provider=args.provider, profile_path=args.profile_path)

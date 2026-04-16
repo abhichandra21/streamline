@@ -38,13 +38,16 @@ class UsageStats:
     output_tokens: int = 0
     thinking_tokens: int = 0
     cost_usd: float = 0.0
+    total_latency_ms: float = 0.0
     _by_model: dict = field(default_factory=dict)
 
-    def record(self, model: str, input_t: int, output_t: int, thinking_t: int = 0) -> None:
+    def record(self, model: str, input_t: int, output_t: int, thinking_t: int = 0,
+               latency_ms: float = 0.0) -> None:
         self.calls += 1
         self.input_tokens += input_t
         self.output_tokens += output_t
         self.thinking_tokens += thinking_t
+        self.total_latency_ms += latency_ms
 
         pricing = _PRICING.get(model, {"input": 0, "output": 0, "thinking": 0})
         cost = (
@@ -55,18 +58,26 @@ class UsageStats:
         self.cost_usd += cost
 
         if model not in self._by_model:
-            self._by_model[model] = {"calls": 0, "input": 0, "output": 0, "thinking": 0, "cost": 0.0}
+            self._by_model[model] = {"calls": 0, "input": 0, "output": 0, "thinking": 0,
+                                     "cost": 0.0, "latency_ms": 0.0}
         self._by_model[model]["calls"] += 1
         self._by_model[model]["input"] += input_t
         self._by_model[model]["output"] += output_t
         self._by_model[model]["thinking"] += thinking_t
         self._by_model[model]["cost"] += cost
+        self._by_model[model]["latency_ms"] += latency_ms
+
+    def avg_latency_ms(self) -> float:
+        """Average latency per call in milliseconds. 0.0 if no calls recorded."""
+        return self.total_latency_ms / self.calls if self.calls else 0.0
 
     def summary(self) -> str:
         parts = [f"{self.calls} calls"]
         parts.append(f"{self.input_tokens:,} in / {self.output_tokens:,} out")
         if self.thinking_tokens:
             parts.append(f"{self.thinking_tokens:,} thinking")
+        if self.total_latency_ms:
+            parts.append(f"{self.avg_latency_ms():.0f}ms avg latency")
         parts.append(f"~${self.cost_usd:.4f}")
         return " | ".join(parts)
 
@@ -117,16 +128,19 @@ class AnthropicClient(LLMClient):
     def generate(self, prompt: str, role: str = "reason",
                  max_tokens: int = 1000, timeout: float = 30.0) -> str:
         model = self.models.get(role, self.models.get("reason", "claude-sonnet-4-6"))
+        t0 = time.monotonic()
         message = self._client.messages.create(
             model=model,
             max_tokens=max_tokens,
             timeout=timeout,
             messages=[{"role": "user", "content": prompt}],
         )
+        latency_ms = (time.monotonic() - t0) * 1000
         self.usage.record(
             model=model,
             input_t=message.usage.input_tokens,
             output_t=message.usage.output_tokens,
+            latency_ms=latency_ms,
         )
         self.was_truncated = message.stop_reason == "max_tokens"
         if self.was_truncated:
@@ -177,6 +191,7 @@ class GeminiClient(LLMClient):
         )
 
         # Retry on rate limit and timeouts
+        t0 = time.monotonic()
         for attempt in range(3):
             try:
                 response = self._client.models.generate_content(
@@ -193,6 +208,7 @@ class GeminiClient(LLMClient):
                     time.sleep(wait)
                     continue
                 raise
+        latency_ms = (time.monotonic() - t0) * 1000
 
         # Track usage
         um = getattr(response, "usage_metadata", None)
@@ -202,6 +218,7 @@ class GeminiClient(LLMClient):
                 input_t=getattr(um, "prompt_token_count", 0) or 0,
                 output_t=getattr(um, "candidates_token_count", 0) or 0,
                 thinking_t=getattr(um, "thoughts_token_count", 0) or 0,
+                latency_ms=latency_ms,
             )
 
         self.was_truncated = False
@@ -230,24 +247,28 @@ class OpenAIClient(LLMClient):
         self._client = OpenAI(**kwargs)
         self.models = models
         self.usage = UsageStats()
-        self._is_thinking_model = False
+        self._is_thinking_model = bool(models.get("thinking"))
+        self._timeout_scale: float = float(models.get("timeout_scale") or 1.0)
         endpoint = base_url or "api.openai.com"
-        log.info("Using OpenAI-compatible provider (endpoint=%s, fast=%s, reason=%s)",
-                 endpoint, models.get("fast"), models.get("reason"))
+        log.info("Using OpenAI-compatible provider (endpoint=%s, fast=%s, reason=%s, timeout_scale=%.1f)",
+                 endpoint, models.get("fast"), models.get("reason"), self._timeout_scale)
 
     def generate(self, prompt: str, role: str = "reason",
                  max_tokens: int = 1000, timeout: float = 30.0) -> str:
         model = self.models.get(role, self.models.get("reason", "gpt-4.1-mini"))
 
-        # Thinking models (GLM, o-series) need more tokens for reasoning
-        adjusted_tokens = max(max_tokens * 3, 4000) if self._is_thinking_model else max_tokens
+        # Thinking models (GLM, o-series, gemma4) spend tokens on reasoning before
+        # the actual response. 6x with an 8000-token floor keeps the answer intact.
+        adjusted_tokens = max(max_tokens * 6, 8000) if self._is_thinking_model else max_tokens
+        scaled_timeout = timeout * self._timeout_scale
 
+        t0 = time.monotonic()
         for attempt in range(3):
             try:
                 response = self._client.chat.completions.create(
                     model=model,
                     max_tokens=adjusted_tokens,
-                    timeout=timeout,
+                    timeout=scaled_timeout,
                     messages=[{"role": "user", "content": prompt}],
                 )
                 break
@@ -259,6 +280,7 @@ class OpenAIClient(LLMClient):
                     time.sleep(wait)
                     continue
                 raise
+        latency_ms = (time.monotonic() - t0) * 1000
 
         choice = response.choices[0]
         text = choice.message.content or ""
@@ -269,13 +291,18 @@ class OpenAIClient(LLMClient):
                 model=model,
                 input_t=response.usage.prompt_tokens or 0,
                 output_t=response.usage.completion_tokens or 0,
+                latency_ms=latency_ms,
             )
 
-        # Auto-detect thinking models (GLM, o-series) for future token scaling
-        if hasattr(choice.message, "reasoning_content") and choice.message.reasoning_content:
-            if not self._is_thinking_model:
-                log.info("Detected thinking model (%s), enabling token scaling.", model)
-                self._is_thinking_model = True
+        # Auto-detect thinking models (GLM, o-series, gemma4) for future token scaling.
+        # OpenAI uses 'reasoning_content', Ollama uses 'reasoning'.
+        has_reasoning = (
+            (hasattr(choice.message, "reasoning_content") and choice.message.reasoning_content)
+            or (hasattr(choice.message, "reasoning") and choice.message.reasoning)
+        )
+        if has_reasoning and not self._is_thinking_model:
+            log.info("Detected thinking model (%s), enabling token scaling.", model)
+            self._is_thinking_model = True
 
         self.was_truncated = choice.finish_reason == "length"
         if self.was_truncated:
@@ -290,29 +317,45 @@ def create_client(provider: str | None = None) -> LLMClient:
 
     Args:
         provider: Override provider name. If None, uses config.LLM_PROVIDER.
+
+    Supported providers: 'anthropic', 'gemini', 'openai', 'local'.
+    'local' is an alias for 'openai' with base_url pointing to a local endpoint
+    (Ollama, LM Studio, vLLM, etc.). The API key is not required for local endpoints.
     """
     import config
 
     provider = provider or config.LLM_PROVIDER
-    models = config.LLM_MODELS.get(provider, {})
+
+    # 'local' is an alias for 'openai' with a local base_url
+    config_key = "openai" if provider == "local" else provider
+    models = config.LLM_MODELS.get(provider, config.LLM_MODELS.get(config_key, {}))
 
     if not models:
         raise ValueError(f"No model config for provider '{provider}' in config.yaml")
 
-    api_key_env = config.get_llm_api_key_env(provider)
+    base_url = models.get("base_url") or None
+    is_local = provider == "local" or (
+        base_url and any(base_url.startswith(p) for p in ("http://localhost", "http://127.0.0.1"))
+    )
+
+    api_key_env = config.get_llm_api_key_env(config_key)
     if api_key_env in config.LLM_DEFAULT_API_KEY_ENVS.values():
         api_key = getattr(config, api_key_env, os.environ.get(api_key_env, ""))
     else:
         api_key = os.environ.get(api_key_env, "")
+
     if not api_key:
-        raise RuntimeError(f"{api_key_env} not set. Export it or add to .env.")
+        if is_local:
+            # Local endpoints (Ollama, LM Studio, vLLM) don't need a real API key.
+            api_key = "local"
+        else:
+            raise RuntimeError(f"{api_key_env} not set. Export it or add to .env.")
 
     if provider == "gemini":
         return GeminiClient(api_key=api_key, models=models)
     elif provider == "anthropic":
         return AnthropicClient(api_key=api_key, models=models)
-    elif provider == "openai":
-        base_url = models.get("base_url") or None
+    elif provider in ("openai", "local"):
         return OpenAIClient(api_key=api_key, models=models, base_url=base_url)
     else:
-        raise ValueError(f"Unknown LLM provider: {provider}. Use 'anthropic', 'gemini', or 'openai'.")
+        raise ValueError(f"Unknown LLM provider: {provider}. Use 'anthropic', 'gemini', 'openai', or 'local'.")

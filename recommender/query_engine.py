@@ -525,11 +525,11 @@ def ask(
     for c in candidates:
         seen_ids.add(c.tmdb_id)
 
-    # Source 2: Claude suggestions (semantic, taste-aware — always runs)
-    log.debug("Fetching Claude suggestions for semantic coverage (similar_to=%s)", intent.similar_to)
+    # Source 2: LLM suggestions (semantic, taste-aware — always runs)
+    log.debug("Fetching LLM suggestions for semantic coverage (similar_to=%s)", intent.similar_to)
     suggestions = _generate_suggestions(query, ctx.taste_profile, ctx.llm,
                                          similar_to=intent.similar_to)
-    log.debug("Claude suggested %d titles: %s", len(suggestions), suggestions[:10])
+    log.debug("LLM suggested %d titles: %s", len(suggestions), suggestions[:10])
     suggestion_count = 0
     for title in suggestions:
         for ct in content_types:
@@ -545,7 +545,7 @@ def ask(
                 candidates.append(meta)
                 seen_ids.add(meta.tmdb_id)
                 suggestion_count += 1
-    log.debug("Claude suggestions added %d new candidates", suggestion_count)
+    log.debug("LLM suggestions added %d new candidates", suggestion_count)
 
     if log.isEnabledFor(logging.DEBUG) and candidates:
         log.debug("Final candidate pool (%d): %s",
@@ -576,7 +576,7 @@ def ask(
         unfiltered = []
         for rec in results:
             meta = meta_by_title.get(rec.title)
-            if meta:
+            if meta and meta.content_type:
                 providers = ctx.tmdb_client.get_watch_providers(
                     meta.tmdb_id, meta.content_type,
                     ctx.watch_region, ctx.providers_cache_dir,
