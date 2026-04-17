@@ -30,6 +30,14 @@ _PRICING: dict[str, dict[str, float]] = {
 }
 
 
+def _int_model_setting(models: dict[str, object], key: str, default: int) -> int:
+    """Parse an integer model setting while preserving explicit zero values."""
+    raw = models.get(key)
+    if raw in (None, ""):
+        return default
+    return int(raw)
+
+
 @dataclass
 class UsageStats:
     """Accumulated token usage across multiple LLM calls."""
@@ -94,7 +102,7 @@ class LLMClient(ABC):
     """Abstract LLM client interface."""
 
     provider: str
-    models: dict[str, str]
+    models: dict[str, object]
     usage: UsageStats
     was_truncated: bool = False  # set after each generate() call
 
@@ -118,7 +126,7 @@ class AnthropicClient(LLMClient):
 
     provider = "anthropic"
 
-    def __init__(self, api_key: str, models: dict[str, str]):
+    def __init__(self, api_key: str, models: dict[str, object]):
         import anthropic
         self._client = anthropic.Anthropic(api_key=api_key)
         self.models = models
@@ -154,7 +162,7 @@ class GeminiClient(LLMClient):
 
     provider = "gemini"
 
-    def __init__(self, api_key: str, models: dict[str, str]):
+    def __init__(self, api_key: str, models: dict[str, object]):
         from google import genai
         is_vertex = api_key.startswith("AQ.")
         self._client = genai.Client(api_key=api_key, vertexai=is_vertex)
@@ -239,7 +247,7 @@ class OpenAIClient(LLMClient):
 
     provider = "openai"
 
-    def __init__(self, api_key: str, models: dict[str, str], base_url: str | None = None):
+    def __init__(self, api_key: str, models: dict[str, object], base_url: str | None = None):
         from openai import OpenAI
         kwargs: dict = {"api_key": api_key}
         if base_url:
@@ -249,17 +257,27 @@ class OpenAIClient(LLMClient):
         self.usage = UsageStats()
         self._is_thinking_model = bool(models.get("thinking"))
         self._timeout_scale: float = float(models.get("timeout_scale") or 1.0)
+        self._thinking_token_scale: int = _int_model_setting(models, "thinking_token_scale", 6)
+        self._thinking_token_floor: int = _int_model_setting(models, "thinking_token_floor", 8000)
         endpoint = base_url or "api.openai.com"
-        log.info("Using OpenAI-compatible provider (endpoint=%s, fast=%s, reason=%s, timeout_scale=%.1f)",
-                 endpoint, models.get("fast"), models.get("reason"), self._timeout_scale)
+        log.info(
+            "Using OpenAI-compatible provider "
+            "(endpoint=%s, fast=%s, reason=%s, timeout_scale=%.1f, thinking=%s, token_scale=%d, token_floor=%d)",
+            endpoint, models.get("fast"), models.get("reason"), self._timeout_scale,
+            self._is_thinking_model, self._thinking_token_scale, self._thinking_token_floor,
+        )
 
     def generate(self, prompt: str, role: str = "reason",
                  max_tokens: int = 1000, timeout: float = 30.0) -> str:
         model = self.models.get(role, self.models.get("reason", "gpt-4.1-mini"))
 
-        # Thinking models (GLM, o-series, gemma4) spend tokens on reasoning before
-        # the actual response. 6x with an 8000-token floor keeps the answer intact.
-        adjusted_tokens = max(max_tokens * 6, 8000) if self._is_thinking_model else max_tokens
+        # Some OpenAI-compatible thinking models spend output budget on reasoning
+        # before the final answer. Scale/floor are configurable because providers
+        # differ on whether those reasoning tokens share the same generation budget.
+        if self._is_thinking_model:
+            adjusted_tokens = max(max_tokens * self._thinking_token_scale, self._thinking_token_floor)
+        else:
+            adjusted_tokens = max_tokens
         scaled_timeout = timeout * self._timeout_scale
 
         t0 = time.monotonic()

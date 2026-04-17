@@ -535,6 +535,28 @@ def test_settings_save_preserves_explicit_platform_path_disables(tmp_path, monke
     }
 
 
+def test_settings_save_preserves_local_model_token_controls(tmp_path, monkeypatch):
+    raw_cfg = {
+        "models": {
+            "local": {
+                "fast": "gpt-oss:120b",
+                "reason": "gpt-oss:120b",
+                "base_url": "http://192.168.1.75:11434/v1",
+                "thinking": True,
+                "thinking_token_scale": 1,
+                "thinking_token_floor": 0,
+            }
+        }
+    }
+    client, config_path, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+
+    post_response = client.post("/settings", data=_settings_form_data(web, raw_cfg))
+
+    assert post_response.status_code == 302
+    saved_cfg = yaml.safe_load(config_path.read_text())
+    assert saved_cfg["models"]["local"] == raw_cfg["models"]["local"]
+
+
 def test_web_module_initializes_logging_on_import():
     import recommender.log as log_module
     import recommender.web as web_module
