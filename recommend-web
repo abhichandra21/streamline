@@ -6,7 +6,7 @@ PIDFILE="$SCRIPT_DIR/.web.pid"
 LOGFILE="$SCRIPT_DIR/logs/web.log"
 PORT="${STREAMLINE_PORT:-5050}"
 HOST="${STREAMLINE_HOST:-127.0.0.1}"
-VENV="$SCRIPT_DIR/venv"
+VENV="$SCRIPT_DIR/.venv"
 
 # Load environment
 if [ -f "$SCRIPT_DIR/.env" ]; then
@@ -15,7 +15,7 @@ fi
 
 # Activate venv
 if [ ! -d "$VENV" ]; then
-    echo "Error: venv not found at $VENV. Run: python3 -m venv venv && pip install -r requirements.txt" >&2
+    echo "Error: venv not found at $VENV. Run: python3 -m venv .venv && pip install -r requirements.txt" >&2
     exit 1
 fi
 source "$VENV/bin/activate"

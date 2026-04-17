@@ -11,7 +11,7 @@ Templates live in `recommender/templates/`; generated caches and local artifacts
 Use the local virtualenv first:
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
