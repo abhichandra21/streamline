@@ -53,7 +53,7 @@ LLM_DEFAULT_API_KEY_ENVS: dict[str, str] = {
 
 # ── LLM settings ──
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", _cfg.get("provider", "anthropic"))
-LLM_MODELS: dict[str, dict[str, str]] = _cfg.get("models", {
+LLM_MODELS: dict[str, dict[str, object]] = _cfg.get("models", {
     "anthropic": {"fast": "claude-haiku-4-5-20251001", "reason": "claude-sonnet-4-6"},
     "gemini": {"fast": "gemini-2.5-flash", "reason": "gemini-2.5-flash"},
     "openai": {"fast": "gpt-4.1-mini", "reason": "gpt-4.1", "base_url": None},

@@ -74,7 +74,7 @@ Streamline ingests your real watch history from Netflix, Prime Video, Apple TV, 
 # 1. Clone and setup
 git clone https://github.com/abhichandra21/streamline.git
 cd streamline
-python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt
+python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 
 # 2. Set your API keys in the environment (.env is optional local convenience)
 cat > .env << 'EOF'
@@ -245,6 +245,8 @@ All shared settings in `config.yaml`:
 
 Keep shared settings in `config.yaml` and machine-specific watch-history paths in
 `config.local.yaml`. Start by copying `config.local.example.yaml`.
+
+**Why exports instead of direct API calls?** Netflix shut down its public API in 2014. Prime Video and Apple TV have never offered one. Unofficial scraping approaches exist but violate each platform's Terms of Service and break routinely as page structures change. The GDPR data export route (right to data portability) is the only approach that is legitimate, stable, and platform-sanctioned — and the export files contain your complete, unfiltered watch history, which a public API would never expose anyway.
 
 | Platform | Path | How to export |
 |----------|------|---------------|

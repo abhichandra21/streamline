@@ -16,11 +16,13 @@ models:
     reason: gpt-4.1
     base_url:                           # empty = api.openai.com, or custom endpoint
   local:
-    fast: llama3.2                      # model name as listed by `ollama list`
-    reason: llama3.2
-    base_url: http://localhost:11434/v1 # Ollama default; adjust for LM Studio/vLLM
-    timeout_scale: 5                    # multiply all timeouts by this factor (local models are slower)
-    # thinking: true                    # uncomment for reasoning models (gemma4, deepseek-r1, etc.)
+    fast: gpt-oss:120b
+    reason: gpt-oss:120b
+    base_url: http://192.168.1.75:11434/v1
+    timeout_scale: 5
+    thinking: true
+    thinking_token_scale: 1          # Ollama counts reasoning inside the same generation budget
+    thinking_token_floor: 0          # Do not inflate small local calls to 8000 tokens
 llm:
   timeout_fast: 30
   timeout_reason: 60
