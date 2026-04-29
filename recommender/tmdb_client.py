@@ -374,6 +374,57 @@ class TmdbClient:
             pass
         return '', title
 
+    def resolve_title_confident(
+        self, title: str, content_type: str,
+    ) -> tuple[int | None, str]:
+        """Try to resolve a title to a TMDB ID with high confidence.
+
+        High-confidence requires: title similarity >= 0.9 for the top candidate,
+        and a margin >= 5 points over the second candidate when multiple results exist.
+
+        Returns (tmdb_id, resolved_content_type) on a strong match,
+        or (None, content_type) when the match is weak, ambiguous, or absent.
+        Does not call any LLM or trigger enrichment.
+        """
+        _TITLE_SIM_THRESHOLD = 0.9
+        _MARGIN_THRESHOLD = 5.0
+
+        candidates = self._search_candidates(title, content_type)
+        if not candidates:
+            return None, content_type
+
+        scored: list[tuple[float, float, int, str]] = []
+        for cand in candidates:
+            cand_title = cand.get("name") or cand.get("title") or ""
+            sim = _title_similarity(title, cand_title)
+            total = self._score_candidate(cand, title, content_type)
+            scored.append((sim, total, cand["id"], cand_title))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        best_sim, best_total, best_id, best_cand_title = scored[0]
+
+        if best_sim < _TITLE_SIM_THRESHOLD:
+            log.debug(
+                "resolve_title_confident: low similarity for %r -> %r (sim=%.2f)",
+                title, best_cand_title, best_sim,
+            )
+            return None, content_type
+
+        if len(scored) > 1:
+            margin = best_total - scored[1][1]
+            if margin < _MARGIN_THRESHOLD:
+                log.debug(
+                    "resolve_title_confident: ambiguous match for %r -> %r vs %r (margin=%.1f)",
+                    title, best_cand_title, scored[1][3], margin,
+                )
+                return None, content_type
+
+        log.debug(
+            "resolve_title_confident: strong match for %r -> %r (id=%d, sim=%.2f)",
+            title, best_cand_title, best_id, best_sim,
+        )
+        return best_id, content_type
+
     def get_cached_by_id(self, tmdb_id: int, content_type: str) -> TmdbMetadata | None:
         """Return metadata from local cache by TMDB ID, without making any API calls.
 

@@ -581,7 +581,7 @@ def test_recommend_web_uses_runtime_provider_for_api_key_check(tmp_path, monkeyp
     script_path = tmp_path / "recommend-web"
     shutil.copy(repo_root / "recommend-web", script_path)
 
-    activate_path = tmp_path / "venv" / "bin"
+    activate_path = tmp_path / ".venv" / "bin"
     activate_path.mkdir(parents=True)
     current_python_bin = Path(sys.executable).parent
     (activate_path / "activate").write_text(

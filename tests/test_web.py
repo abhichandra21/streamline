@@ -881,3 +881,178 @@ def test_history_pagination_url_encodes_query(client):
     assert resp.status_code == 200
     assert b"page=2" in resp.data
     assert b"q=law+%26+order" in resp.data
+
+
+class TestArchiveAdd:
+    """Manual archive add: TMDB resolution and stale-flag behavior."""
+
+    def _post(self, client, title: str, content_type: str = "tv"):
+        return client.post("/archive/add", data={
+            **_csrf_form(),
+            "title": title,
+            "content_type": content_type,
+        })
+
+    def test_strong_match_stores_tmdb_id(self, client, tmp_path, monkeypatch):
+        """When TMDB resolves with high confidence, tmdb_id is persisted."""
+        from recommender.user_store import init_db, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / ".profile_stale"))
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.resolve_title_confident.return_value = (12345, "tv")
+            resp = self._post(client, "Next Gen Chef")
+
+        assert resp.status_code == 200
+        entries = list_manual_archive(db)
+        assert len(entries) == 1
+        assert entries[0]["tmdb_id"] == 12345
+
+    def test_weak_match_succeeds_without_bad_tmdb_id(self, client, tmp_path, monkeypatch):
+        """When TMDB returns no confident match, the entry is saved without a tmdb_id."""
+        from recommender.user_store import init_db, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / ".profile_stale"))
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.resolve_title_confident.return_value = (None, "tv")
+            resp = self._post(client, "Ambiguous Title")
+
+        assert resp.status_code == 200
+        entries = list_manual_archive(db)
+        assert len(entries) == 1
+        assert entries[0]["tmdb_id"] is None
+
+    def test_tmdb_error_still_saves_entry(self, client, tmp_path, monkeypatch):
+        """A TMDB API failure is swallowed; the entry is saved without a tmdb_id."""
+        from recommender.user_store import init_db, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / ".profile_stale"))
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.resolve_title_confident.side_effect = RuntimeError("network error")
+            resp = self._post(client, "Some Show")
+
+        assert resp.status_code == 200
+        entries = list_manual_archive(db)
+        assert len(entries) == 1
+        assert entries[0]["tmdb_id"] is None
+
+    def test_stale_flag_is_set_after_add(self, client, tmp_path, monkeypatch):
+        """Profile stale flag is touched after any manual archive add."""
+        from recommender.user_store import init_db
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        stale_flag = tmp_path / ".profile_stale"
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(stale_flag))
+
+        resp = self._post(client, "Any Show")
+
+        assert resp.status_code == 200
+        assert stale_flag.exists()
+
+    def test_strong_match_fetches_and_caches_detail_json(self, client, tmp_path, monkeypatch):
+        """After a strong TMDB match, detail JSON is fetched and cached for immediate overview/poster use."""
+        from recommender.user_store import init_db
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        cache_dir = tmp_path / "tmdb"
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+        monkeypatch.setattr("config.CACHE_DIR", str(cache_dir))
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / ".profile_stale"))
+
+        detail_data = {"overview": "A cooking competition.", "poster_path": "/abc.jpg"}
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            instance = MockClient.return_value
+            instance.resolve_title_confident.return_value = (12345, "tv")
+            instance._load_cache.return_value = None
+            instance._fetch_details.return_value = detail_data
+            self._post(client, "Next Gen Chef")
+            instance._fetch_details.assert_called_once_with(12345, "tv")
+            instance._save_cache.assert_called_once_with("tv", 12345, detail_data)
+
+    def test_no_llm_called_from_archive_add(self, client, tmp_path, monkeypatch):
+        """No LLM enrichment is triggered from the archive add request path."""
+        from recommender.user_store import init_db
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / ".profile_stale"))
+
+        with patch("recommender.llm.create_client") as mock_llm:
+            self._post(client, "Some Show")
+
+        mock_llm.assert_not_called()
+
+
+class TestHistoryTmdbOverview:
+    """Archive/history page shows TMDB overview when enrichment text is absent."""
+
+    def test_tmdb_overview_shown_when_no_enrichment(self, client, tmp_path, monkeypatch):
+        import json
+
+        tmdb_id = 99001
+        content_type = "tv"
+        cache_dir = tmp_path / "tmdb" / content_type
+        cache_dir.mkdir(parents=True)
+        (cache_dir / f"{tmdb_id}.json").write_text(json.dumps({
+            "overview": "A cooking competition for the next generation.",
+            "poster_path": None,
+        }))
+        monkeypatch.setattr("config.CACHE_DIR", str(tmp_path / "tmdb"))
+
+        mock_ctx = MagicMock()
+        mock_ctx.watch_index.entries = [{
+            "title": "Next Gen Chef",
+            "content_type": content_type,
+            "tmdb_id": tmdb_id,
+        }]
+
+        with patch("recommender.web._get_context", return_value=mock_ctx), \
+             patch("recommender.web._load_enrichments", return_value={}), \
+             patch("recommender.web._load_user_state") as mock_user_state, \
+             patch("recommender.web.user_store.list_manual_archive", return_value=[]):
+            user_state = MagicMock()
+            user_state.get_rating.return_value = None
+            mock_user_state.return_value = user_state
+            resp = client.get("/history")
+
+        assert resp.status_code == 200
+        assert b"next generation" in resp.data.lower()
+
+    def test_get_tmdb_overview_returns_none_when_no_cache(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("config.CACHE_DIR", str(tmp_path / "tmdb"))
+
+        from recommender.web import _get_tmdb_overview
+        assert _get_tmdb_overview(99999, "tv") is None
+
+    def test_get_tmdb_overview_returns_none_when_overview_empty(self, tmp_path, monkeypatch):
+        import json
+
+        cache_dir = tmp_path / "tmdb" / "tv"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / "88888.json").write_text(json.dumps({"overview": ""}))
+        monkeypatch.setattr("config.CACHE_DIR", str(tmp_path / "tmdb"))
+
+        from recommender.web import _get_tmdb_overview
+        assert _get_tmdb_overview(88888, "tv") is None

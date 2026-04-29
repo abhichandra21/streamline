@@ -376,3 +376,75 @@ def test_load_platform_events_from_exports_bad_file_skips_provider(monkeypatch):
 
     # Netflix should be entirely skipped, no partial results
     assert events == []
+
+
+# ---------------------------------------------------------------------------
+# Stale flag tests
+# ---------------------------------------------------------------------------
+
+def _run_setup_with_stale_mocks(tmp_path, monkeypatch, profile_path=None):
+    """Helper: run run_setup(refresh_profile=True) with all heavy lifting mocked out."""
+    import config
+    import recommender.setup as setup
+    from unittest.mock import MagicMock, patch
+
+    watch_index_file = tmp_path / "watch_index.json"
+    watch_index_file.write_text("[]")  # must exist to skip data-fetch branch
+
+    monkeypatch.setattr(config, "TMDB_API_KEY", "test-key")
+    monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(watch_index_file))
+    monkeypatch.setattr(config, "TASTE_PROFILE_PATH", str(tmp_path / "taste_profile.txt"))
+    monkeypatch.setattr(config, "EVENT_DB_PATH", str(tmp_path / "streamline.db"))
+    monkeypatch.setattr(config, "ENRICHMENT_CACHE_DIR", str(tmp_path / "enrichments"))
+    monkeypatch.setattr(config, "FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+    monkeypatch.setattr(config, "OVERRIDES_PATH", str(tmp_path / "overrides.json"))
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+
+    fake_event = _make_event()
+    mock_index = MagicMock()
+    mock_index.entries = []
+    mock_llm = MagicMock()
+    mock_llm.provider = "anthropic"
+
+    with patch.object(setup, "create_client", return_value=mock_llm), \
+         patch.object(setup.event_store, "init_db"), \
+         patch.object(setup.event_store, "load_events", return_value=[fake_event]), \
+         patch.object(setup.wi, "load", return_value=mock_index), \
+         patch.object(setup.user_store, "ensure_user_store"), \
+         patch.object(setup.user_store, "load_ratings", return_value=[]), \
+         patch.object(setup.user_store, "apply_rating_multipliers", return_value={}), \
+         patch.object(setup.user_store, "get_disliked_titles", return_value=[]), \
+         patch.object(setup, "compute_scores", return_value={}), \
+         patch.object(setup, "build_taste_profile", return_value="profile text"), \
+         patch.object(setup, "console"):
+        setup.run_setup(refresh_profile=True, profile_path=profile_path)
+
+
+def test_stale_flag_not_cleared_for_custom_profile_path(tmp_path, monkeypatch):
+    """Stale flag must not be cleared when writing a custom --profile-path."""
+    import config
+
+    stale_flag = tmp_path / ".profile_stale"
+    stale_flag.touch()
+    custom_path = str(tmp_path / "sidecar.txt")
+
+    monkeypatch.setattr(config, "PROFILE_STALE_FLAG", str(stale_flag))
+
+    _run_setup_with_stale_mocks(tmp_path, monkeypatch, profile_path=custom_path)
+
+    assert stale_flag.exists(), "Stale flag must not be cleared for a custom profile path"
+
+
+def test_stale_flag_cleared_for_canonical_profile(tmp_path, monkeypatch):
+    """Stale flag is cleared after a successful canonical profile rebuild."""
+    import config
+
+    stale_flag = tmp_path / ".profile_stale"
+    stale_flag.touch()
+
+    monkeypatch.setattr(config, "PROFILE_STALE_FLAG", str(stale_flag))
+
+    _run_setup_with_stale_mocks(tmp_path, monkeypatch)
+
+    assert not stale_flag.exists(), "Stale flag should be cleared after canonical profile rebuild"
