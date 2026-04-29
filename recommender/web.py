@@ -206,6 +206,13 @@ def _md_to_html(text: str) -> str:
     return Markup(html)
 
 
+def _get_tmdb_overview(tmdb_id: int, content_type: str) -> str | None:
+    cache_path = Path(config.CACHE_DIR) / content_type / f"{tmdb_id}.json"
+    if cache_path.exists():
+        return json.loads(cache_path.read_text()).get("overview") or None
+    return None
+
+
 def _get_poster_url(tmdb_id: int, content_type: str, size: str = "w300") -> str | None:
     cache_path = Path(config.CACHE_DIR) / content_type / f"{tmdb_id}.json"
     if cache_path.exists():
@@ -417,6 +424,11 @@ def history() -> str:
                     enrichment_key_from_parts(e.get("content_type", "movie"), e.get("tmdb_id"), e["title"]),
                 )
                 or enrichments.get(e["title"], "")
+                or (
+                    _get_tmdb_overview(e["tmdb_id"], e.get("content_type", "movie"))
+                    if e.get("tmdb_id") else None
+                )
+                or ""
             ),
             "poster": _get_poster_url(e.get("tmdb_id", 0), e.get("content_type", "movie"), "w185")
                       if e.get("tmdb_id") else None,
@@ -775,7 +787,18 @@ def archive_add() -> str:
     if not title:
         return "Missing title", 400
     _ensure_user_store_once()
+    if not tmdb_id and config.TMDB_API_KEY:
+        try:
+            from recommender.tmdb_client import TmdbClient
+            resolved_id, _ = TmdbClient(
+                api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR,
+            ).resolve_title_confident(title, ct)
+            if resolved_id:
+                tmdb_id = resolved_id
+        except Exception:
+            pass
     user_store.add_to_archive(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id, source="web")
+    Path(config.PROFILE_STALE_FLAG).touch()
     uid = f"aa-{hash(title) & 0xFFFFFF:06x}"
     return render_template("_rating_prompt.html", title=title, content_type=ct,
                            tmdb_id=tmdb_id, uid=uid)

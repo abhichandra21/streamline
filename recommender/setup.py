@@ -655,6 +655,9 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
             console.print(f"  Previous profile backed up → {backup.name}")
         resolved_profile_path.write_text(profile)
         console.print(f"  Taste profile saved → {resolved_profile_path}")
+        stale_flag = Path(config.PROFILE_STALE_FLAG)
+        if stale_flag.exists():
+            stale_flag.unlink()
     else:
         console.print("\nTaste profile exists, skipping (use --refresh-profile to rebuild).")
 
