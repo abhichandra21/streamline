@@ -790,11 +790,18 @@ def archive_add() -> str:
     if not tmdb_id and config.TMDB_API_KEY:
         try:
             from recommender.tmdb_client import TmdbClient
-            resolved_id, _ = TmdbClient(
-                api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR,
-            ).resolve_title_confident(title, ct)
+            tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+            resolved_id, resolved_ct = tmdb.resolve_title_confident(title, ct)
             if resolved_id:
                 tmdb_id = resolved_id
+                ct = resolved_ct
+                # Fetch and cache detail JSON so overview/poster are available immediately.
+                if not tmdb._load_cache(ct, resolved_id):
+                    try:
+                        data = tmdb._fetch_details(resolved_id, ct)
+                        tmdb._save_cache(ct, resolved_id, data)
+                    except Exception:
+                        pass
         except Exception:
             pass
     user_store.add_to_archive(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id, source="web")

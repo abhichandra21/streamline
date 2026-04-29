@@ -966,6 +966,29 @@ class TestArchiveAdd:
         assert resp.status_code == 200
         assert stale_flag.exists()
 
+    def test_strong_match_fetches_and_caches_detail_json(self, client, tmp_path, monkeypatch):
+        """After a strong TMDB match, detail JSON is fetched and cached for immediate overview/poster use."""
+        from recommender.user_store import init_db
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        cache_dir = tmp_path / "tmdb"
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+        monkeypatch.setattr("config.CACHE_DIR", str(cache_dir))
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / ".profile_stale"))
+
+        detail_data = {"overview": "A cooking competition.", "poster_path": "/abc.jpg"}
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            instance = MockClient.return_value
+            instance.resolve_title_confident.return_value = (12345, "tv")
+            instance._load_cache.return_value = None
+            instance._fetch_details.return_value = detail_data
+            self._post(client, "Next Gen Chef")
+            instance._fetch_details.assert_called_once_with(12345, "tv")
+            instance._save_cache.assert_called_once_with("tv", 12345, detail_data)
+
     def test_no_llm_called_from_archive_add(self, client, tmp_path, monkeypatch):
         """No LLM enrichment is triggered from the archive add request path."""
         from recommender.user_store import init_db
