@@ -201,6 +201,18 @@ def _make_search_result(tmdb_id, title, release_date="", poster_path=None,
     }
 
 
+def _make_tv_search_result(tmdb_id, name, first_air_date="", poster_path=None,
+                           vote_count=100, popularity=20):
+    return {
+        "id": tmdb_id,
+        "name": name,
+        "first_air_date": first_air_date,
+        "poster_path": poster_path,
+        "vote_count": vote_count,
+        "popularity": popularity,
+    }
+
+
 def _make_details(tmdb_id, title, runtime=None, release_date=""):
     return {
         "id": tmdb_id,
@@ -351,3 +363,25 @@ def test_no_hints_still_works():
 
         assert meta is not None
         assert meta.tmdb_id == 800
+
+
+def test_resolve_title_confident_keeps_same_title_close_results_ambiguous():
+    """Same-title TMDB results need a score margin before persisting an ID."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        candidates = [
+            _make_tv_search_result(
+                2316, "The Office", "2001-07-09", "/uk.jpg",
+                vote_count=1000, popularity=20,
+            ),
+            _make_tv_search_result(
+                69735, "The Office", "1995-03-11", "/variant.jpg",
+                vote_count=1000, popularity=18,
+            ),
+        ]
+
+        with patch.object(client, "_search_candidates", return_value=candidates):
+            tmdb_id, resolved_type = client.resolve_title_confident("The Office", "tv")
+
+        assert tmdb_id is None
+        assert resolved_type == "tv"
