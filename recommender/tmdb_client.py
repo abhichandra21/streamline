@@ -412,12 +412,7 @@ class TmdbClient:
 
         if len(scored) > 1:
             margin = best_total - scored[1][1]
-            second_sim = scored[1][0]
-            # If the runner-up has the same name as the top hit, the "ambiguity"
-            # is two TMDB entries for the same show (e.g. separate season entries).
-            # Pick the highest-scored one rather than failing the lookup.
-            same_name = _title_similarity(best_cand_title, scored[1][3]) >= 0.95
-            if margin < _MARGIN_THRESHOLD and not same_name:
+            if margin < _MARGIN_THRESHOLD:
                 log.debug(
                     "resolve_title_confident: ambiguous match for %r -> %r vs %r (margin=%.1f)",
                     title, best_cand_title, scored[1][3], margin,
