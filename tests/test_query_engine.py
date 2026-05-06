@@ -276,3 +276,59 @@ def test_user_state_excludes_dismissed_and_manual_archive():
     assert "Dismissed Show" not in titles
     assert "Already Watched" not in titles
     assert titles == ["Fresh Pick"]
+
+
+def test_ask_similar_to_only_uses_related_candidates_not_generic_discover():
+    seed = make_meta("Sherlock Holmes", tmdb_id=10528, content_type="movie", genres=["Mystery"])
+    related = make_meta(
+        "The Hound of the Baskervilles",
+        tmdb_id=101,
+        content_type="movie",
+        genres=["Mystery", "Crime"],
+        vote_avg=7.4,
+    )
+    generic = make_meta(
+        "Spirited Away",
+        tmdb_id=129,
+        content_type="movie",
+        genres=["Animation", "Fantasy"],
+        vote_avg=8.5,
+    )
+
+    mock_tmdb = MagicMock()
+    mock_tmdb.search_by_filters.return_value = [generic]
+    mock_tmdb.get_metadata.return_value = seed
+    mock_tmdb.get_related_titles.return_value = [related]
+
+    intent_json = json.dumps({
+        "genres": [], "origin_countries": [], "languages": [],
+        "mood_descriptors": [], "similar_to": ["Sherlock Holmes"],
+        "max_runtime_minutes": None, "year_from": None, "year_to": None,
+        "unwatched_only": True, "special_intent": None,
+        "content_type": "movie", "top_n": 10, "platforms": [],
+    })
+    suggestions_json = json.dumps([])
+    ranked_json = json.dumps([
+        {
+            "title": "The Hound of the Baskervilles",
+            "explanation": "A genuine Holmes-adjacent detective mystery.",
+            "score": 0.91,
+        }
+    ])
+    mock_llm = make_mock_llm_sequence([intent_json, suggestions_json, ranked_json])
+
+    ctx = RecommendContext(
+        taste_profile="taste profile text",
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
+        events=[],
+        tmdb_client=mock_tmdb,
+        llm=mock_llm,
+        cache_dir="/tmp/test_cache",
+    )
+
+    with patch("recommender.query_engine.enrich_batch", return_value={"movie/101": "Detective mystery."}):
+        results = ask("Suggest me 10 movies like Sherlock Holmes", ctx)
+
+    assert [r.title for r in results] == ["The Hound of the Baskervilles"]
+    mock_tmdb.search_by_filters.assert_not_called()
+    mock_tmdb.get_related_titles.assert_called_once_with(10528, "movie", size=30)
