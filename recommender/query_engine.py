@@ -55,6 +55,8 @@ PLATFORM_ALIASES: dict[str, str] = {
     "now": "Now TV",
 }
 
+MIN_QUERY_MATCH_SCORE = 0.5
+
 
 @dataclass
 class QueryIntent:
@@ -243,7 +245,9 @@ def rank_candidates(
         f'- title: string (exact title from candidates)\n'
         f'- explanation: string (1-2 sentences why this fits the query and this user)\n'
         f'- score: float 0-1 (how well it matches the QUERY, boosted slightly by taste fit)\n\n'
-        f'Return EXACTLY the top {top_n} ranked candidates, no more.'
+        f'Return up to {top_n} ranked candidates, no more. '
+        f'Omit any candidate that does not genuinely match the query. '
+        f'Never include weak matches just to fill the requested count.'
     )
     # Scale output tokens based on result count
     rank_tokens = max(config.TOKENS_RANKING, top_n * 200 + 200)
@@ -262,11 +266,15 @@ def rank_candidates(
         if title not in meta_by_title:
             log.debug("Ranked title not in candidates, skipping: %r", title)
             continue
+        score = float(item.get('score', 0))
+        if score < MIN_QUERY_MATCH_SCORE:
+            log.debug("Ranked title below query threshold, skipping: %r (score=%.2f)", title, score)
+            continue
         meta = meta_by_title[title]
         results.append(Recommendation(
             title=title,
             content_type=meta.content_type,
-            score=float(item.get('score', 0)),
+            score=score,
             vote_average=meta.vote_average,
             genres=meta.genres,
             explanation=item.get('explanation', ''),

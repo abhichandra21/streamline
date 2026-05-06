@@ -129,6 +129,61 @@ def test_rank_candidates_skips_unknown_titles():
     assert "Broadchurch" in titles
 
 
+def test_rank_candidates_omits_low_score_query_mismatches():
+    candidates = [
+        make_meta("The Hound of the Baskervilles", tmdb_id=101, content_type="movie", genres=["Mystery"]),
+        make_meta("Spirited Away", tmdb_id=129, content_type="movie", genres=["Animation", "Fantasy"]),
+    ]
+    enrichments = {
+        "movie/101": "Sherlock Holmes detective mystery.",
+        "movie/129": "Japanese animated fantasy.",
+    }
+    ranked = [
+        {
+            "title": "The Hound of the Baskervilles",
+            "explanation": "A genuine Holmes-adjacent detective mystery.",
+            "score": 0.91,
+        },
+        {
+            "title": "Spirited Away",
+            "explanation": "A weak query match included only to fill the list.",
+            "score": 0.32,
+        },
+    ]
+    client = make_mock_llm(json.dumps(ranked))
+
+    results = rank_candidates(
+        "Suggest me 10 movies like Sherlock Holmes",
+        "taste profile",
+        candidates,
+        enrichments,
+        client,
+        top_n=10,
+    )
+
+    assert [r.title for r in results] == ["The Hound of the Baskervilles"]
+
+
+def test_rank_candidates_prompt_allows_fewer_than_top_n():
+    candidates = [make_meta("The Hound of the Baskervilles", tmdb_id=101)]
+    enrichments = {"tv/101": "Detective mystery."}
+    ranked = [
+        {
+            "title": "The Hound of the Baskervilles",
+            "explanation": "A strong match.",
+            "score": 0.9,
+        }
+    ]
+    client = make_mock_llm(json.dumps(ranked))
+
+    rank_candidates("movies like Sherlock Holmes", "profile", candidates, enrichments, client, top_n=10)
+
+    prompt = client.generate.call_args.args[0]
+    assert "Return up to 10 ranked candidates" in prompt
+    assert "Never include weak matches just to fill the requested count." in prompt
+    assert "Return EXACTLY" not in prompt
+
+
 def test_ask_excludes_watched_titles():
     meta_watched = make_meta("Broadchurch", tmdb_id=1)
     meta_new = make_meta("Hinterland", tmdb_id=2)
