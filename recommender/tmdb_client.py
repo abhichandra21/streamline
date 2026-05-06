@@ -256,6 +256,57 @@ class TmdbClient:
         endpoint = f"tv/{tmdb_id}" if content_type == "tv" else f"movie/{tmdb_id}"
         return self._get(endpoint, {"append_to_response": "keywords,credits"})
 
+    def get_related_titles(
+        self,
+        tmdb_id: int,
+        content_type: str,
+        size: int = 30,
+    ) -> list["TmdbMetadata"]:
+        """Fetch TMDB recommendations and similar titles for one seed title."""
+        prefix = "tv" if content_type == "tv" else "movie"
+        endpoints = (
+            f"{prefix}/{tmdb_id}/recommendations",
+            f"{prefix}/{tmdb_id}/similar",
+        )
+
+        related: dict[int, "TmdbMetadata"] = {}
+        for endpoint in endpoints:
+            page = 1
+            while len(related) < size and page <= MAX_DISCOVER_PAGES:
+                data = self._get(endpoint, {"page": page})
+                results = data.get("results", [])
+                if not results:
+                    break
+                total_pages = min(int(data.get("total_pages", page)), MAX_DISCOVER_PAGES)
+                for item in results:
+                    related_id = item["id"]
+                    if related_id in related:
+                        continue
+                    cached = self._load_cache(content_type, related_id)
+                    if cached:
+                        related[related_id] = self._parse_metadata(cached, content_type)
+                    else:
+                        try:
+                            details = self._fetch_details(related_id, content_type)
+                            self._save_cache(content_type, related_id, details)
+                            related[related_id] = self._parse_metadata(details, content_type)
+                            time.sleep(0.05)
+                        except Exception as exc:
+                            log.warning("TMDB related fetch failed for ID %d: %s", related_id, exc)
+                            continue
+                    if len(related) >= size:
+                        break
+                if page >= total_pages:
+                    break
+                page += 1
+        log.debug(
+            "Related titles returned %d candidates for %s/%d",
+            len(related),
+            content_type,
+            tmdb_id,
+        )
+        return list(related.values())
+
     def _parse_metadata(self, data: dict, content_type: str) -> TmdbMetadata:
         title = data.get("name") or data.get("title", "")
         genres = [g["name"] for g in data.get("genres", [])]

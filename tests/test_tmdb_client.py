@@ -170,6 +170,64 @@ def test_search_by_filters_movie():
         assert discover_call[1]['params']['with_original_language'] == "hi"
 
 
+def test_get_related_titles_merges_recommendations_and_similar():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+
+        recommendations_response = {"results": [{"id": 101}, {"id": 102}]}
+        similar_response = {"results": [{"id": 102}, {"id": 103}]}
+
+        detail_101 = {
+            "id": 101, "title": "The Hound of the Baskervilles",
+            "genres": [{"name": "Mystery"}],
+            "keywords": {"keywords": []}, "credits": {"cast": [], "crew": []},
+            "runtime": 100, "original_language": "en",
+            "vote_average": 7.2, "vote_count": 300,
+            "release_date": "2002-01-01",
+        }
+        detail_102 = {
+            "id": 102, "title": "Without a Clue",
+            "genres": [{"name": "Comedy"}, {"name": "Mystery"}],
+            "keywords": {"keywords": []}, "credits": {"cast": [], "crew": []},
+            "runtime": 107, "original_language": "en",
+            "vote_average": 7.0, "vote_count": 350,
+            "release_date": "1988-10-21",
+        }
+        detail_103 = {
+            "id": 103, "title": "Young Sherlock Holmes",
+            "genres": [{"name": "Adventure"}, {"name": "Mystery"}],
+            "keywords": {"keywords": []}, "credits": {"cast": [], "crew": []},
+            "runtime": 109, "original_language": "en",
+            "vote_average": 6.8, "vote_count": 400,
+            "release_date": "1985-12-04",
+        }
+
+        with patch.object(client, "_get") as mock_get:
+            mock_get.side_effect = [
+                recommendations_response,
+                detail_101,
+                detail_102,
+                similar_response,
+                detail_103,
+            ]
+            results = client.get_related_titles(10528, "movie", size=3)
+
+    assert [r.tmdb_id for r in results] == [101, 102, 103]
+    assert [r.title for r in results] == [
+        "The Hound of the Baskervilles",
+        "Without a Clue",
+        "Young Sherlock Holmes",
+    ]
+    endpoints = [call.args[0] for call in mock_get.call_args_list]
+    assert endpoints == [
+        "movie/10528/recommendations",
+        "movie/101",
+        "movie/102",
+        "movie/10528/similar",
+        "movie/103",
+    ]
+
+
 # --- Candidate ranking tests ---
 
 def test_title_similarity_exact():
