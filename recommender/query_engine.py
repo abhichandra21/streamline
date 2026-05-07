@@ -483,17 +483,18 @@ def _candidate_allowed(
 
 def _append_candidate(
     candidates: list[TmdbMetadata],
-    seen_ids: set[int],
+    seen_ids: set[tuple[str, int]],
     candidate: TmdbMetadata,
     ctx: "RecommendContext",
     extra_excludes: set[str],
 ) -> bool:
-    if candidate.tmdb_id in seen_ids:
+    key = (candidate.content_type, candidate.tmdb_id)
+    if key in seen_ids:
         return False
     if not _candidate_allowed(candidate, ctx, extra_excludes):
         return False
     candidates.append(candidate)
-    seen_ids.add(candidate.tmdb_id)
+    seen_ids.add(key)
     return True
 
 
@@ -534,7 +535,7 @@ def ask(
         return _handle_abandoned(query, intent, ctx)
 
     content_types = ['tv', 'movie'] if intent.content_type == 'both' else [intent.content_type]
-    seen_ids: set[int] = set()
+    seen_ids: set[tuple[str, int]] = set()
 
     # Source 1: TMDB Discover (structured metadata filter)
     candidates: list[TmdbMetadata] = []

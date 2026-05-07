@@ -387,3 +387,49 @@ def test_ask_similar_to_only_uses_related_candidates_not_generic_discover():
     assert [r.title for r in results] == ["The Hound of the Baskervilles"]
     mock_tmdb.search_by_filters.assert_not_called()
     mock_tmdb.get_related_titles.assert_called_once_with(10528, "movie", size=30)
+
+
+def test_ask_both_content_types_keeps_tv_and_movie_with_same_tmdb_id():
+    """TMDB IDs are not globally unique; a TV show and movie can share one."""
+    shared_id = 999
+    tv_meta = make_meta("Shared ID Show", tmdb_id=shared_id, content_type="tv")
+    movie_meta = make_meta("Shared ID Movie", tmdb_id=shared_id, content_type="movie")
+
+    mock_tmdb = MagicMock()
+    mock_tmdb.search_by_filters.side_effect = [
+        [tv_meta],    # tv Discover call
+        [movie_meta], # movie Discover call
+    ]
+    mock_tmdb.get_metadata.return_value = None
+
+    intent_json = json.dumps({
+        "genres": ["drama"], "origin_countries": [], "languages": [],
+        "mood_descriptors": [], "similar_to": [],
+        "max_runtime_minutes": None, "year_from": None, "year_to": None,
+        "unwatched_only": True, "special_intent": None,
+        "content_type": "both", "top_n": 10, "platforms": [],
+    })
+    suggestions_json = json.dumps([])
+    ranked_json = json.dumps([
+        {"title": "Shared ID Show", "explanation": "Good TV.", "score": 0.85},
+        {"title": "Shared ID Movie", "explanation": "Good movie.", "score": 0.82},
+    ])
+    mock_llm = make_mock_llm_sequence([intent_json, suggestions_json, ranked_json])
+
+    ctx = RecommendContext(
+        taste_profile="taste profile text",
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
+        events=[],
+        tmdb_client=mock_tmdb,
+        llm=mock_llm,
+        cache_dir="/tmp/test_cache",
+    )
+
+    with patch("recommender.query_engine.enrich_batch", return_value={
+        "tv/999": "Drama series.", "movie/999": "Drama film.",
+    }):
+        results = ask("drama", ctx)
+
+    titles = [r.title for r in results]
+    assert "Shared ID Show" in titles
+    assert "Shared ID Movie" in titles
