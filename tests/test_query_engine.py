@@ -433,3 +433,38 @@ def test_ask_both_content_types_keeps_tv_and_movie_with_same_tmdb_id():
     titles = [r.title for r in results]
     assert "Shared ID Show" in titles
     assert "Shared ID Movie" in titles
+
+
+def test_ask_llm_suggestions_respect_content_type():
+    """get_metadata alt-type fallback must not inject TV shows into a movie query."""
+    tv_via_alttype = make_meta("Houdini & Doyle", tmdb_id=65879, content_type="tv")
+
+    mock_tmdb = MagicMock()
+    mock_tmdb.search_by_filters.return_value = []
+    mock_tmdb.get_metadata.return_value = tv_via_alttype
+
+    intent_json = json.dumps({
+        "genres": ["mystery"], "origin_countries": [], "languages": [],
+        "mood_descriptors": [], "similar_to": [],
+        "max_runtime_minutes": None, "year_from": None, "year_to": None,
+        "unwatched_only": True, "special_intent": None,
+        "content_type": "movie", "top_n": 5, "platforms": [],
+    })
+    suggestions_json = json.dumps(["Houdini & Doyle"])
+    ranked_json = json.dumps([])
+    mock_llm = make_mock_llm_sequence([intent_json, suggestions_json, ranked_json])
+
+    ctx = RecommendContext(
+        taste_profile="taste profile text",
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
+        events=[],
+        tmdb_client=mock_tmdb,
+        llm=mock_llm,
+        cache_dir="/tmp/test_cache",
+    )
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        results = ask("mystery movies", ctx)
+
+    assert results == []
+    assert all(r.content_type == "movie" for r in results)

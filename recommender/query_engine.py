@@ -55,7 +55,7 @@ PLATFORM_ALIASES: dict[str, str] = {
     "now": "Now TV",
 }
 
-MIN_QUERY_MATCH_SCORE = 0.5
+MIN_QUERY_MATCH_SCORE = 0.6
 
 
 @dataclass
@@ -597,7 +597,7 @@ def ask(
     for title in suggestions:
         for ct in content_types:
             meta = ctx.tmdb_client.get_metadata(title, ct)
-            if meta and _append_candidate(candidates, seen_ids, meta, ctx, extra_excludes):
+            if meta and meta.content_type == ct and _append_candidate(candidates, seen_ids, meta, ctx, extra_excludes):
                 suggestion_count += 1
     log.debug("LLM suggestions added %d new candidates", suggestion_count)
 
