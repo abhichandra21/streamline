@@ -129,6 +129,61 @@ def test_rank_candidates_skips_unknown_titles():
     assert "Broadchurch" in titles
 
 
+def test_rank_candidates_omits_low_score_query_mismatches():
+    candidates = [
+        make_meta("The Hound of the Baskervilles", tmdb_id=101, content_type="movie", genres=["Mystery"]),
+        make_meta("Spirited Away", tmdb_id=129, content_type="movie", genres=["Animation", "Fantasy"]),
+    ]
+    enrichments = {
+        "movie/101": "Sherlock Holmes detective mystery.",
+        "movie/129": "Japanese animated fantasy.",
+    }
+    ranked = [
+        {
+            "title": "The Hound of the Baskervilles",
+            "explanation": "A genuine Holmes-adjacent detective mystery.",
+            "score": 0.91,
+        },
+        {
+            "title": "Spirited Away",
+            "explanation": "A weak query match included only to fill the list.",
+            "score": 0.32,
+        },
+    ]
+    client = make_mock_llm(json.dumps(ranked))
+
+    results = rank_candidates(
+        "Suggest me 10 movies like Sherlock Holmes",
+        "taste profile",
+        candidates,
+        enrichments,
+        client,
+        top_n=10,
+    )
+
+    assert [r.title for r in results] == ["The Hound of the Baskervilles"]
+
+
+def test_rank_candidates_prompt_allows_fewer_than_top_n():
+    candidates = [make_meta("The Hound of the Baskervilles", tmdb_id=101)]
+    enrichments = {"tv/101": "Detective mystery."}
+    ranked = [
+        {
+            "title": "The Hound of the Baskervilles",
+            "explanation": "A strong match.",
+            "score": 0.9,
+        }
+    ]
+    client = make_mock_llm(json.dumps(ranked))
+
+    rank_candidates("movies like Sherlock Holmes", "profile", candidates, enrichments, client, top_n=10)
+
+    prompt = client.generate.call_args.args[0]
+    assert "Return up to 10 ranked candidates" in prompt
+    assert "Never include weak matches just to fill the requested count." in prompt
+    assert "Return EXACTLY" not in prompt
+
+
 def test_ask_excludes_watched_titles():
     meta_watched = make_meta("Broadchurch", tmdb_id=1)
     meta_new = make_meta("Hinterland", tmdb_id=2)
@@ -276,3 +331,105 @@ def test_user_state_excludes_dismissed_and_manual_archive():
     assert "Dismissed Show" not in titles
     assert "Already Watched" not in titles
     assert titles == ["Fresh Pick"]
+
+
+def test_ask_similar_to_only_uses_related_candidates_not_generic_discover():
+    seed = make_meta("Sherlock Holmes", tmdb_id=10528, content_type="movie", genres=["Mystery"])
+    related = make_meta(
+        "The Hound of the Baskervilles",
+        tmdb_id=101,
+        content_type="movie",
+        genres=["Mystery", "Crime"],
+        vote_avg=7.4,
+    )
+    generic = make_meta(
+        "Spirited Away",
+        tmdb_id=129,
+        content_type="movie",
+        genres=["Animation", "Fantasy"],
+        vote_avg=8.5,
+    )
+
+    mock_tmdb = MagicMock()
+    mock_tmdb.search_by_filters.return_value = [generic]
+    mock_tmdb.get_metadata.return_value = seed
+    mock_tmdb.get_related_titles.return_value = [related]
+
+    intent_json = json.dumps({
+        "genres": [], "origin_countries": [], "languages": [],
+        "mood_descriptors": [], "similar_to": ["Sherlock Holmes"],
+        "max_runtime_minutes": None, "year_from": None, "year_to": None,
+        "unwatched_only": True, "special_intent": None,
+        "content_type": "movie", "top_n": 10, "platforms": [],
+    })
+    suggestions_json = json.dumps([])
+    ranked_json = json.dumps([
+        {
+            "title": "The Hound of the Baskervilles",
+            "explanation": "A genuine Holmes-adjacent detective mystery.",
+            "score": 0.91,
+        }
+    ])
+    mock_llm = make_mock_llm_sequence([intent_json, suggestions_json, ranked_json])
+
+    ctx = RecommendContext(
+        taste_profile="taste profile text",
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
+        events=[],
+        tmdb_client=mock_tmdb,
+        llm=mock_llm,
+        cache_dir="/tmp/test_cache",
+    )
+
+    with patch("recommender.query_engine.enrich_batch", return_value={"movie/101": "Detective mystery."}):
+        results = ask("Suggest me 10 movies like Sherlock Holmes", ctx)
+
+    assert [r.title for r in results] == ["The Hound of the Baskervilles"]
+    mock_tmdb.search_by_filters.assert_not_called()
+    mock_tmdb.get_related_titles.assert_called_once_with(10528, "movie", size=30)
+
+
+def test_ask_both_content_types_keeps_tv_and_movie_with_same_tmdb_id():
+    """TMDB IDs are not globally unique; a TV show and movie can share one."""
+    shared_id = 999
+    tv_meta = make_meta("Shared ID Show", tmdb_id=shared_id, content_type="tv")
+    movie_meta = make_meta("Shared ID Movie", tmdb_id=shared_id, content_type="movie")
+
+    mock_tmdb = MagicMock()
+    mock_tmdb.search_by_filters.side_effect = [
+        [tv_meta],    # tv Discover call
+        [movie_meta], # movie Discover call
+    ]
+    mock_tmdb.get_metadata.return_value = None
+
+    intent_json = json.dumps({
+        "genres": ["drama"], "origin_countries": [], "languages": [],
+        "mood_descriptors": [], "similar_to": [],
+        "max_runtime_minutes": None, "year_from": None, "year_to": None,
+        "unwatched_only": True, "special_intent": None,
+        "content_type": "both", "top_n": 10, "platforms": [],
+    })
+    suggestions_json = json.dumps([])
+    ranked_json = json.dumps([
+        {"title": "Shared ID Show", "explanation": "Good TV.", "score": 0.85},
+        {"title": "Shared ID Movie", "explanation": "Good movie.", "score": 0.82},
+    ])
+    mock_llm = make_mock_llm_sequence([intent_json, suggestions_json, ranked_json])
+
+    ctx = RecommendContext(
+        taste_profile="taste profile text",
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
+        events=[],
+        tmdb_client=mock_tmdb,
+        llm=mock_llm,
+        cache_dir="/tmp/test_cache",
+    )
+
+    with patch("recommender.query_engine.enrich_batch", return_value={
+        "tv/999": "Drama series.", "movie/999": "Drama film.",
+    }):
+        results = ask("drama", ctx)
+
+    titles = [r.title for r in results]
+    assert "Shared ID Show" in titles
+    assert "Shared ID Movie" in titles

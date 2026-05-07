@@ -55,6 +55,8 @@ PLATFORM_ALIASES: dict[str, str] = {
     "now": "Now TV",
 }
 
+MIN_QUERY_MATCH_SCORE = 0.5
+
 
 @dataclass
 class QueryIntent:
@@ -243,7 +245,9 @@ def rank_candidates(
         f'- title: string (exact title from candidates)\n'
         f'- explanation: string (1-2 sentences why this fits the query and this user)\n'
         f'- score: float 0-1 (how well it matches the QUERY, boosted slightly by taste fit)\n\n'
-        f'Return EXACTLY the top {top_n} ranked candidates, no more.'
+        f'Return up to {top_n} ranked candidates, no more. '
+        f'Omit any candidate that does not genuinely match the query. '
+        f'Never include weak matches just to fill the requested count.'
     )
     # Scale output tokens based on result count
     rank_tokens = max(config.TOKENS_RANKING, top_n * 200 + 200)
@@ -262,11 +266,15 @@ def rank_candidates(
         if title not in meta_by_title:
             log.debug("Ranked title not in candidates, skipping: %r", title)
             continue
+        score = float(item.get('score', 0))
+        if score < MIN_QUERY_MATCH_SCORE:
+            log.debug("Ranked title below query threshold, skipping: %r (score=%.2f)", title, score)
+            continue
         meta = meta_by_title[title]
         results.append(Recommendation(
             title=title,
             content_type=meta.content_type,
-            score=float(item.get('score', 0)),
+            score=score,
             vote_average=meta.vote_average,
             genres=meta.genres,
             explanation=item.get('explanation', ''),
@@ -442,6 +450,54 @@ _WHAT_ELSE_PATTERNS = re.compile(
 _MORE_LIKE_N = re.compile(r'^more like #?(\d+)', re.IGNORECASE)
 
 
+def _has_discover_filters(intent: "QueryIntent") -> bool:
+    """Return True when TMDB Discover has user-specified narrowing filters."""
+    return bool(
+        intent.genres
+        or intent.origin_countries
+        or intent.languages
+        or intent.year_from
+        or intent.year_to
+    )
+
+
+def _candidate_allowed(
+    candidate: TmdbMetadata,
+    ctx: "RecommendContext",
+    extra_excludes: set[str],
+) -> bool:
+    if ctx.watch_index.is_watched(candidate):
+        return False
+    if candidate.title in extra_excludes:
+        return False
+    if ctx.user_state and ctx.user_state.is_manually_watched(candidate):
+        return False
+    if ctx.user_state and ctx.user_state.is_dismissed(candidate):
+        return False
+    if config.MIN_RATING > 0 and candidate.vote_average < config.MIN_RATING:
+        return False
+    if config.MIN_YEAR > 0 and candidate.release_year and candidate.release_year < config.MIN_YEAR:
+        return False
+    return True
+
+
+def _append_candidate(
+    candidates: list[TmdbMetadata],
+    seen_ids: set[tuple[str, int]],
+    candidate: TmdbMetadata,
+    ctx: "RecommendContext",
+    extra_excludes: set[str],
+) -> bool:
+    key = (candidate.content_type, candidate.tmdb_id)
+    if key in seen_ids:
+        return False
+    if not _candidate_allowed(candidate, ctx, extra_excludes):
+        return False
+    candidates.append(candidate)
+    seen_ids.add(key)
+    return True
+
+
 def ask(
     query: str,
     ctx: RecommendContext,
@@ -479,11 +535,15 @@ def ask(
         return _handle_abandoned(query, intent, ctx)
 
     content_types = ['tv', 'movie'] if intent.content_type == 'both' else [intent.content_type]
-    seen_ids: set[int] = set()
+    seen_ids: set[tuple[str, int]] = set()
 
     # Source 1: TMDB Discover (structured metadata filter)
     candidates: list[TmdbMetadata] = []
-    for ct in content_types:
+    run_discover = _has_discover_filters(intent) or not intent.similar_to
+    if not run_discover:
+        log.debug("Skipping unfiltered TMDB Discover for similar_to-only query")
+
+    for ct in (content_types if run_discover else []):
         log.debug("TMDB discover: type=%s genres=%s countries=%s languages=%s years=%s-%s",
                    ct, intent.genres, intent.origin_countries, intent.languages,
                    intent.year_from, intent.year_to)
@@ -504,26 +564,29 @@ def ask(
         candidates.extend(batch)
 
     pre_filter = len(candidates)
-    candidates = [
-        c for c in candidates
-        if not ctx.watch_index.is_watched(c)
-        and c.title not in extra_excludes
-        and not (ctx.user_state and ctx.user_state.is_manually_watched(c))
-        and not (ctx.user_state and ctx.user_state.is_dismissed(c))
-    ]
-    log.debug("Watch filter: %d -> %d candidates (%d excluded)",
+    filtered_candidates: list[TmdbMetadata] = []
+    for candidate in candidates:
+        _append_candidate(filtered_candidates, seen_ids, candidate, ctx, extra_excludes)
+    candidates = filtered_candidates
+    log.debug("Candidate filters: %d -> %d candidates (%d excluded)",
               pre_filter, len(candidates), pre_filter - len(candidates))
 
-    # Apply min rating filter (min_year is already pushed into TMDB discover)
-    pre_quality = len(candidates)
-    if config.MIN_RATING > 0:
-        candidates = [c for c in candidates if c.vote_average >= config.MIN_RATING]
-    if len(candidates) < pre_quality:
-        log.debug("Rating filter: %d -> %d candidates (min_rating=%.1f)",
-                  pre_quality, len(candidates), config.MIN_RATING)
-
-    for c in candidates:
-        seen_ids.add(c.tmdb_id)
+    if intent.similar_to:
+        related_added = 0
+        for seed_title in intent.similar_to:
+            for ct in content_types:
+                seed_meta = ctx.tmdb_client.get_metadata(seed_title, ct)
+                if not seed_meta:
+                    continue
+                related = ctx.tmdb_client.get_related_titles(
+                    seed_meta.tmdb_id,
+                    seed_meta.content_type,
+                    size=30,
+                )
+                for candidate in related:
+                    if _append_candidate(candidates, seen_ids, candidate, ctx, extra_excludes):
+                        related_added += 1
+        log.debug("TMDB related titles added %d new candidates", related_added)
 
     # Source 2: LLM suggestions (semantic, taste-aware — always runs)
     log.debug("Fetching LLM suggestions for semantic coverage (similar_to=%s)", intent.similar_to)
@@ -534,16 +597,7 @@ def ask(
     for title in suggestions:
         for ct in content_types:
             meta = ctx.tmdb_client.get_metadata(title, ct)
-            if (meta and meta.tmdb_id not in seen_ids and not ctx.watch_index.is_watched(meta)
-                    and meta.title not in extra_excludes
-                    and not (ctx.user_state and ctx.user_state.is_manually_watched(meta))
-                    and not (ctx.user_state and ctx.user_state.is_dismissed(meta))):
-                if config.MIN_RATING > 0 and meta.vote_average < config.MIN_RATING:
-                    continue
-                if config.MIN_YEAR > 0 and meta.release_year and meta.release_year < config.MIN_YEAR:
-                    continue
-                candidates.append(meta)
-                seen_ids.add(meta.tmdb_id)
+            if meta and _append_candidate(candidates, seen_ids, meta, ctx, extra_excludes):
                 suggestion_count += 1
     log.debug("LLM suggestions added %d new candidates", suggestion_count)
 
