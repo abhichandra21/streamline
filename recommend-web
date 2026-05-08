@@ -4,14 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PIDFILE="$SCRIPT_DIR/.web.pid"
 LOGFILE="$SCRIPT_DIR/logs/web.log"
-PORT="${STREAMLINE_PORT:-5051}"
-HOST="${STREAMLINE_HOST:-127.0.0.1}"
 VENV="$SCRIPT_DIR/.venv"
 
-# Load environment
+# Load environment first so .env can override STREAMLINE_PORT/HOST below.
 if [ -f "$SCRIPT_DIR/.env" ]; then
     set -a; source "$SCRIPT_DIR/.env"; set +a
 fi
+
+PORT="${STREAMLINE_PORT:-5051}"
+HOST="${STREAMLINE_HOST:-127.0.0.1}"
 
 # Activate venv
 if [ ! -d "$VENV" ]; then
@@ -171,14 +172,30 @@ stop() {
         rm -f "$PIDFILE"
     fi
 
-    # Sweep any orphaned gunicorn workers bound to our port.
+    # Sweep any orphaned Streamline gunicorn workers still bound to our port.
+    # Filter strictly by command line so we never touch unrelated services that
+    # happen to be on $PORT (e.g. a custom app, or a coworker's process).
+    streamline_pids_on_port() {
+        local raw filtered=""
+        raw=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true)
+        for p in $raw; do
+            local cmd
+            cmd=$(ps -o command= -p "$p" 2>/dev/null || true)
+            # Match our gunicorn invocation (recommender.web:app) or our venv's gunicorn binary.
+            if echo "$cmd" | grep -Eq 'recommender\.web:app|'"$VENV"'/bin/gunicorn'; then
+                filtered+="$p "
+            fi
+        done
+        echo "$filtered"
+    }
+
     local stragglers
-    stragglers=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true)
+    stragglers=$(streamline_pids_on_port)
     if [ -n "$stragglers" ]; then
-        echo "Cleaning orphaned listener(s) on port $PORT: $stragglers"
+        echo "Cleaning orphaned Streamline worker(s) on port $PORT: $stragglers"
         kill -TERM $stragglers 2>/dev/null || true
         sleep 1
-        stragglers=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true)
+        stragglers=$(streamline_pids_on_port)
         [ -n "$stragglers" ] && kill -9 $stragglers 2>/dev/null || true
     fi
 
