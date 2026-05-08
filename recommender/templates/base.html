@@ -289,6 +289,47 @@
       transition: color 0.15s;
     }
     .result-link:hover { color: var(--accent); text-decoration: none; }
+
+    /* Mobile nav: deliberate two-tier editorial masthead.
+       Row 1: brand (left) + system/utility links (right).
+       Row 2: primary nav as a sub-bar with hairline top divider; scrolls horizontally if needed. */
+    @media (max-width: 720px) {
+      nav {
+        flex-wrap: wrap;
+        height: auto;
+        column-gap: 1rem;
+        row-gap: 0;
+        padding: 0.7rem 1.1rem 0;
+        align-items: center;
+      }
+      .nav-brand {
+        margin-right: auto;
+        font-size: 1.22rem;
+      }
+      .nav-group-system {
+        padding-left: 0;
+        border-left: none;
+        gap: 0.9rem;
+      }
+      .nav-group-system .nav-link { font-size: 0.58rem; }
+      .nav-group {
+        order: 3;
+        flex: 1 1 100%;
+        gap: 1.1rem;
+        margin-top: 0.6rem;
+        padding: 0.55rem 0 0.6rem;
+        border-top: 1px solid var(--border);
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+        mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 18px), transparent 100%);
+      }
+      .nav-group::-webkit-scrollbar { display: none; }
+      .nav-group .nav-link { white-space: nowrap; }
+      main { padding: 1.75rem 1rem 4rem !important; }
+      footer { padding: 1.25rem 1rem !important; }
+    }
   </style>
 </head>
 

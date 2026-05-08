@@ -1274,7 +1274,7 @@ def run() -> None:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     host = os.environ.get("STREAMLINE_HOST", "127.0.0.1")
-    port = int(os.environ.get("STREAMLINE_PORT", "5050"))
+    port = int(os.environ.get("STREAMLINE_PORT", "5051"))
     print(f"Starting Streamline web UI at http://{host}:{port}")
     app.run(debug=False, host=host, port=port)
 

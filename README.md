@@ -129,7 +129,7 @@ Each query prints token usage and estimated cost at the end.
 ## Web UI
 
 ```bash
-./recommend-web start                           # http://localhost:5050
+./recommend-web start                           # http://localhost:5051
 ./recommend-web stop
 ./recommend-web status
 ./recommend-web restart

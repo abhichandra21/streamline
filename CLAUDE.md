@@ -44,7 +44,7 @@ python3 -m pytest tests/test_query_engine.py -v
 ./recommend --add "Title" --type tv            # add to watch history
 
 # Web UI
-./recommend-web start                          # http://localhost:5050
+./recommend-web start                          # http://localhost:5051
 ./recommend-web stop
 ./recommend-web restart
 ```
