@@ -33,7 +33,7 @@ Runs a CLI recommendation query.
 ./recommend-web start
 ```
 
-Starts the Flask web UI on `http://localhost:5050`.
+Starts the Flask web UI on `http://localhost:5051`.
 
 ```bash
 python3 -m pytest -q

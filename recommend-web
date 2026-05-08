@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PIDFILE="$SCRIPT_DIR/.web.pid"
 LOGFILE="$SCRIPT_DIR/logs/web.log"
-PORT="${STREAMLINE_PORT:-5050}"
+PORT="${STREAMLINE_PORT:-5051}"
 HOST="${STREAMLINE_HOST:-127.0.0.1}"
 VENV="$SCRIPT_DIR/.venv"
 
@@ -135,33 +135,60 @@ start() {
     fi
 }
 
+port_free() {
+    ! python3 -c "import socket; s=socket.socket(); s.settimeout(1); s.connect(('$HOST', $PORT)); s.close()" 2>/dev/null
+}
+
 stop() {
-    if ! is_running; then
-        echo "Not running."
-        rm -f "$PIDFILE"
-        return 0
+    local pid=""
+    if [ -f "$PIDFILE" ]; then
+        pid=$(cat "$PIDFILE")
     fi
 
-    local pid
-    pid=$(cat "$PIDFILE")
-    echo "Stopping (PID $pid)..."
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+        # Master gone, but a worker may still hold the port — sweep by name.
+        pid=""
+    fi
 
-    # Graceful shutdown
-    kill "$pid" 2>/dev/null
+    if [ -z "$pid" ]; then
+        echo "Not running."
+        rm -f "$PIDFILE"
+    else
+        echo "Stopping (PID $pid)..."
+        # Graceful: TERM master and its children (gunicorn workers).
+        pkill -TERM -P "$pid" 2>/dev/null || true
+        kill -TERM "$pid" 2>/dev/null || true
+        local waited=0
+        while [ $waited -lt 5 ] && kill -0 "$pid" 2>/dev/null; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "Forcing stop..."
+            pkill -KILL -P "$pid" 2>/dev/null || true
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+        rm -f "$PIDFILE"
+    fi
+
+    # Sweep any orphaned gunicorn workers bound to our port.
+    local stragglers
+    stragglers=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true)
+    if [ -n "$stragglers" ]; then
+        echo "Cleaning orphaned listener(s) on port $PORT: $stragglers"
+        kill -TERM $stragglers 2>/dev/null || true
+        sleep 1
+        stragglers=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true)
+        [ -n "$stragglers" ] && kill -9 $stragglers 2>/dev/null || true
+    fi
+
+    # Wait for the socket to actually free.
     local waited=0
-    while [ $waited -lt 5 ] && kill -0 "$pid" 2>/dev/null; do
+    while [ $waited -lt 5 ] && ! port_free; do
         sleep 1
         waited=$((waited + 1))
     done
 
-    # Force kill if still alive
-    if kill -0 "$pid" 2>/dev/null; then
-        echo "Forcing stop..."
-        kill -9 "$pid" 2>/dev/null
-        sleep 1
-    fi
-
-    rm -f "$PIDFILE"
     echo "Stopped."
 }
 
