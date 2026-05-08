@@ -290,45 +290,78 @@
     }
     .result-link:hover { color: var(--accent); text-decoration: none; }
 
-    /* Mobile nav: deliberate two-tier editorial masthead.
-       Row 1: brand (left) + system/utility links (right).
-       Row 2: primary nav as a sub-bar with hairline top divider; scrolls horizontally if needed. */
+    /* Defensive: prevent any horizontal scroll. Individual scroll surfaces
+       (the nav strips below) opt back in explicitly. */
+    html, body { overflow-x: hidden; }
+
+    /* Mobile masthead: three deliberate rows.
+       Row 1: brand alone.
+       Row 2: primary nav, horizontally scrollable if needed.
+       Row 3: system/utility links, dimmer and smaller. */
     @media (max-width: 720px) {
       nav {
-        flex-wrap: wrap;
+        flex-direction: column;
+        align-items: stretch;
         height: auto;
-        column-gap: 1rem;
-        row-gap: 0;
-        padding: 0.7rem 1.1rem 0;
-        align-items: center;
+        gap: 0;
+        padding: 0;
       }
       .nav-brand {
-        margin-right: auto;
-        font-size: 1.22rem;
+        align-self: flex-start;
+        padding: 0.7rem 1rem 0.55rem;
+        font-size: 1.2rem;
       }
+      .nav-group,
       .nav-group-system {
-        padding-left: 0;
-        border-left: none;
-        gap: 0.9rem;
-      }
-      .nav-group-system .nav-link { font-size: 0.58rem; }
-      .nav-group {
-        order: 3;
-        flex: 1 1 100%;
-        gap: 1.1rem;
-        margin-top: 0.6rem;
-        padding: 0.55rem 0 0.6rem;
-        border-top: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        flex-wrap: nowrap;
         overflow-x: auto;
         overflow-y: hidden;
-        scrollbar-width: none;
         -webkit-overflow-scrolling: touch;
-        mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 18px), transparent 100%);
+        scrollbar-width: none;
+        margin-left: 0 !important;
+        border-left: none;
+        padding: 0.5rem 1rem 0.55rem;
+        gap: 1.15rem;
+        border-top: 1px solid var(--border);
       }
-      .nav-group::-webkit-scrollbar { display: none; }
-      .nav-group .nav-link { white-space: nowrap; }
+      .nav-group::-webkit-scrollbar,
+      .nav-group-system::-webkit-scrollbar { display: none; }
+      .nav-group-system {
+        opacity: 0.78;
+        padding-top: 0.45rem;
+        padding-bottom: 0.65rem;
+        gap: 1rem;
+      }
+      .nav-group .nav-link,
+      .nav-group-system .nav-link {
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .nav-group-system .nav-link {
+        font-size: 0.56rem;
+        letter-spacing: 0.06em;
+      }
+
       main { padding: 1.75rem 1rem 4rem !important; }
-      footer { padding: 1.25rem 1rem !important; }
+      footer { padding: 1.25rem 1rem !important; gap: 0.9rem !important; }
+
+      /* Form stacks vertically — bulletproof, full-width SEARCH tap target. */
+      #search-form { flex-direction: column; gap: 0.5rem !important; }
+      #search-form .input-field {
+        border-radius: 4px !important;
+        border-right: 1px solid var(--border) !important;
+        min-width: 0;
+      }
+      #search-form .btn-primary {
+        border-radius: 4px !important;
+        padding: 0.95rem 1.5rem !important;
+        width: 100%;
+      }
+
+      /* Pills clamp to container width; allow internal break for long queries. */
+      .btn-ghost { max-width: 100%; word-break: break-word; }
     }
   </style>
 </head>

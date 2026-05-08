@@ -13,13 +13,13 @@
     id="search-form"
     method="post" action="/recommend"
     hx-post="/recommend" hx-target="#results" hx-swap="innerHTML" hx-indicator="#spinner"
-    style="display:flex; gap:0; max-width:680px;"
+    style="display:flex; gap:0; max-width:680px; width:100%;"
   >
     <input
       type="text" name="query" id="query-input"
       placeholder="paranoid spy thriller like The Night Manager..."
       class="input-field"
-      style="padding:0.85rem 1.25rem; flex:1; border-radius:4px 0 0 4px; border-right:none;"
+      style="padding:0.85rem 1.25rem; flex:1 1 0; min-width:0; border-radius:4px 0 0 4px; border-right:none;"
       autofocus
     >
     <button type="submit" class="btn-primary" style="padding:0.85rem 1.5rem; border-radius:0 4px 4px 0;">Search</button>
