@@ -290,6 +290,11 @@
     }
     .result-link:hover { color: var(--accent); text-decoration: none; }
 
+    /* Defensive: prevent any horizontal scroll on the document. Individual
+       elements that genuinely need to scroll (the .nav-group sub-bar) opt in
+       explicitly with overflow-x: auto. */
+    html, body { overflow-x: clip; max-width: 100vw; }
+
     /* Mobile nav: deliberate two-tier editorial masthead.
        Row 1: brand (left) + system/utility links (right).
        Row 2: primary nav as a sub-bar with hairline top divider; scrolls horizontally if needed. */
@@ -297,21 +302,23 @@
       nav {
         flex-wrap: wrap;
         height: auto;
-        column-gap: 1rem;
+        column-gap: 0.8rem;
         row-gap: 0;
-        padding: 0.7rem 1.1rem 0;
+        padding: 0.7rem 1rem 0;
         align-items: center;
       }
       .nav-brand {
         margin-right: auto;
-        font-size: 1.22rem;
+        font-size: 1.18rem;
       }
       .nav-group-system {
         padding-left: 0;
         border-left: none;
-        gap: 0.9rem;
+        gap: 0.8rem;
+        flex-wrap: wrap;
+        justify-content: flex-end;
       }
-      .nav-group-system .nav-link { font-size: 0.58rem; }
+      .nav-group-system .nav-link { font-size: 0.56rem; letter-spacing: 0.06em; }
       .nav-group {
         order: 3;
         flex: 1 1 100%;
