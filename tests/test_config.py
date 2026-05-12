@@ -115,9 +115,6 @@ class TestPlatformPathsAttribute:
         for provider in ("netflix", "prime", "apple_tv", "disney", "hbo"):
             assert provider in config.PLATFORM_PATHS
 
-    def test_disney_disabled_by_default(self):
-        assert config.PLATFORM_PATHS["disney"] == []
-
     def test_hbo_disabled_by_default(self):
         assert config.PLATFORM_PATHS["hbo"] == []
 

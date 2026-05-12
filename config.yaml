@@ -58,3 +58,6 @@ streaming_platforms: []
 manual_tv_path: data/manual/tv.csv
 manual_movies_path: data/manual/movies.csv
 overrides_path: data/overrides.json
+# Disney+ exports include every family profile. List the profiles to keep
+# (empty list keeps all). Profile names must match the export exactly.
+disney_profiles: []
