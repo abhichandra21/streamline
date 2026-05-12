@@ -40,7 +40,7 @@ def test_classifies_tv_when_season_column_holds_series_name(pdf_path, monkeypatc
     e = events[0]
     assert e.content_type == "tv"
     assert e.series_name == "Hannah Montana"
-    assert e.title == "Hannah Montana"
+    assert e.title == "Uptight (Oliver's Alright)"
     assert e.timestamp == datetime(2026, 4, 8)
     assert e.platform == "disney"
     assert e.profile == "Abhishek"
@@ -148,6 +148,32 @@ def test_drops_rows_from_other_services(pdf_path, monkeypatch):
     with patch.object(disney, "_extract_rows", return_value=rows):
         events = parse(pdf_path)
     assert [e.series_name for e in events] == ["Cars 3"]
+
+
+def test_tv_event_title_is_episode_distinct_across_days(pdf_path, monkeypatch):
+    """Different days/episodes of a series must carry distinct titles so
+    signals.compute_scores() doesn't treat them as rewatches of one episode."""
+    monkeypatch.setattr(config, "DISNEY_PROFILES", [])
+    rows = _rows(
+        ("2026-04-08", "Abhishek", "Uptight (Oliver's Alright)", "Hannah Montana"),
+        ("2026-04-07", "Abhishek", "Bye Bye Ball", "Hannah Montana"),
+        ("2026-04-06", "Abhishek", "Yet Another Side of Me", "Hannah Montana"),
+    )
+    with patch.object(disney, "_extract_rows", return_value=rows):
+        events = parse(pdf_path)
+    assert {e.series_name for e in events} == {"Hannah Montana"}
+    titles = [e.title for e in events]
+    assert len(set(titles)) == 3, f"expected 3 distinct episode titles, got {titles}"
+
+
+def test_corrupt_pdf_raises_value_error(tmp_path):
+    """pdfplumber raises pdfminer/OSError on bad PDFs; the parser must
+    normalize those into ValueError so the setup loader reports it as a
+    provider failure instead of crashing."""
+    bad = tmp_path / "corrupt.pdf"
+    bad.write_bytes(b"not a real pdf")
+    with pytest.raises(ValueError, match="Failed to parse Disney"):
+        parse(str(bad))
 
 
 def test_raises_for_missing_file(tmp_path):

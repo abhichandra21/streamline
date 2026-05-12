@@ -77,7 +77,16 @@ def parse(path: str) -> list[WatchEvent]:
     if p.suffix.lower() != ".pdf":
         raise ValueError(f"Disney+ path must be a .pdf file, got: {path}")
 
-    rows = _extract_rows(path)
+    try:
+        rows = _extract_rows(path)
+    except (FileNotFoundError, ValueError):
+        raise
+    except Exception as exc:
+        # pdfplumber/pdfminer raise their own exception hierarchies on
+        # corrupt/encrypted/unsupported PDFs. Normalize to ValueError so
+        # the setup loader treats it as a provider-validation failure
+        # instead of crashing.
+        raise ValueError(f"Failed to parse Disney+ PDF: {path} ({exc})") from exc
     log.info("Disney+: read %d raw rows from %s", len(rows), path)
 
     allowed = _allowed_profiles()
@@ -105,10 +114,15 @@ def parse(path: str) -> list[WatchEvent]:
         if season:
             content_type = "tv"
             series_name = season
+            # Episode-distinct title so the rewatch signal in
+            # signals.compute_scores() doesn't treat every Disney TV
+            # event for a series as a rewatch of one episode.
+            title = program or season
             duration = tv_duration
         else:
             content_type = "movie"
             series_name = program
+            title = program
             duration = movie_duration
 
         try:
@@ -123,7 +137,7 @@ def parse(path: str) -> list[WatchEvent]:
 
         events.append(WatchEvent(
             platform="disney",
-            title=series_name,
+            title=title,
             content_type=content_type,
             series_name=series_name,
             watched_duration=duration,
