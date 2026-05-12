@@ -63,7 +63,7 @@ def enrich(metadata: TmdbMetadata, cache_dir: str, client: LLMClient) -> str:
     if path.exists():
         log.debug("Enrichment cache hit: %s", metadata.title)
         return path.read_text()
-    log.debug("Enriching: %s (ID %d)", metadata.title, metadata.tmdb_id)
+    log.debug("Enriching: %s (ID %s)", metadata.title, metadata.tmdb_id)
 
     tmdb_info = (
         f"Title: {metadata.title}\n"

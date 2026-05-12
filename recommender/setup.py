@@ -6,7 +6,6 @@ import re
 import sys
 from pathlib import Path
 
-from rich.console import Console
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -39,8 +38,7 @@ from recommender import watch_index as wi
 from recommender import user_store
 from recommender import overrides as ov
 from recommender import event_store
-
-console = Console(stderr=True)
+from recommender.log import console
 
 
 _PLATFORM_PARSERS = [
