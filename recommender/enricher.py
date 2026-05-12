@@ -61,6 +61,7 @@ def enrich(metadata: TmdbMetadata, cache_dir: str, client: LLMClient) -> str:
     """Return a semantic description for a title, using cache if available."""
     path = _cache_path(metadata, cache_dir)
     if path.exists():
+        log.debug("Enrichment cache hit: %s", metadata.title)
         return path.read_text()
     log.debug("Enriching: %s (ID %d)", metadata.title, metadata.tmdb_id)
 
