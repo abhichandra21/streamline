@@ -41,6 +41,24 @@ from recommender import event_store
 from recommender.log import console
 
 
+def _progress_bar(label: str, *, with_extra: str | None = None) -> Progress:
+    """Standard Progress widget for long-running setup steps."""
+    columns = [
+        SpinnerColumn(),
+        TextColumn(f"[bold magenta]{label}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+    ]
+    if with_extra:
+        columns.append(TextColumn(with_extra))
+    columns.extend([
+        TimeElapsedColumn(),
+        TextColumn("eta"),
+        TimeRemainingColumn(),
+    ])
+    return Progress(*columns, console=console, transient=False)
+
+
 _PLATFORM_PARSERS = [
     ("netflix", parse_netflix),
     ("prime", parse_prime),
@@ -566,8 +584,10 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
 
         metadata = {}
         skipped = len(skip_titles)
-        with console.status("[bold magenta]Fetching TMDB metadata...[/bold magenta]", spinner="dots"):
+        with _progress_bar("Fetching TMDB metadata") as progress:
+            task_id = progress.add_task("tmdb", total=len(title_type))
             for i, ((title, _), ct) in enumerate(title_type.items()):
+                progress.update(task_id, completed=i + 1)
                 if title in skip_titles:
                     continue
                 # Check overrides
@@ -598,8 +618,6 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                     meta = tmdb.get_metadata(title, ct, hints=hints)
                     if meta:
                         metadata[(title, ct)] = meta
-                if (i + 1) % 50 == 0:
-                    console.print(f"  {i+1}/{len(title_type)} titles processed...")
         console.print(f"  {len(metadata)} titles with TMDB metadata")
         if skipped:
             console.print(f"  {skipped} titles skipped via overrides")
@@ -625,17 +643,9 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                           f"{removed['enrichment_index']} index entries, "
                           f"{removed['providers']} provider files)")
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[bold magenta]Enriching titles"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn("[dim]cache {task.fields[cache_hits]}[/dim]"),
-            TimeElapsedColumn(),
-            TextColumn("eta"),
-            TimeRemainingColumn(),
-            console=console,
-            transient=False,
+        with _progress_bar(
+            "Enriching titles",
+            with_extra="[dim]cache {task.fields[cache_hits]}[/dim]",
         ) as progress:
             task_id = progress.add_task("enrich", total=len(metadata), cache_hits=0)
             cache_hits = 0
@@ -662,13 +672,24 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         if liked_count or disliked_count:
             console.print(f"  Applying feedback: {liked_count} liked, {disliked_count} disliked titles")
 
-        with console.status("[bold magenta]Building taste profile...[/bold magenta]", spinner="dots"):
-            scores = compute_scores(events, metadata, config.RECENCY_HALF_LIFE_DAYS)
-            scores = user_store.apply_rating_multipliers(scores, ratings)
-            negative_prefs = user_store.get_disliked_titles(config.EVENT_DB_PATH)
+        scores = compute_scores(events, metadata, config.RECENCY_HALF_LIFE_DAYS)
+        scores = user_store.apply_rating_multipliers(scores, ratings)
+        negative_prefs = user_store.get_disliked_titles(config.EVENT_DB_PATH)
+
+        # We don't know batch count until inside build(); use an indeterminate
+        # bar that updates once the first callback arrives with the real total.
+        with _progress_bar("Building taste profile") as progress:
+            task_id = progress.add_task("profile", total=None)
+
+            def _on_batch_progress(done: int, total: int) -> None:
+                progress.update(task_id, completed=done, total=total)
+
             try:
-                profile = build_taste_profile(events, scores, enrichments, llm,
-                                              negative_prefs=negative_prefs or None)
+                profile = build_taste_profile(
+                    events, scores, enrichments, llm,
+                    negative_prefs=negative_prefs or None,
+                    on_batch_progress=_on_batch_progress,
+                )
             except RuntimeError as exc:
                 console.print(f"\n[red]{exc}[/red]")
                 console.print("[yellow]Previous profile kept unchanged.[/yellow]")
