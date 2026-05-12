@@ -14,6 +14,7 @@ import config
 from recommender.ingestion.netflix import parse as parse_netflix
 from recommender.ingestion.prime import parse as parse_prime
 from recommender.ingestion.apple_tv import parse as parse_apple_tv
+from recommender.ingestion.disney import parse as parse_disney
 from recommender.ingestion.manual import parse as parse_manual
 from recommender.signals import compute_scores
 from recommender.tmdb_client import TmdbClient, TmdbMetadata, MatchHints
@@ -37,6 +38,7 @@ _PLATFORM_PARSERS = [
     ("netflix", parse_netflix),
     ("prime", parse_prime),
     ("apple_tv", parse_apple_tv),
+    ("disney", parse_disney),
 ]
 
 
