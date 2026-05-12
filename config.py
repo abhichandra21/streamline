@@ -167,7 +167,7 @@ PLATFORM_PATHS: dict[str, list[str]] = {
     "netflix": _resolve_platform_paths("netflix", "data/netflix/export.zip"),
     "prime": _resolve_platform_paths("prime", "data/prime_video/Prime Video.zip"),
     "apple_tv": _resolve_platform_paths("apple_tv", "data/AppleTV/Apple Media Services Information Part 1 of 2.zip"),
-    "disney": _resolve_platform_paths("disney", "data/disney/export.pdf"),
+    "disney": _resolve_platform_paths("disney", None),
     "hbo": [],
 }
 DISNEY_PROFILES: list[str] = list(_cfg.get("disney_profiles", []) or [])

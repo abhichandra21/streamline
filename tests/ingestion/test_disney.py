@@ -9,11 +9,17 @@ from recommender.ingestion.disney import parse
 
 
 def _rows(*tuples) -> list[dict]:
-    """Build a row list from (date, profile, program, season) tuples."""
-    return [
-        {"date": d, "service": "disney", "profile": p, "program": prog, "season": s}
-        for d, p, prog, s in tuples
-    ]
+    """Build a row list from (date, profile, program, season) or
+    (date, service, profile, program, season) tuples."""
+    out: list[dict] = []
+    for t in tuples:
+        if len(t) == 5:
+            d, svc, p, prog, s = t
+        else:
+            d, p, prog, s = t
+            svc = "disney"
+        out.append({"date": d, "service": svc, "profile": p, "program": prog, "season": s})
+    return out
 
 
 @pytest.fixture
@@ -129,6 +135,19 @@ def test_skips_rows_with_blank_program_and_season(pdf_path, monkeypatch):
     with patch.object(disney, "_extract_rows", return_value=rows):
         events = parse(pdf_path)
     assert events == []
+
+
+def test_drops_rows_from_other_services(pdf_path, monkeypatch):
+    monkeypatch.setattr(config, "DISNEY_PROFILES", [])
+    rows = _rows(
+        ("2026-04-08", "disney", "Abhishek", "Cars 3", ""),
+        ("2026-04-08", "espn", "Abhishek", "SportsCenter", ""),
+        ("2026-04-08", "ESPN", "Abhishek", "Monday Night Football", ""),
+        ("2026-04-08", "hulu", "Abhishek", "The Bear", ""),
+    )
+    with patch.object(disney, "_extract_rows", return_value=rows):
+        events = parse(pdf_path)
+    assert [e.series_name for e in events] == ["Cars 3"]
 
 
 def test_raises_for_missing_file(tmp_path):

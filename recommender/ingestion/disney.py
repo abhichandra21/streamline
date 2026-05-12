@@ -88,6 +88,9 @@ def parse(path: str) -> list[WatchEvent]:
     events: list[WatchEvent] = []
 
     for row in rows:
+        if row["service"].strip().lower() != "disney":
+            continue
+
         profile = row["profile"]
         if allowed and profile not in allowed:
             continue
