@@ -7,6 +7,15 @@ import sys
 from pathlib import Path
 
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 log = logging.getLogger("recommender.setup")
 
@@ -618,8 +627,28 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                           f"{removed['enrichment_index']} index entries, "
                           f"{removed['providers']} provider files)")
 
-        with console.status(f"[bold magenta]Enriching {len(metadata)} titles...[/bold magenta]", spinner="dots"):
-            raw_enrichments = enrich_batch(metadata, config.ENRICHMENT_CACHE_DIR, llm)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold magenta]Enriching titles"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("[dim]cache {task.fields[cache_hits]}[/dim]"),
+            TimeElapsedColumn(),
+            TextColumn("eta"),
+            TimeRemainingColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            task_id = progress.add_task("enrich", total=len(metadata), cache_hits=0)
+            cache_hits = 0
+
+            def _on_progress(done: int, total: int, was_cached: bool) -> None:
+                nonlocal cache_hits
+                if was_cached:
+                    cache_hits += 1
+                progress.update(task_id, completed=done, cache_hits=cache_hits)
+
+            raw_enrichments = enrich_batch(metadata, config.ENRICHMENT_CACHE_DIR, llm, on_progress=_on_progress)
         enrichments_index_path.write_text(json.dumps(raw_enrichments))
         console.print(f"  {len(raw_enrichments)} descriptions cached → {config.ENRICHMENT_CACHE_DIR}")
 
