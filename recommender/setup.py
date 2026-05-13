@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from rich.progress import (
@@ -228,12 +229,14 @@ def _audit_cache_mismatches(
     year_mismatches = []
     runtime_mismatches = []
     weak_matches = []
+    unmatched = []
     missing = []
 
     for e in index.entries:
         tmdb_id = e.get("tmdb_id")
         ct = e.get("content_type", "movie")
         if not tmdb_id:
+            unmatched.append((e["title"], ct))
             continue
         cache_path = Path(cache_dir) / ct / f"{tmdb_id}.json"
         if cache_path.exists():
@@ -289,6 +292,27 @@ def _audit_cache_mismatches(
         else:
             missing.append((e["title"], ct, tmdb_id))
 
+    sections = [
+        ("unmatched titles (no TMDB ID)",
+         unmatched,
+         lambda x: f"[{x[1]}] {x[0]}"),
+        ("content-type cache mismatches",
+         mismatched,
+         lambda x: f"{x[0]} — index says {x[1]}, cache at {x[2]}/{x[3]}"),
+        ("title mismatches",
+         title_mismatches,
+         lambda x: f"{x[0]} -> {x[1]}/{x[2]} cached as {x[3]}"),
+        ("year mismatches",
+         year_mismatches,
+         lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]}): source year {x[4]}, cached year {x[5]}"),
+        ("runtime mismatches (>30% off)",
+         runtime_mismatches,
+         lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]}): source {x[4]}min, cached {x[5]}min"),
+        ("weak TMDB matches (no poster, zero votes)",
+         weak_matches,
+         lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]})"),
+    ]
+
     def _report(label, items, formatter, limit=10):
         if not items:
             return
@@ -298,21 +322,29 @@ def _audit_cache_mismatches(
         if len(items) > limit:
             console.print(f"    ... and {len(items) - limit} more")
 
-    _report("content-type cache mismatches",
-            mismatched,
-            lambda x: f"{x[0]} — index says {x[1]}, cache at {x[2]}/{x[3]}")
-    _report("title mismatches",
-            title_mismatches,
-            lambda x: f"{x[0]} -> {x[1]}/{x[2]} cached as {x[3]}")
-    _report("year mismatches",
-            year_mismatches,
-            lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]}): source year {x[4]}, cached year {x[5]}")
-    _report("runtime mismatches (>30% off)",
-            runtime_mismatches,
-            lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]}): source {x[4]}min, cached {x[5]}min")
-    _report("weak TMDB matches (no poster, zero votes)",
-            weak_matches,
-            lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]})")
+    for label, items, formatter in sections:
+        _report(label, items, formatter)
+
+    # Persist full audit (no truncation) so it can be triaged after the run.
+    has_any = any(items for _, items, _ in sections)
+    if has_any:
+        audit_path = Path(config.TMDB_AUDIT_PATH)
+        try:
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            lines: list[str] = [
+                f"# TMDB match audit — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"# Watch index: {len(index.entries)} entries",
+                "",
+            ]
+            for label, items, formatter in sections:
+                lines.append(f"## {label} ({len(items)})")
+                for item in items:
+                    lines.append(f"  {formatter(item)}")
+                lines.append("")
+            audit_path.write_text("\n".join(lines))
+            console.print(f"\n  Full audit written → {audit_path}")
+        except OSError as exc:
+            log.warning("Failed to write TMDB audit to %s: %s", audit_path, exc)
 
     if missing:
         log.debug("%d entries with no TMDB cache at all", len(missing))
