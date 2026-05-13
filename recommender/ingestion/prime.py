@@ -108,5 +108,5 @@ def parse(path: str) -> list[WatchEvent]:
         if not found:
             raise ValueError(f'{_TARGET_CSV} not found inside {path}')
 
-        log.debug('Prime Video: reading %s', found[0])
+        log.info('Prime Video: reading %s', found[0])
         return _parse_csv(str(found[0]))

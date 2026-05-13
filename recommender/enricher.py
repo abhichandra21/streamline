@@ -63,7 +63,7 @@ def enrich(metadata: TmdbMetadata, cache_dir: str, client: LLMClient) -> str:
     if path.exists():
         log.debug("Enrichment cache hit: %s", metadata.title)
         return path.read_text()
-    log.debug("Enriching: %s (ID %s)", metadata.title, metadata.tmdb_id)
+    log.debug("Enriching: %s (ID %d)", metadata.title, metadata.tmdb_id)
 
     tmdb_info = (
         f"Title: {metadata.title}\n"
@@ -108,18 +108,12 @@ def enrich_batch(
     titles_metadata: dict[str, TmdbMetadata],
     cache_dir: str,
     client: LLMClient,
-    on_progress: "callable | None" = None,
 ) -> dict[str, str]:
-    """Enrich a batch of titles. Falls back gracefully on individual failures.
-
-    on_progress, if provided, is called as on_progress(done, total, cache_hit)
-    after each title so callers can drive a progress bar.
-    """
+    """Enrich a batch of titles. Falls back gracefully on individual failures."""
     # Throttle API calls for providers with tight RPM limits
     is_gemini = hasattr(client, 'provider') and client.provider == 'gemini'
     throttle = 1.2 if is_gemini else 0.0  # ~50 RPM for Gemini
 
-    total = len(titles_metadata)
     result = {}
     api_calls = 0
     for i, (title, metadata) in enumerate(titles_metadata.items()):
@@ -129,10 +123,8 @@ def enrich_batch(
         if needs_api and throttle:
             api_calls += 1
             time.sleep(throttle)
-        if on_progress is not None:
-            on_progress(i + 1, total, not needs_api)
-        elif (i + 1) % 50 == 0:
-            log.info("%d/%d titles enriched...", i + 1, total)
+        if (i + 1) % 50 == 0:
+            log.info("%d/%d titles enriched...", i + 1, len(titles_metadata))
     if api_calls and throttle:
         log.debug("Enrichment: %d API calls with %.1fs throttle", api_calls, throttle)
     return result
