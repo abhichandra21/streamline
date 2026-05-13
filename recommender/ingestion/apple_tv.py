@@ -203,14 +203,14 @@ def parse(zip_path: str) -> list[WatchEvent]:
         ValueError: If the file is not a .zip, is malformed, or lacks the expected CSV.
     """
     _validate_zip(zip_path)
-    log.debug("Extracting Apple TV data from %s", zip_path)
+    log.info("Extracting Apple TV data from %s", zip_path)
 
     with tempfile.TemporaryDirectory(prefix="apple_tv_") as work_dir:
         csv_path = _find_and_extract_csv(zip_path, work_dir)
         if not csv_path:
             raise ValueError(f"{_TARGET_CSV} not found inside {zip_path}")
-        log.debug("Found %s", csv_path)
+        log.info("Found %s", csv_path)
         events = _parse_csv(csv_path)
 
-    log.debug("Apple TV: %d watch events parsed", len(events))
+    log.info("Apple TV: %d watch events parsed", len(events))
     return events

@@ -145,17 +145,12 @@ def build(
     enrichments: dict[str, str],
     client: LLMClient,
     negative_prefs: list[str] | None = None,
-    on_batch_progress: "callable | None" = None,
 ) -> str:
     """Build a natural-language taste profile.
 
     Processes all enriched titles in batches. Batch results are cached to disk
     so that a failed merge can be retried without re-generating batches.
     Cached batches are invalidated when the scored title list changes.
-
-    on_batch_progress, if provided, is called as on_batch_progress(done, total)
-    after each batch completes (cached or freshly generated) so callers can
-    drive a progress bar.
     """
     scored = sorted(
         [(title, score) for title, score in scores.items() if title in enrichments],
@@ -213,8 +208,6 @@ def build(
         for i, batch in enumerate(batches):
             if cached[i] is not None:
                 batch_profiles.append(cached[i])
-                if on_batch_progress is not None:
-                    on_batch_progress(i + 1, total)
                 continue
 
             log.info("Batch %d/%d (%d titles)...", i + 1, total, len(batch))
@@ -223,8 +216,6 @@ def build(
                     profile = _build_batch_profile(batch, enrichments, i + 1, total, client)
                     _save_batch(i, profile, fingerprint)
                     batch_profiles.append(profile)
-                    if on_batch_progress is not None:
-                        on_batch_progress(i + 1, total)
                     break
                 except KeyboardInterrupt:
                     raise
