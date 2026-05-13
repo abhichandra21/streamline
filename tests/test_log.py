@@ -139,7 +139,7 @@ class TestLogVisibility:
         logger.info("info should not reach stdout at warning level")
 
         captured = capsys.readouterr()
-        assert "info should not reach stdout at warning level" not in captured.out
+        assert "info should not reach stdout at warning level" not in captured.err
 
     def test_warning_message_written_to_stdout(self, tmp_path, capsys):
         log_file = tmp_path / "app.log"
@@ -152,7 +152,7 @@ class TestLogVisibility:
         logger.warning("warning on stdout")
 
         captured = capsys.readouterr()
-        assert "warning on stdout" in captured.out
+        assert "warning on stdout" in captured.err
 
     def test_level_override_makes_info_visible_on_stdout(self, tmp_path, capsys):
         log_file = tmp_path / "app.log"
@@ -165,7 +165,7 @@ class TestLogVisibility:
         logger.info("info with override")
 
         captured = capsys.readouterr()
-        assert "info with override" in captured.out
+        assert "info with override" in captured.err
 
     def test_debug_override_preserves_debug_output(self, tmp_path, capsys):
         log_file = tmp_path / "app.log"
@@ -178,7 +178,7 @@ class TestLogVisibility:
         logger.debug("debug trace line")
 
         captured = capsys.readouterr()
-        assert "debug trace line" in captured.out
+        assert "debug trace line" in captured.err
 
 
 # ── Shared file handler across loggers ───────────────────────────────────────

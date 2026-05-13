@@ -25,7 +25,7 @@ def _events_loader_fallback() -> list:
 
 log = logging.getLogger("recommender")
 
-console_err = Console(stderr=True)   # spinners, progress, warnings
+from recommender.log import console as console_err  # spinners, progress, warnings (shared with logging)
 console_out = Console()              # recommendation results
 
 

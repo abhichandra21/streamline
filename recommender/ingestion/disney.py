@@ -87,7 +87,7 @@ def parse(path: str) -> list[WatchEvent]:
         # the setup loader treats it as a provider-validation failure
         # instead of crashing.
         raise ValueError(f"Failed to parse Disney+ PDF: {path} ({exc})") from exc
-    log.info("Disney+: read %d raw rows from %s", len(rows), path)
+    log.debug("Disney+: read %d raw rows from %s", len(rows), path)
 
     allowed = _allowed_profiles()
     tv_duration = timedelta(minutes=config.MANUAL_TV_DURATION_MINUTES)
