@@ -214,15 +214,24 @@ def _build_hints_map(events: list) -> dict[tuple[str, str], MatchHints]:
 
 
 def _audit_cache_mismatches(
-    index, cache_dir: str, hints_map: dict | None = None,
+    index,
+    cache_dir: str,
+    hints_map: dict | None = None,
+    audit_output_path: str | None = None,
 ) -> None:
     """Report watch-index entries whose TMDB cache is suspicious.
 
     Checks: content-type mismatch, title mismatch, year mismatch,
     runtime mismatch, and weak matches (no poster, zero votes).
+
+    audit_output_path overrides where the full-audit text file is written.
+    Defaults to config.TMDB_AUDIT_PATH (the canonical cache location).
+    Tests should pass a tmp path to avoid clobbering the real audit file.
     """
     if hints_map is None:
         hints_map = {}
+    if audit_output_path is None:
+        audit_output_path = config.TMDB_AUDIT_PATH
 
     mismatched = []
     title_mismatches = []
@@ -325,26 +334,31 @@ def _audit_cache_mismatches(
     for label, items, formatter in sections:
         _report(label, items, formatter)
 
-    # Persist full audit (no truncation) so it can be triaged after the run.
+    # Always rewrite the full audit so a clean rerun replaces stale findings
+    # from a previous run. Empty sections are still written explicitly with
+    # a (0) count so the file is self-describing.
     has_any = any(items for _, items, _ in sections)
-    if has_any:
-        audit_path = Path(config.TMDB_AUDIT_PATH)
-        try:
-            audit_path.parent.mkdir(parents=True, exist_ok=True)
-            lines: list[str] = [
-                f"# TMDB match audit — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                f"# Watch index: {len(index.entries)} entries",
-                "",
-            ]
-            for label, items, formatter in sections:
-                lines.append(f"## {label} ({len(items)})")
-                for item in items:
-                    lines.append(f"  {formatter(item)}")
-                lines.append("")
-            audit_path.write_text("\n".join(lines))
+    audit_path = Path(audit_output_path)
+    try:
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        lines: list[str] = [
+            f"# TMDB match audit — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"# Watch index: {len(index.entries)} entries",
+            "",
+        ]
+        if not has_any:
+            lines.append("# No mismatches detected.")
+            lines.append("")
+        for label, items, formatter in sections:
+            lines.append(f"## {label} ({len(items)})")
+            for item in items:
+                lines.append(f"  {formatter(item)}")
+            lines.append("")
+        audit_path.write_text("\n".join(lines))
+        if has_any:
             console.print(f"\n  Full audit written → {audit_path}")
-        except OSError as exc:
-            log.warning("Failed to write TMDB audit to %s: %s", audit_path, exc)
+    except OSError as exc:
+        log.warning("Failed to write TMDB audit to %s: %s", audit_path, exc)
 
     if missing:
         log.debug("%d entries with no TMDB cache at all", len(missing))

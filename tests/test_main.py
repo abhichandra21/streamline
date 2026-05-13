@@ -1015,7 +1015,7 @@ def test_cache_audit_reports_existing_cache_with_mismatched_title(tmp_path, caps
         entries=[{"tmdb_id": 55063, "title": "Apollo 11", "content_type": "tv"}],
     )
 
-    setup._audit_cache_mismatches(index, str(tmp_path))
+    setup._audit_cache_mismatches(index, str(tmp_path), audit_output_path=str(tmp_path / "audit.txt"))
 
     err = capsys.readouterr().err
     assert "Apollo 11" in err
@@ -1041,7 +1041,7 @@ def test_cache_audit_allows_exact_short_title_match(tmp_path, capsys):
         entries=[{"tmdb_id": 11, "title": "Up", "content_type": "movie"}],
     )
 
-    setup._audit_cache_mismatches(index, str(tmp_path))
+    setup._audit_cache_mismatches(index, str(tmp_path), audit_output_path=str(tmp_path / "audit.txt"))
 
     err = capsys.readouterr().err
     assert "possible wrong TMDB match" not in err
@@ -1133,7 +1133,7 @@ def test_audit_reports_year_mismatch(tmp_path, capsys):
     )
     hints_map = {("Iceland", "movie"): MatchHints(release_year=2016)}
 
-    setup._audit_cache_mismatches(index, str(tmp_path), hints_map)
+    setup._audit_cache_mismatches(index, str(tmp_path), hints_map, audit_output_path=str(tmp_path / "audit.txt"))
 
     err = capsys.readouterr().err
     assert "year mismatch" in err.lower() or "source year 2016" in err
@@ -1159,7 +1159,7 @@ def test_audit_reports_runtime_mismatch(tmp_path, capsys):
     )
     hints_map = {("Hum Tum", "movie"): MatchHints(runtime_minutes=140, runtime_is_exact=True)}
 
-    setup._audit_cache_mismatches(index, str(tmp_path), hints_map)
+    setup._audit_cache_mismatches(index, str(tmp_path), hints_map, audit_output_path=str(tmp_path / "audit.txt"))
 
     err = capsys.readouterr().err
     assert "runtime" in err.lower() or "source 140min" in err
@@ -1184,7 +1184,7 @@ def test_audit_existing_title_mismatch_still_works(tmp_path, capsys):
         entries=[{"tmdb_id": 700, "title": "Kesari", "content_type": "movie"}],
     )
 
-    setup._audit_cache_mismatches(index, str(tmp_path))
+    setup._audit_cache_mismatches(index, str(tmp_path), audit_output_path=str(tmp_path / "audit.txt"))
 
     err = capsys.readouterr().err
     assert "Kesari" in err
