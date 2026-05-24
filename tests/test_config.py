@@ -115,8 +115,9 @@ class TestPlatformPathsAttribute:
         for provider in ("netflix", "prime", "apple_tv", "disney", "hbo"):
             assert provider in config.PLATFORM_PATHS
 
-    def test_hbo_disabled_by_default(self):
-        assert config.PLATFORM_PATHS["hbo"] == []
+    def test_hbo_disabled_without_explicit_config(self):
+        """hbo has no repo default path; absent any override it must resolve to []."""
+        assert _resolve_missing("hbo", None) == []
 
     def test_active_providers_truthy(self):
         """netflix/prime/apple_tv should be truthy unless explicitly disabled in config."""
