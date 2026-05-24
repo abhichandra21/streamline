@@ -15,6 +15,7 @@ from recommender.ingestion.netflix import parse as parse_netflix
 from recommender.ingestion.prime import parse as parse_prime
 from recommender.ingestion.apple_tv import parse as parse_apple_tv
 from recommender.ingestion.disney import parse as parse_disney
+from recommender.ingestion.hbo import parse as parse_hbo
 from recommender.ingestion.manual import parse as parse_manual
 from recommender.signals import compute_scores
 from recommender.tmdb_client import TmdbClient, TmdbMetadata, MatchHints
@@ -39,11 +40,31 @@ _PLATFORM_PARSERS = [
     ("prime", parse_prime),
     ("apple_tv", parse_apple_tv),
     ("disney", parse_disney),
+    ("hbo", parse_hbo),
 ]
 
 
 def _compute_file_sha256(path: str) -> str:
-    """Compute SHA-256 of a file using chunked reads."""
+    """Compute SHA-256 of a file using chunked reads.
+
+    If `path` is a directory, hash a composite digest over each contained
+    file's relative path and content so that any change inside the bundle
+    invalidates the snapshot. Used for export sources that ship as a folder
+    of CSVs (e.g. the WBD/Max bundle) rather than a single zip.
+    """
+    from pathlib import Path as _Path
+    p = _Path(path)
+    if p.is_dir():
+        composite = hashlib.sha256()
+        for child in sorted(f for f in p.rglob("*") if f.is_file()):
+            rel = child.relative_to(p).as_posix()
+            composite.update(rel.encode("utf-8"))
+            composite.update(b"\0")
+            with open(child, "rb") as f:
+                while chunk := f.read(8192):
+                    composite.update(chunk)
+            composite.update(b"\0")
+        return composite.hexdigest()
     h = hashlib.sha256()
     with open(path, "rb") as f:
         while chunk := f.read(8192):

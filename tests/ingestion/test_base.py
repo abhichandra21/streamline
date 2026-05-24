@@ -54,10 +54,3 @@ def test_parse_duration_zero():
     assert parse_duration("00:00:00") == timedelta(0)
 
 
-def test_hbo_stub_raises():
-    from recommender.ingestion.hbo import parse
-    try:
-        parse("any_path.csv")
-        assert False, "Should have raised NotImplementedError"
-    except NotImplementedError as e:
-        assert "hbo" in str(e).lower() or "HBO" in str(e)
