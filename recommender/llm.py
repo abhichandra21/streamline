@@ -131,7 +131,7 @@ class AnthropicClient(LLMClient):
         self._client = anthropic.Anthropic(api_key=api_key)
         self.models = models
         self.usage = UsageStats()
-        log.info("Using Anthropic provider (fast=%s, reason=%s)", models.get("fast"), models.get("reason"))
+        log.debug("Using Anthropic provider (fast=%s, reason=%s)", models.get("fast"), models.get("reason"))
 
     def generate(self, prompt: str, role: str = "reason",
                  max_tokens: int = 1000, timeout: float = 30.0) -> str:
@@ -168,7 +168,7 @@ class GeminiClient(LLMClient):
         self._client = genai.Client(api_key=api_key, vertexai=is_vertex)
         self.models = models
         self.usage = UsageStats()
-        log.info("Using Gemini provider (%s, fast=%s, reason=%s)",
+        log.debug("Using Gemini provider (%s, fast=%s, reason=%s)",
                  "Vertex AI" if is_vertex else "Developer API",
                  models.get("fast"), models.get("reason"))
 
@@ -260,7 +260,7 @@ class OpenAIClient(LLMClient):
         self._thinking_token_scale: int = _int_model_setting(models, "thinking_token_scale", 6)
         self._thinking_token_floor: int = _int_model_setting(models, "thinking_token_floor", 8000)
         endpoint = base_url or "api.openai.com"
-        log.info(
+        log.debug(
             "Using OpenAI-compatible provider "
             "(endpoint=%s, fast=%s, reason=%s, timeout_scale=%.1f, thinking=%s, token_scale=%d, token_floor=%d)",
             endpoint, models.get("fast"), models.get("reason"), self._timeout_scale,

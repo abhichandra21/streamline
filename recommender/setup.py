@@ -4,9 +4,18 @@ import json
 import logging
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
-from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 log = logging.getLogger("recommender.setup")
 
@@ -32,8 +41,25 @@ from recommender import watch_index as wi
 from recommender import user_store
 from recommender import overrides as ov
 from recommender import event_store
+from recommender.log import console
 
-console = Console(stderr=True)
+
+def _progress_bar(label: str, *, with_extra: str | None = None) -> Progress:
+    """Standard Progress widget for long-running setup steps."""
+    columns = [
+        SpinnerColumn(),
+        TextColumn(f"[bold magenta]{label}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+    ]
+    if with_extra:
+        columns.append(TextColumn(with_extra))
+    columns.extend([
+        TimeElapsedColumn(),
+        TextColumn("eta"),
+        TimeRemainingColumn(),
+    ])
+    return Progress(*columns, console=console, transient=False)
 
 
 _PLATFORM_PARSERS = [
@@ -222,27 +248,38 @@ def _build_hints_map(events: list) -> dict[tuple[str, str], MatchHints]:
 
 
 def _audit_cache_mismatches(
-    index, cache_dir: str, hints_map: dict | None = None,
+    index,
+    cache_dir: str,
+    hints_map: dict | None = None,
+    audit_output_path: str | None = None,
 ) -> None:
     """Report watch-index entries whose TMDB cache is suspicious.
 
     Checks: content-type mismatch, title mismatch, year mismatch,
     runtime mismatch, and weak matches (no poster, zero votes).
+
+    audit_output_path overrides where the full-audit text file is written.
+    Defaults to config.TMDB_AUDIT_PATH (the canonical cache location).
+    Tests should pass a tmp path to avoid clobbering the real audit file.
     """
     if hints_map is None:
         hints_map = {}
+    if audit_output_path is None:
+        audit_output_path = config.TMDB_AUDIT_PATH
 
     mismatched = []
     title_mismatches = []
     year_mismatches = []
     runtime_mismatches = []
     weak_matches = []
+    unmatched = []
     missing = []
 
     for e in index.entries:
         tmdb_id = e.get("tmdb_id")
         ct = e.get("content_type", "movie")
         if not tmdb_id:
+            unmatched.append((e["title"], ct))
             continue
         cache_path = Path(cache_dir) / ct / f"{tmdb_id}.json"
         if cache_path.exists():
@@ -298,6 +335,27 @@ def _audit_cache_mismatches(
         else:
             missing.append((e["title"], ct, tmdb_id))
 
+    sections = [
+        ("unmatched titles (no TMDB ID)",
+         unmatched,
+         lambda x: f"[{x[1]}] {x[0]}"),
+        ("content-type cache mismatches",
+         mismatched,
+         lambda x: f"{x[0]} — index says {x[1]}, cache at {x[2]}/{x[3]}"),
+        ("title mismatches",
+         title_mismatches,
+         lambda x: f"{x[0]} -> {x[1]}/{x[2]} cached as {x[3]}"),
+        ("year mismatches",
+         year_mismatches,
+         lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]}): source year {x[4]}, cached year {x[5]}"),
+        ("runtime mismatches (>30% off)",
+         runtime_mismatches,
+         lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]}): source {x[4]}min, cached {x[5]}min"),
+        ("weak TMDB matches (no poster, zero votes)",
+         weak_matches,
+         lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]})"),
+    ]
+
     def _report(label, items, formatter, limit=10):
         if not items:
             return
@@ -307,21 +365,34 @@ def _audit_cache_mismatches(
         if len(items) > limit:
             console.print(f"    ... and {len(items) - limit} more")
 
-    _report("content-type cache mismatches",
-            mismatched,
-            lambda x: f"{x[0]} — index says {x[1]}, cache at {x[2]}/{x[3]}")
-    _report("title mismatches",
-            title_mismatches,
-            lambda x: f"{x[0]} -> {x[1]}/{x[2]} cached as {x[3]}")
-    _report("year mismatches",
-            year_mismatches,
-            lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]}): source year {x[4]}, cached year {x[5]}")
-    _report("runtime mismatches (>30% off)",
-            runtime_mismatches,
-            lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]}): source {x[4]}min, cached {x[5]}min")
-    _report("weak TMDB matches (no poster, zero votes)",
-            weak_matches,
-            lambda x: f"{x[0]} -> {x[1]}/{x[2]} ({x[3]})")
+    for label, items, formatter in sections:
+        _report(label, items, formatter)
+
+    # Always rewrite the full audit so a clean rerun replaces stale findings
+    # from a previous run. Empty sections are still written explicitly with
+    # a (0) count so the file is self-describing.
+    has_any = any(items for _, items, _ in sections)
+    audit_path = Path(audit_output_path)
+    try:
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        lines: list[str] = [
+            f"# TMDB match audit — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"# Watch index: {len(index.entries)} entries",
+            "",
+        ]
+        if not has_any:
+            lines.append("# No mismatches detected.")
+            lines.append("")
+        for label, items, formatter in sections:
+            lines.append(f"## {label} ({len(items)})")
+            for item in items:
+                lines.append(f"  {formatter(item)}")
+            lines.append("")
+        audit_path.write_text("\n".join(lines))
+        if has_any:
+            console.print(f"\n  Full audit written → {audit_path}")
+    except OSError as exc:
+        log.warning("Failed to write TMDB audit to %s: %s", audit_path, exc)
 
     if missing:
         log.debug("%d entries with no TMDB cache at all", len(missing))
@@ -593,8 +664,10 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
 
         metadata = {}
         skipped = len(skip_titles)
-        with console.status("[bold magenta]Fetching TMDB metadata...[/bold magenta]", spinner="dots"):
+        with _progress_bar("Fetching TMDB metadata") as progress:
+            task_id = progress.add_task("tmdb", total=len(title_type))
             for i, ((title, _), ct) in enumerate(title_type.items()):
+                progress.update(task_id, completed=i + 1)
                 if title in skip_titles:
                     continue
                 # Check overrides
@@ -625,8 +698,6 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                     meta = tmdb.get_metadata(title, ct, hints=hints)
                     if meta:
                         metadata[(title, ct)] = meta
-                if (i + 1) % 50 == 0:
-                    console.print(f"  {i+1}/{len(title_type)} titles processed...")
         console.print(f"  {len(metadata)} titles with TMDB metadata")
         if skipped:
             console.print(f"  {skipped} titles skipped via overrides")
@@ -652,8 +723,20 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                           f"{removed['enrichment_index']} index entries, "
                           f"{removed['providers']} provider files)")
 
-        with console.status(f"[bold magenta]Enriching {len(metadata)} titles...[/bold magenta]", spinner="dots"):
-            raw_enrichments = enrich_batch(metadata, config.ENRICHMENT_CACHE_DIR, llm)
+        with _progress_bar(
+            "Enriching titles",
+            with_extra="[dim]cache {task.fields[cache_hits]}[/dim]",
+        ) as progress:
+            task_id = progress.add_task("enrich", total=len(metadata), cache_hits=0)
+            cache_hits = 0
+
+            def _on_progress(done: int, total: int, was_cached: bool) -> None:
+                nonlocal cache_hits
+                if was_cached:
+                    cache_hits += 1
+                progress.update(task_id, completed=done, cache_hits=cache_hits)
+
+            raw_enrichments = enrich_batch(metadata, config.ENRICHMENT_CACHE_DIR, llm, on_progress=_on_progress)
         enrichments_index_path.write_text(json.dumps(raw_enrichments))
         console.print(f"  {len(raw_enrichments)} descriptions cached → {config.ENRICHMENT_CACHE_DIR}")
 
@@ -669,13 +752,24 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         if liked_count or disliked_count:
             console.print(f"  Applying feedback: {liked_count} liked, {disliked_count} disliked titles")
 
-        with console.status("[bold magenta]Building taste profile...[/bold magenta]", spinner="dots"):
-            scores = compute_scores(events, metadata, config.RECENCY_HALF_LIFE_DAYS)
-            scores = user_store.apply_rating_multipliers(scores, ratings)
-            negative_prefs = user_store.get_disliked_titles(config.EVENT_DB_PATH)
+        scores = compute_scores(events, metadata, config.RECENCY_HALF_LIFE_DAYS)
+        scores = user_store.apply_rating_multipliers(scores, ratings)
+        negative_prefs = user_store.get_disliked_titles(config.EVENT_DB_PATH)
+
+        # We don't know batch count until inside build(); use an indeterminate
+        # bar that updates once the first callback arrives with the real total.
+        with _progress_bar("Building taste profile") as progress:
+            task_id = progress.add_task("profile", total=None)
+
+            def _on_batch_progress(done: int, total: int) -> None:
+                progress.update(task_id, completed=done, total=total)
+
             try:
-                profile = build_taste_profile(events, scores, enrichments, llm,
-                                              negative_prefs=negative_prefs or None)
+                profile = build_taste_profile(
+                    events, scores, enrichments, llm,
+                    negative_prefs=negative_prefs or None,
+                    on_batch_progress=_on_batch_progress,
+                )
             except RuntimeError as exc:
                 console.print(f"\n[red]{exc}[/red]")
                 console.print("[yellow]Previous profile kept unchanged.[/yellow]")

@@ -10,11 +10,18 @@ so progress events from setup and enrichment are always recorded on disk.
 """
 
 import logging
-import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from rich.console import Console
+from rich.logging import RichHandler
+
 import config
+
+# Shared console for both log output and live displays (Progress/status).
+# Routing both through the same Console is what lets RichHandler render log
+# records *above* an active Progress bar instead of stomping on it.
+console = Console(stderr=True)
 
 
 def _configure_stream_handler(logger: logging.Logger, level: int, formatter: logging.Formatter) -> None:
@@ -23,11 +30,17 @@ def _configure_stream_handler(logger: logging.Logger, level: int, formatter: log
         None,
     )
     if handler is None:
-        handler = logging.StreamHandler(sys.stdout)
+        handler = RichHandler(
+            console=console,
+            show_time=True,
+            show_path=False,
+            markup=False,
+            rich_tracebacks=True,
+            log_time_format="%Y-%m-%d %H:%M:%S",
+        )
         handler._streamline_stream_handler = True
         logger.addHandler(handler)
 
-    handler.setFormatter(formatter)
     handler.setLevel(level)
 
 
@@ -62,12 +75,14 @@ def _get_file_handler(formatter: logging.Formatter) -> RotatingFileHandler | Non
     return handler
 
 
-def _configure_file_handler(logger: logging.Logger, formatter: logging.Formatter) -> None:
+def _configure_file_handler(logger: logging.Logger, formatter: logging.Formatter, level: int) -> None:
     """Attach the shared rotating file handler if not already present."""
     handler = _get_file_handler(formatter)
-    if handler is None or handler in logger.handlers:
+    if handler is None:
         return
-    logger.addHandler(handler)
+    handler.setLevel(level)
+    if handler not in logger.handlers:
+        logger.addHandler(handler)
 
 
 def setup_logging(level_override: str | None = None) -> None:
@@ -75,10 +90,18 @@ def setup_logging(level_override: str | None = None) -> None:
 
     Args:
         level_override: If set, overrides config.LOG_LEVEL for stdout (e.g., "DEBUG").
-                        The file handler always captures INFO+.
+                        When DEBUG is requested via override, the file handler is
+                        also bumped to DEBUG so the rotating app log captures
+                        everything the operator opted into. Otherwise the file
+                        handler defaults to INFO.
     """
     level_name = level_override or config.LOG_LEVEL
     stream_level = getattr(logging, level_name, logging.WARNING)
+
+    # When the operator explicitly asks for DEBUG, persist DEBUG to the file
+    # log too — otherwise diagnostic lines demoted to DEBUG (provider init,
+    # ingestion temp paths) would never make it to disk for post-hoc review.
+    file_level = stream_level if stream_level < logging.INFO else logging.INFO
 
     formatter = logging.Formatter(
         "%(asctime)s %(name)s %(levelname)s: %(message)s",
@@ -86,17 +109,18 @@ def setup_logging(level_override: str | None = None) -> None:
     )
 
     root = logging.getLogger("recommender")
-    # Logger gate must be the lowest of stream_level and INFO (file handler),
-    # so that DEBUG passes through when --debug is used.
-    root.setLevel(min(stream_level, logging.INFO))
+    # Logger gate must be the lowest of stream_level and file_level so that
+    # the most-permissive handler still sees everything it's configured for.
+    root.setLevel(min(stream_level, file_level))
     root.propagate = False
 
     _configure_stream_handler(root, stream_level, formatter)
-    _configure_file_handler(root, formatter)
+    _configure_file_handler(root, formatter, file_level)
 
     # Route Werkzeug request logs through the same handlers
     werkzeug_log = logging.getLogger("werkzeug")
     werkzeug_log.setLevel(logging.INFO)
     werkzeug_log.propagate = False
     _configure_stream_handler(werkzeug_log, stream_level, formatter)
-    _configure_file_handler(werkzeug_log, formatter)
+    # Werkzeug logs are always INFO-bounded (no DEBUG-level traffic worth keeping).
+    _configure_file_handler(werkzeug_log, formatter, logging.INFO)
