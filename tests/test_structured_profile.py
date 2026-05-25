@@ -118,6 +118,10 @@ def test_build_structured_profile_sends_scores_and_negative_preferences():
     assert "Generic Action Movie" in prompt
     assert "ISO-639-1" in prompt
     assert "ISO-3166 alpha-2" in prompt
+    assert "not raw watch frequency" in prompt
+    assert "creator_affinities entries must include weight, traits, and clusters" in prompt
+    assert "language_region_affinities entries must include weight, languages, regions, traits, and applies_to" in prompt
+    assert "negative_preferences should include explicit dislikes first" in prompt
     assert profile["clusters"][0]["label"] == "Hindi family dramas"
 
 
@@ -223,7 +227,7 @@ def test_select_profile_slice_matches_short_language_and_country_codes_exactly()
                 "id": "british-investigations",
                 "label": "British investigations",
                 "weight": 1.0,
-                "positive_traits": ["thin-lipped investigations"],
+                "positive_traits": ["set in London with thin-lipped investigations"],
                 "co_viewing": "personal",
                 "languages": ["en"],
                 "regions": ["GB"],
@@ -249,6 +253,78 @@ def test_select_profile_slice_matches_short_language_and_country_codes_exactly()
     assert "British investigations" not in hindi_text
     assert "Hindi family dramas" in india_text
     assert "British investigations" not in india_text
+
+
+def test_select_profile_slice_keeps_language_region_affinities_query_relevant():
+    profile = validate_structured_profile({
+        "clusters": [
+            {
+                "id": "C1",
+                "label": "British crime drama",
+                "weight": 0.95,
+                "positive_traits": ["set in London with institutional restraint"],
+                "co_viewing": "personal",
+                "languages": ["en"],
+                "regions": ["GB"],
+                "representative_titles": ["Broadchurch"],
+            },
+            {
+                "id": "C2",
+                "label": "Hindi family drama",
+                "weight": 0.80,
+                "positive_traits": ["grounded domestic obligation"],
+                "co_viewing": "mixed",
+                "languages": ["hi"],
+                "regions": ["IN"],
+                "representative_titles": ["Three of Us"],
+            },
+        ],
+        "creator_affinities": [
+            {
+                "label": "Taylor Sheridan",
+                "weight": 0.85,
+                "traits": ["American drama in frontier settings"],
+                "clusters": ["C1"],
+            },
+            {
+                "label": "Zoya Akhtar",
+                "weight": 0.75,
+                "traits": ["Indian social and family dynamics"],
+                "clusters": ["C2"],
+            },
+        ],
+        "language_region_affinities": [
+            {
+                "label": "British English",
+                "weight": 0.95,
+                "languages": ["en"],
+                "regions": ["GB"],
+                "traits": ["British drama in regional settings"],
+                "applies_to": ["C1"],
+            },
+            {
+                "label": "Hindi and Indian drama",
+                "weight": 0.80,
+                "languages": ["hi"],
+                "regions": ["IN"],
+                "traits": ["Hindi domestic drama"],
+                "applies_to": ["C2"],
+            },
+        ],
+    })
+
+    text = select_profile_slice(
+        make_intent(languages=["hi"], origin_countries=["IN"], genres=["drama"]),
+        profile,
+        max_clusters=3,
+    )
+
+    assert "Hindi family drama" in text
+    assert "British crime drama" not in text
+    assert "creator affinity: Zoya Akhtar" in text
+    assert "creator affinity: Taylor Sheridan" not in text
+    assert "language/region affinity: Hindi and Indian drama" in text
+    assert "language/region affinity: British English" not in text
 
 
 def test_select_profile_slice_includes_negative_preferences_for_selected_cluster_case_insensitively():

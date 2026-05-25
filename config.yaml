@@ -32,7 +32,7 @@ llm:
   tokens_intent: 400
   tokens_ranking: 1000
   tokens_suggestions: 300
-  tokens_profile_batch: 4000
+  tokens_profile_batch: 8000
   tokens_profile_merge: 16000
   tokens_abandoned: 300
   profile_batch_size: 200

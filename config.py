@@ -88,8 +88,8 @@ TOKENS_FAST = _llm_cfg.get("tokens_fast", 200)
 TOKENS_INTENT = _llm_cfg.get("tokens_intent", 400)
 TOKENS_RANKING = _llm_cfg.get("tokens_ranking", 1000)
 TOKENS_SUGGESTIONS = _llm_cfg.get("tokens_suggestions", 300)
-TOKENS_PROFILE_BATCH = _llm_cfg.get("tokens_profile_batch", 800)
-TOKENS_PROFILE_MERGE = _llm_cfg.get("tokens_profile_merge", 4000)
+TOKENS_PROFILE_BATCH = _llm_cfg.get("tokens_profile_batch", 8000)
+TOKENS_PROFILE_MERGE = _llm_cfg.get("tokens_profile_merge", 16000)
 TOKENS_ABANDONED = _llm_cfg.get("tokens_abandoned", 300)
 
 # Taste profile

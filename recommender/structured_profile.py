@@ -204,6 +204,14 @@ def build_structured_profile(
         "co_viewing, mood_states, languages, regions, representative_titles.\n"
         "Use ISO-639-1 language codes like hi, en, ko, es, fr when known. "
         "Use ISO-3166 alpha-2 region codes like IN, GB, US, KR when known.\n"
+        "Cluster weight should mean strength and confidence of the taste signal, not raw watch frequency. "
+        "Do not let high-volume family/co-viewing clusters outrank stronger personal preferences by volume alone.\n"
+        "creator_affinities entries must include weight, traits, and clusters. "
+        "Traits should explain what the user responds to in that creator's work, not just repeat the name.\n"
+        "language_region_affinities entries must include weight, languages, regions, traits, and applies_to. "
+        "For example, use languages ['hi'] and regions ['IN'] for a Hindi and Indian cinema affinity.\n"
+        "negative_preferences should include explicit dislikes first. "
+        "Only infer cautious anti-patterns when repeated low-engagement evidence supports them; otherwise return an empty list.\n"
         "Use co_viewing only as one of: personal, family, mixed, unknown.\n"
         "Use weights from 0.0 to 1.0. Do not invent titles that are not in the history.\n\n"
         f"Explicitly disliked titles: {disliked}\n\n"
@@ -242,7 +250,7 @@ def load_structured_profile(path: str | Path) -> dict[str, Any] | None:
 
 def _intent_terms(intent: Any) -> set[str]:
     values: list[str] = []
-    for attr in ("genres", "origin_countries", "languages", "mood_descriptors", "similar_to", "platforms"):
+    for attr in ("genres", "mood_descriptors", "similar_to", "platforms"):
         values.extend(_clean_string_list(getattr(intent, attr, []), limit=40))
     content_type = _clean_string(getattr(intent, "content_type", ""))
     if content_type and content_type != "both":
@@ -259,6 +267,30 @@ def _intent_terms(intent: Any) -> set[str]:
     return terms
 
 
+def _intent_locale_terms(intent: Any) -> tuple[set[str], set[str]]:
+    languages = {
+        value.casefold()
+        for value in _clean_string_list(getattr(intent, "languages", []), limit=40)
+    }
+    regions = {
+        value.casefold()
+        for value in _clean_string_list(getattr(intent, "origin_countries", []), limit=40)
+    }
+    return languages, regions
+
+
+def _item_refs(item: dict[str, Any], key: str) -> set[str]:
+    return {value.casefold() for value in item.get(key, [])}
+
+
+def _item_label_text(item: dict[str, Any]) -> str:
+    return " ".join(
+        _clean_string(item.get(key))
+        for key in ("id", "label", "name")
+        if item.get(key)
+    ).casefold()
+
+
 def _cluster_text(cluster: dict[str, Any]) -> str:
     fields = [
         cluster.get("id"),
@@ -271,6 +303,16 @@ def _cluster_text(cluster: dict[str, Any]) -> str:
         " ".join(cluster.get("representative_titles", [])),
     ]
     return " ".join(_clean_string(field) for field in fields).casefold()
+
+
+def _cluster_locale_match_count(
+    cluster: dict[str, Any],
+    language_terms: set[str],
+    region_terms: set[str],
+) -> int:
+    cluster_languages = {value.casefold() for value in cluster.get("languages", [])}
+    cluster_regions = {value.casefold() for value in cluster.get("regions", [])}
+    return len(language_terms & cluster_languages) + len(region_terms & cluster_regions)
 
 
 def _text_tokens(text: str) -> set[str]:
@@ -329,23 +371,36 @@ def select_profile_slice(intent: Any, profile: dict[str, Any] | None, max_cluste
         return ""
     normalized = validate_structured_profile(profile)
     terms = _intent_terms(intent)
+    language_terms, region_terms = _intent_locale_terms(intent)
+    query_has_terms = bool(terms or language_terms or region_terms)
     family_request = _is_family_request(intent, terms)
 
+    eligible_clusters = [
+        cluster for cluster in normalized["clusters"]
+        if family_request or cluster["co_viewing"] != "family"
+    ]
+    locale_requested = bool(language_terms or region_terms)
+    locale_restricted = (
+        locale_requested
+        and any(_cluster_locale_match_count(cluster, language_terms, region_terms) for cluster in eligible_clusters)
+    )
+
     scored_clusters: list[tuple[float, dict[str, Any]]] = []
-    for cluster in normalized["clusters"]:
-        if cluster["co_viewing"] == "family" and not family_request:
+    for cluster in eligible_clusters:
+        locale_match_count = _cluster_locale_match_count(cluster, language_terms, region_terms)
+        if locale_restricted and not locale_match_count:
             continue
         haystack = _cluster_text(cluster)
         match_count = _matching_term_count(terms, haystack)
+        match_count += locale_match_count
         score = match_count + (cluster["weight"] * 0.25)
-        if match_count or not terms:
+        if match_count or not query_has_terms:
             scored_clusters.append((score, cluster))
 
     if not scored_clusters:
         scored_clusters = [
             (cluster["weight"] * 0.25, cluster)
-            for cluster in normalized["clusters"]
-            if family_request or cluster["co_viewing"] != "family"
+            for cluster in eligible_clusters
         ]
 
     selected = [
@@ -365,21 +420,29 @@ def select_profile_slice(intent: Any, profile: dict[str, Any] | None, max_cluste
     lines.extend(_format_cluster(cluster) for cluster in selected)
 
     for item in normalized["creator_affinities"][:6]:
-        item_text = json.dumps(item).casefold()
-        if terms and not _text_matches_any_term(item_text, terms):
+        item_clusters = _item_refs(item, "clusters")
+        label_text = _item_label_text(item)
+        if query_has_terms and not (selected_cluster_refs & item_clusters) and not _text_matches_any_term(label_text, terms):
             continue
         lines.append(_format_named_item("creator affinity", item))
 
     for item in normalized["language_region_affinities"][:6]:
-        item_text = json.dumps(item).casefold()
-        if terms and not _text_matches_any_term(item_text, terms):
+        item_languages = _item_refs(item, "languages")
+        item_regions = _item_refs(item, "regions")
+        applies_to = _item_refs(item, "applies_to")
+        label_text = _item_label_text(item)
+        if locale_requested:
+            is_relevant = bool((language_terms & item_languages) or (region_terms & item_regions))
+        else:
+            is_relevant = bool((selected_cluster_refs & applies_to) or _text_matches_any_term(label_text, terms))
+        if query_has_terms and not is_relevant:
             continue
         lines.append(_format_named_item("language/region affinity", item))
 
     for item in normalized["negative_preferences"][:6]:
-        applies_to = {value.casefold() for value in item.get("applies_to", [])}
-        item_clusters = {value.casefold() for value in item.get("clusters", [])}
-        if terms and not (terms & applies_to) and not (selected_cluster_refs & item_clusters):
+        applies_to = _item_refs(item, "applies_to")
+        item_clusters = _item_refs(item, "clusters")
+        if query_has_terms and not (terms & applies_to) and not (selected_cluster_refs & item_clusters):
             continue
         lines.append(_format_named_item("negative preference", item))
 
