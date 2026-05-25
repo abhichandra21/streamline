@@ -29,6 +29,7 @@ from recommender.llm import create_client
 from recommender.log import setup_logging
 from recommender.enricher import enrichment_key_from_parts
 from recommender.query_engine import RecommendContext, ask
+from recommender.structured_profile import load_structured_profile
 from recommender.tmdb_client import TmdbClient
 
 def _events_loader_fallback() -> list:
@@ -81,6 +82,7 @@ def _build_context() -> RecommendContext:
     if not index_path.exists() or not profile_path.exists():
         raise RuntimeError("Run ./recommend setup before starting the web UI.")
 
+    structured_profile = load_structured_profile(config.STRUCTURED_TASTE_PROFILE_PATH)
     return RecommendContext(
         taste_profile=profile_path.read_text(),
         watch_index=wi.load(config.WATCH_INDEX_PATH),
@@ -91,6 +93,7 @@ def _build_context() -> RecommendContext:
         providers_cache_dir=config.PROVIDERS_CACHE_DIR,
         watch_region=config.WATCH_REGION,
         streaming_platforms=list(config.STREAMING_PLATFORMS),
+        structured_profile=structured_profile,
     )
 
 
@@ -976,8 +979,8 @@ _SETTINGS_DEFAULTS = {
         "timeout_fast": 30, "timeout_reason": 60,
         "timeout_profile_batch": 60, "timeout_profile_merge": 300,
         "tokens_fast": 200, "tokens_intent": 400, "tokens_ranking": 1000,
-        "tokens_suggestions": 300, "tokens_profile_batch": 800,
-        "tokens_profile_merge": 4000, "tokens_abandoned": 300,
+        "tokens_suggestions": 300, "tokens_profile_batch": 8000,
+        "tokens_profile_merge": 16000, "tokens_abandoned": 300,
         "profile_batch_size": 200, "rate_limit_wait": 65,
     },
     "scoring": {

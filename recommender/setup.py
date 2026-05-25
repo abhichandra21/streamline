@@ -26,6 +26,7 @@ from recommender.enricher import (
     is_identity_enrichment_index,
 )
 from recommender.taste_profile_builder import build as build_taste_profile
+from recommender.structured_profile import build_structured_profile, save_structured_profile
 from recommender.llm import create_client
 from recommender import watch_index as wi
 from recommender import user_store
@@ -42,6 +43,18 @@ _PLATFORM_PARSERS = [
     ("disney", parse_disney),
     ("hbo", parse_hbo),
 ]
+
+
+def _remove_structured_profile(path: str) -> None:
+    target = Path(path)
+    try:
+        target.unlink()
+        console.print(f"[yellow]Previous structured taste profile removed → {target}[/yellow]")
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        log.warning("Unable to remove stale structured taste profile at %s: %s", target, exc)
+        console.print(f"[yellow]Unable to remove stale structured taste profile: {exc}[/yellow]")
 
 
 def _compute_file_sha256(path: str) -> str:
@@ -667,6 +680,20 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                 console.print(f"\n[red]{exc}[/red]")
                 console.print("[yellow]Previous profile kept unchanged.[/yellow]")
                 sys.exit(1)
+            structured_profile = None
+            structured_profile_skipped = False
+            if not using_custom_path:
+                try:
+                    structured_profile = build_structured_profile(
+                        events,
+                        scores,
+                        enrichments,
+                        llm,
+                        negative_prefs=negative_prefs or None,
+                    )
+                except Exception as exc:
+                    structured_profile_skipped = True
+                    console.print(f"[yellow]Structured taste profile skipped: {exc}[/yellow]")
         resolved_profile_path.parent.mkdir(parents=True, exist_ok=True)
         # Auto-backup previous profile before overwriting, but only for the canonical path.
         # When writing to a custom path we are creating a new file alongside the default, not replacing it.
@@ -678,6 +705,15 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
             console.print(f"  Previous profile backed up → {backup.name}")
         resolved_profile_path.write_text(profile)
         console.print(f"  Taste profile saved → {resolved_profile_path}")
+        if structured_profile is not None:
+            try:
+                save_structured_profile(structured_profile, config.STRUCTURED_TASTE_PROFILE_PATH)
+                console.print(f"  Structured taste profile saved → {config.STRUCTURED_TASTE_PROFILE_PATH}")
+            except Exception as exc:
+                console.print(f"[yellow]Structured taste profile skipped: {exc}[/yellow]")
+                _remove_structured_profile(config.STRUCTURED_TASTE_PROFILE_PATH)
+        elif not using_custom_path and structured_profile_skipped:
+            _remove_structured_profile(config.STRUCTURED_TASTE_PROFILE_PATH)
         if not using_custom_path:
             stale_flag = Path(config.PROFILE_STALE_FLAG)
             if stale_flag.exists():

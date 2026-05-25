@@ -13,6 +13,7 @@ from recommender.llm import create_client
 from recommender.models import Recommendation
 from recommender.tmdb_client import TmdbClient
 from recommender.query_engine import RecommendContext, ConversationContext, ask
+from recommender.structured_profile import load_structured_profile
 from recommender import watch_index as wi
 from recommender import history
 
@@ -52,6 +53,7 @@ def load_context(provider: str | None = None) -> RecommendContext:
         console_err.print(f"[red]Error: {exc}[/red]")
         sys.exit(1)
 
+    structured_profile = load_structured_profile(config.STRUCTURED_TASTE_PROFILE_PATH)
     ctx = RecommendContext(
         taste_profile=profile_path.read_text(),
         watch_index=wi.load(config.WATCH_INDEX_PATH),
@@ -63,6 +65,7 @@ def load_context(provider: str | None = None) -> RecommendContext:
         watch_region=config.WATCH_REGION,
         streaming_platforms=list(config.STREAMING_PLATFORMS),
         user_state=_load_user_state(),
+        structured_profile=structured_profile,
     )
     return ctx
 
