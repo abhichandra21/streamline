@@ -26,6 +26,7 @@ from recommender.enricher import (
     is_identity_enrichment_index,
 )
 from recommender.taste_profile_builder import build as build_taste_profile
+from recommender.structured_profile import build_structured_profile, save_structured_profile
 from recommender.llm import create_client
 from recommender import watch_index as wi
 from recommender import user_store
@@ -667,6 +668,18 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                 console.print(f"\n[red]{exc}[/red]")
                 console.print("[yellow]Previous profile kept unchanged.[/yellow]")
                 sys.exit(1)
+            structured_profile = None
+            if not using_custom_path:
+                try:
+                    structured_profile = build_structured_profile(
+                        events,
+                        scores,
+                        enrichments,
+                        llm,
+                        negative_prefs=negative_prefs or None,
+                    )
+                except (RuntimeError, ValueError, OSError) as exc:
+                    console.print(f"[yellow]Structured taste profile skipped: {exc}[/yellow]")
         resolved_profile_path.parent.mkdir(parents=True, exist_ok=True)
         # Auto-backup previous profile before overwriting, but only for the canonical path.
         # When writing to a custom path we are creating a new file alongside the default, not replacing it.
@@ -678,6 +691,9 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
             console.print(f"  Previous profile backed up → {backup.name}")
         resolved_profile_path.write_text(profile)
         console.print(f"  Taste profile saved → {resolved_profile_path}")
+        if structured_profile is not None:
+            save_structured_profile(structured_profile, config.STRUCTURED_TASTE_PROFILE_PATH)
+            console.print(f"  Structured taste profile saved -> {config.STRUCTURED_TASTE_PROFILE_PATH}")
         if not using_custom_path:
             stale_flag = Path(config.PROFILE_STALE_FLAG)
             if stale_flag.exists():

@@ -468,3 +468,123 @@ def test_ask_llm_suggestions_respect_content_type():
 
     assert results == []
     assert all(r.content_type == "movie" for r in results)
+
+
+def make_structured_prompt_context(taste_profile, structured_profile, llm_responses):
+    meta = make_meta("Broadchurch", tmdb_id=77, content_type="tv")
+    mock_tmdb = MagicMock()
+    mock_tmdb.search_by_filters.return_value = [meta]
+    mock_tmdb.get_metadata.return_value = None
+    return RecommendContext(
+        taste_profile=taste_profile,
+        structured_profile=structured_profile,
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
+        events=[],
+        tmdb_client=mock_tmdb,
+        llm=make_mock_llm_sequence(llm_responses),
+        cache_dir="/tmp/test_cache",
+    )
+
+
+def test_rank_path_uses_structured_profile_slice_when_available():
+    ctx = make_structured_prompt_context(
+        taste_profile="FULL PROSE PROFILE WITH IRRELEVANT FAMILY ANIMATION",
+        structured_profile={
+            "version": 1,
+            "clusters": [
+                {
+                    "id": "british-crime",
+                    "label": "British crime",
+                    "weight": 0.9,
+                    "positive_traits": ["patient procedural mystery"],
+                    "negative_traits": [],
+                    "co_viewing": "personal",
+                    "mood_states": ["serious"],
+                    "languages": ["en"],
+                    "regions": ["GB"],
+                    "representative_titles": ["Broadchurch"],
+                },
+                {
+                    "id": "family-animation",
+                    "label": "Family animation",
+                    "weight": 1.0,
+                    "positive_traits": ["gentle kid-friendly adventure"],
+                    "negative_traits": [],
+                    "co_viewing": "family",
+                    "mood_states": [],
+                    "languages": ["en"],
+                    "regions": ["US"],
+                    "representative_titles": ["Paddington"],
+                },
+            ],
+            "mood_states": [],
+            "creator_affinities": [],
+            "language_region_affinities": [],
+            "negative_preferences": [],
+        },
+        llm_responses=[
+            json.dumps({
+                "genres": ["crime"],
+                "origin_countries": ["GB"],
+                "languages": [],
+                "mood_descriptors": ["serious"],
+                "similar_to": [],
+                "max_runtime_minutes": None,
+                "year_from": None,
+                "year_to": None,
+                "unwatched_only": True,
+                "special_intent": None,
+                "content_type": "tv",
+                "top_n": 1,
+                "platforms": [],
+            }),
+            json.dumps(["Broadchurch"]),
+            json.dumps([{
+                "title": "Broadchurch",
+                "explanation": "Fits serious British crime.",
+                "score": 0.92,
+            }]),
+        ],
+    )
+    with patch("recommender.query_engine.enrich_batch", return_value={"tv/77": "British coastal crime."}):
+        ask("serious British crime", ctx)
+    prompts = [call.args[0] for call in ctx.llm.generate.call_args_list]
+    combined = "\n\n".join(prompts)
+    assert "Relevant taste profile slice:" in combined
+    assert "British crime" in combined
+    assert "Family animation" not in combined
+    assert "FULL PROSE PROFILE WITH IRRELEVANT FAMILY ANIMATION" not in combined
+
+
+def test_rank_path_falls_back_to_prose_profile_without_structured_profile():
+    ctx = make_structured_prompt_context(
+        taste_profile="FULL PROSE PROFILE",
+        structured_profile=None,
+        llm_responses=[
+            json.dumps({
+                "genres": ["crime"],
+                "origin_countries": [],
+                "languages": [],
+                "mood_descriptors": [],
+                "similar_to": [],
+                "max_runtime_minutes": None,
+                "year_from": None,
+                "year_to": None,
+                "unwatched_only": True,
+                "special_intent": None,
+                "content_type": "tv",
+                "top_n": 1,
+                "platforms": [],
+            }),
+            json.dumps(["Broadchurch"]),
+            json.dumps([{
+                "title": "Broadchurch",
+                "explanation": "Fits the query.",
+                "score": 0.9,
+            }]),
+        ],
+    )
+    with patch("recommender.query_engine.enrich_batch", return_value={"tv/77": "British coastal crime."}):
+        ask("crime", ctx)
+    prompts = [call.args[0] for call in ctx.llm.generate.call_args_list]
+    assert any("FULL PROSE PROFILE" in prompt for prompt in prompts)

@@ -12,6 +12,7 @@ from .ingestion.base import WatchEvent
 from .llm import LLMClient
 from .models import Recommendation
 from .tmdb_client import TmdbClient, TmdbMetadata
+from .structured_profile import select_profile_slice
 from .user_state import UserStateIndex
 from .watch_index import WatchIndex
 
@@ -86,6 +87,7 @@ class RecommendContext:
     watch_region: str
     streaming_platforms: list[str]
     user_state: "UserStateIndex | None"
+    structured_profile: dict | None
     _events_loader: Callable[[], list[WatchEvent]] | None
     _events_resolved: list[WatchEvent] | None
 
@@ -94,7 +96,8 @@ class RecommendContext:
                  _events_loader: Callable[[], list[WatchEvent]] | None = None,
                  providers_cache_dir="", watch_region="US",
                  streaming_platforms: list[str] | None = None,
-                 user_state: "UserStateIndex | None" = None):
+                 user_state: "UserStateIndex | None" = None,
+                 structured_profile: dict | None = None):
         self.taste_profile = taste_profile
         self.watch_index = watch_index
         self.tmdb_client = tmdb_client
@@ -106,12 +109,18 @@ class RecommendContext:
         self._events_loader = _events_loader
         self._events_resolved = events  # None = lazy, list = eager
         self.user_state = user_state
+        self.structured_profile = structured_profile
 
     @property
     def events(self) -> list[WatchEvent]:
         if self._events_resolved is None:
             self._events_resolved = self._events_loader() if self._events_loader else []
         return self._events_resolved
+
+
+def _profile_for_prompt(ctx: RecommendContext, intent: "QueryIntent") -> str:
+    profile_slice = select_profile_slice(intent, ctx.structured_profile)
+    return profile_slice or ctx.taste_profile
 
 
 @dataclass
@@ -531,6 +540,8 @@ def ask(
         if top_n_override is not None:
             intent.top_n = top_n_override
 
+    profile_for_prompt = _profile_for_prompt(ctx, intent)
+
     if intent.special_intent == 'abandoned':
         return _handle_abandoned(query, intent, ctx)
 
@@ -590,7 +601,7 @@ def ask(
 
     # Source 2: LLM suggestions (semantic, taste-aware — always runs)
     log.debug("Fetching LLM suggestions for semantic coverage (similar_to=%s)", intent.similar_to)
-    suggestions = _generate_suggestions(query, ctx.taste_profile, ctx.llm,
+    suggestions = _generate_suggestions(query, profile_for_prompt, ctx.llm,
                                          similar_to=intent.similar_to)
     log.debug("LLM suggested %d titles: %s", len(suggestions), suggestions[:10])
     suggestion_count = 0
@@ -624,7 +635,7 @@ def ask(
         # Rank with a larger pool when platform filtering is active, so we have
         # enough candidates after discarding titles not on the requested service.
         rank_size = max(intent.top_n * 3, 15) if requested_platforms else intent.top_n
-        results = rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.llm, rank_size)
+        results = rank_candidates(query, profile_for_prompt, candidates, enrichments, ctx.llm, rank_size)
 
         annotated = []
         unfiltered = []
@@ -654,7 +665,7 @@ def ask(
             conv_ctx.last_intent = intent
         return annotated
 
-    results = rank_candidates(query, ctx.taste_profile, candidates, enrichments, ctx.llm, intent.top_n)
+    results = rank_candidates(query, profile_for_prompt, candidates, enrichments, ctx.llm, intent.top_n)
     if conv_ctx is not None:
         conv_ctx.last_intent = intent
     return results

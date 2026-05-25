@@ -29,6 +29,7 @@ from recommender.llm import create_client
 from recommender.log import setup_logging
 from recommender.enricher import enrichment_key_from_parts
 from recommender.query_engine import RecommendContext, ask
+from recommender.structured_profile import load_structured_profile
 from recommender.tmdb_client import TmdbClient
 
 def _events_loader_fallback() -> list:
@@ -81,6 +82,7 @@ def _build_context() -> RecommendContext:
     if not index_path.exists() or not profile_path.exists():
         raise RuntimeError("Run ./recommend setup before starting the web UI.")
 
+    structured_profile = load_structured_profile(config.STRUCTURED_TASTE_PROFILE_PATH)
     return RecommendContext(
         taste_profile=profile_path.read_text(),
         watch_index=wi.load(config.WATCH_INDEX_PATH),
@@ -91,6 +93,7 @@ def _build_context() -> RecommendContext:
         providers_cache_dir=config.PROVIDERS_CACHE_DIR,
         watch_region=config.WATCH_REGION,
         streaming_platforms=list(config.STREAMING_PLATFORMS),
+        structured_profile=structured_profile,
     )
 
 
