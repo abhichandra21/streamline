@@ -540,10 +540,10 @@ def ask(
         if top_n_override is not None:
             intent.top_n = top_n_override
 
-    profile_for_prompt = _profile_for_prompt(ctx, intent)
-
     if intent.special_intent == 'abandoned':
         return _handle_abandoned(query, intent, ctx)
+
+    profile_for_prompt = _profile_for_prompt(ctx, intent)
 
     content_types = ['tv', 'movie'] if intent.content_type == 'both' else [intent.content_type]
     seen_ids: set[tuple[str, int]] = set()

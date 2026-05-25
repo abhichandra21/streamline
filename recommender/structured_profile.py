@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -219,7 +221,10 @@ def save_structured_profile(profile: dict[str, Any], path: str | Path) -> None:
     normalized = validate_structured_profile(profile)
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(normalized, indent=2, sort_keys=True))
+    with tempfile.NamedTemporaryFile("w", dir=destination.parent, delete=False, suffix=".tmp") as f:
+        f.write(json.dumps(normalized, indent=2, sort_keys=True))
+        tmp = f.name
+    os.replace(tmp, destination)
 
 
 def load_structured_profile(path: str | Path) -> dict[str, Any] | None:

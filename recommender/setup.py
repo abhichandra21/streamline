@@ -693,7 +693,7 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         console.print(f"  Taste profile saved → {resolved_profile_path}")
         if structured_profile is not None:
             save_structured_profile(structured_profile, config.STRUCTURED_TASTE_PROFILE_PATH)
-            console.print(f"  Structured taste profile saved -> {config.STRUCTURED_TASTE_PROFILE_PATH}")
+            console.print(f"  Structured taste profile saved → {config.STRUCTURED_TASTE_PROFILE_PATH}")
         if not using_custom_path:
             stale_flag = Path(config.PROFILE_STALE_FLAG)
             if stale_flag.exists():
