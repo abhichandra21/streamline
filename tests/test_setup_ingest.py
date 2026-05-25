@@ -382,7 +382,13 @@ def test_load_platform_events_from_exports_bad_file_skips_provider(monkeypatch):
 # Stale flag tests
 # ---------------------------------------------------------------------------
 
-def _run_setup_with_stale_mocks(tmp_path, monkeypatch, profile_path=None):
+def _run_setup_with_stale_mocks(
+    tmp_path,
+    monkeypatch,
+    profile_path=None,
+    structured_profile_path=None,
+    structured_side_effect=None,
+):
     """Helper: run run_setup(refresh_profile=True) with all heavy lifting mocked out."""
     import config
     import recommender.setup as setup
@@ -394,6 +400,11 @@ def _run_setup_with_stale_mocks(tmp_path, monkeypatch, profile_path=None):
     monkeypatch.setattr(config, "TMDB_API_KEY", "test-key")
     monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(watch_index_file))
     monkeypatch.setattr(config, "TASTE_PROFILE_PATH", str(tmp_path / "taste_profile.txt"))
+    monkeypatch.setattr(
+        config,
+        "STRUCTURED_TASTE_PROFILE_PATH",
+        str(structured_profile_path or tmp_path / "taste_profile_structured.json"),
+    )
     monkeypatch.setattr(config, "EVENT_DB_PATH", str(tmp_path / "streamline.db"))
     monkeypatch.setattr(config, "ENRICHMENT_CACHE_DIR", str(tmp_path / "enrichments"))
     monkeypatch.setattr(config, "FEEDBACK_PATH", str(tmp_path / "feedback.json"))
@@ -407,6 +418,14 @@ def _run_setup_with_stale_mocks(tmp_path, monkeypatch, profile_path=None):
     mock_llm = MagicMock()
     mock_llm.provider = "anthropic"
 
+    structured_profile = {"version": 1, "clusters": []}
+    structured_patch = patch.object(
+        setup,
+        "build_structured_profile",
+        side_effect=structured_side_effect,
+        return_value=structured_profile,
+    )
+
     with patch.object(setup, "create_client", return_value=mock_llm), \
          patch.object(setup.event_store, "init_db"), \
          patch.object(setup.event_store, "load_events", return_value=[fake_event]), \
@@ -417,6 +436,7 @@ def _run_setup_with_stale_mocks(tmp_path, monkeypatch, profile_path=None):
          patch.object(setup.user_store, "get_disliked_titles", return_value=[]), \
          patch.object(setup, "compute_scores", return_value={}), \
          patch.object(setup, "build_taste_profile", return_value="profile text"), \
+         structured_patch, \
          patch.object(setup, "console"):
         setup.run_setup(refresh_profile=True, profile_path=profile_path)
 
@@ -448,3 +468,38 @@ def test_stale_flag_cleared_for_canonical_profile(tmp_path, monkeypatch):
     _run_setup_with_stale_mocks(tmp_path, monkeypatch)
 
     assert not stale_flag.exists(), "Stale flag should be cleared after canonical profile rebuild"
+
+
+def test_structured_profile_provider_failure_does_not_block_profile_rebuild(tmp_path, monkeypatch):
+    """A provider SDK failure in the optional structured profile path must not abort setup."""
+    class ProviderSDKError(Exception):
+        pass
+
+    structured_path = tmp_path / "taste_profile_structured.json"
+    structured_path.write_text('{"version":1,"clusters":[{"label":"stale"}]}')
+
+    _run_setup_with_stale_mocks(
+        tmp_path,
+        monkeypatch,
+        structured_profile_path=structured_path,
+        structured_side_effect=ProviderSDKError("rate limit after retries"),
+    )
+
+    assert (tmp_path / "taste_profile.txt").read_text() == "profile text"
+    assert not structured_path.exists()
+
+
+def test_structured_profile_invalid_output_removes_stale_cache(tmp_path, monkeypatch):
+    """If the new structured profile is skipped, an older structured cache must not stay active."""
+    structured_path = tmp_path / "taste_profile_structured.json"
+    structured_path.write_text('{"version":1,"clusters":[{"label":"stale"}]}')
+
+    _run_setup_with_stale_mocks(
+        tmp_path,
+        monkeypatch,
+        structured_profile_path=structured_path,
+        structured_side_effect=ValueError("invalid structured profile JSON"),
+    )
+
+    assert (tmp_path / "taste_profile.txt").read_text() == "profile text"
+    assert not structured_path.exists()

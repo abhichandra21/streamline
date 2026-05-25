@@ -116,6 +116,8 @@ def test_build_structured_profile_sends_scores_and_negative_preferences():
     assert "Kabhi Khushi Kabhie Gham (score: 0.93)" in prompt
     assert "Unknown" not in prompt
     assert "Generic Action Movie" in prompt
+    assert "ISO-639-1" in prompt
+    assert "ISO-3166 alpha-2" in prompt
     assert profile["clusters"][0]["label"] == "Hindi family dramas"
 
 
@@ -212,3 +214,64 @@ def test_select_profile_slice_allows_family_cluster_for_family_query():
     })
     text = select_profile_slice(make_intent(genres=["animation"], special_intent="family"), profile)
     assert "Family animation" in text
+
+
+def test_select_profile_slice_matches_short_language_and_country_codes_exactly():
+    profile = validate_structured_profile({
+        "clusters": [
+            {
+                "id": "british-investigations",
+                "label": "British investigations",
+                "weight": 1.0,
+                "positive_traits": ["thin-lipped investigations"],
+                "co_viewing": "personal",
+                "languages": ["en"],
+                "regions": ["GB"],
+                "representative_titles": ["Broadchurch"],
+            },
+            {
+                "id": "hindi-family",
+                "label": "Hindi family dramas",
+                "weight": 0.8,
+                "positive_traits": ["emotionally direct family stakes"],
+                "co_viewing": "mixed",
+                "languages": ["hi"],
+                "regions": ["IN"],
+                "representative_titles": ["Kabhi Khushi Kabhie Gham"],
+            },
+        ]
+    })
+
+    hindi_text = select_profile_slice(make_intent(languages=["hi"]), profile, max_clusters=1)
+    india_text = select_profile_slice(make_intent(origin_countries=["IN"]), profile, max_clusters=1)
+
+    assert "Hindi family dramas" in hindi_text
+    assert "British investigations" not in hindi_text
+    assert "Hindi family dramas" in india_text
+    assert "British investigations" not in india_text
+
+
+def test_select_profile_slice_includes_negative_preferences_for_selected_cluster_case_insensitively():
+    profile = validate_structured_profile({
+        "clusters": [
+            {
+                "id": "BritishCrime",
+                "label": "British crime",
+                "weight": 0.9,
+                "positive_traits": ["patient procedural mystery"],
+                "co_viewing": "personal",
+                "representative_titles": ["Broadchurch"],
+            },
+        ],
+        "negative_preferences": [
+            {
+                "label": "glossy cop wish fulfillment",
+                "weight": 0.7,
+                "clusters": ["BritishCrime"],
+            },
+        ],
+    })
+
+    text = select_profile_slice(make_intent(genres=["crime"]), profile)
+
+    assert "negative preference: glossy cop wish fulfillment" in text

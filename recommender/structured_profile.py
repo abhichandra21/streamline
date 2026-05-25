@@ -202,6 +202,8 @@ def build_structured_profile(
         "language_region_affinities, negative_preferences.\n"
         "For each cluster include: id, label, weight, positive_traits, negative_traits, "
         "co_viewing, mood_states, languages, regions, representative_titles.\n"
+        "Use ISO-639-1 language codes like hi, en, ko, es, fr when known. "
+        "Use ISO-3166 alpha-2 region codes like IN, GB, US, KR when known.\n"
         "Use co_viewing only as one of: personal, family, mixed, unknown.\n"
         "Use weights from 0.0 to 1.0. Do not invent titles that are not in the history.\n\n"
         f"Explicitly disliked titles: {disliked}\n\n"
@@ -271,6 +273,31 @@ def _cluster_text(cluster: dict[str, Any]) -> str:
     return " ".join(_clean_string(field) for field in fields).casefold()
 
 
+def _text_tokens(text: str) -> set[str]:
+    return {
+        part.casefold()
+        for part in re.split(r"[^a-zA-Z0-9]+", text)
+        if part
+    }
+
+
+def _term_matches_text(term: str, text: str, tokens: set[str]) -> bool:
+    if not term:
+        return False
+    if len(term) <= 2 and re.fullmatch(r"[a-z0-9]+", term):
+        return term in tokens
+    return term in text
+
+
+def _matching_term_count(terms: set[str], text: str) -> int:
+    tokens = _text_tokens(text)
+    return sum(1 for term in terms if _term_matches_text(term, text, tokens))
+
+
+def _text_matches_any_term(text: str, terms: set[str]) -> bool:
+    return _matching_term_count(terms, text.casefold()) > 0
+
+
 def _is_family_request(intent: Any, terms: set[str]) -> bool:
     if _clean_string(getattr(intent, "special_intent", "")).casefold() == "family":
         return True
@@ -309,7 +336,7 @@ def select_profile_slice(intent: Any, profile: dict[str, Any] | None, max_cluste
         if cluster["co_viewing"] == "family" and not family_request:
             continue
         haystack = _cluster_text(cluster)
-        match_count = sum(1 for term in terms if term and term in haystack)
+        match_count = _matching_term_count(terms, haystack)
         score = match_count + (cluster["weight"] * 0.25)
         if match_count or not terms:
             scored_clusters.append((score, cluster))
@@ -328,26 +355,31 @@ def select_profile_slice(intent: Any, profile: dict[str, Any] | None, max_cluste
     if not selected:
         return ""
 
-    selected_ids = {cluster["id"] for cluster in selected}
+    selected_cluster_refs = {
+        value.casefold()
+        for cluster in selected
+        for value in (cluster.get("id"), cluster.get("label"))
+        if value
+    }
     lines = ["Relevant taste profile slice:"]
     lines.extend(_format_cluster(cluster) for cluster in selected)
 
     for item in normalized["creator_affinities"][:6]:
         item_text = json.dumps(item).casefold()
-        if terms and not any(term in item_text for term in terms):
+        if terms and not _text_matches_any_term(item_text, terms):
             continue
         lines.append(_format_named_item("creator affinity", item))
 
     for item in normalized["language_region_affinities"][:6]:
         item_text = json.dumps(item).casefold()
-        if terms and not any(term in item_text for term in terms):
+        if terms and not _text_matches_any_term(item_text, terms):
             continue
         lines.append(_format_named_item("language/region affinity", item))
 
     for item in normalized["negative_preferences"][:6]:
         applies_to = {value.casefold() for value in item.get("applies_to", [])}
         item_clusters = {value.casefold() for value in item.get("clusters", [])}
-        if terms and not (terms & applies_to) and not (selected_ids & item_clusters):
+        if terms and not (terms & applies_to) and not (selected_cluster_refs & item_clusters):
             continue
         lines.append(_format_named_item("negative preference", item))
 
