@@ -517,8 +517,13 @@ def ask(
     conv_ctx: "ConversationContext | None" = None,
     intent_override: "QueryIntent | None" = None,
     context_note: str | None = None,
+    exclude_titles: set[str] | None = None,
 ) -> list[Recommendation]:
-    """Answer a natural language recommendation query end-to-end."""
+    """Answer a natural language recommendation query end-to-end.
+
+    ``exclude_titles`` are hard-excluded from the candidate pool (exact title
+    match), e.g. titles already shown that a refinement should not repeat.
+    """
     why_not_title = _extract_why_not_title(query)
     if why_not_title:
         return _handle_why_not(why_not_title, ctx)
@@ -547,6 +552,10 @@ def ask(
             intent = parse_intent(query, ctx.llm, conv_ctx=conv_ctx)
         if top_n_override is not None:
             intent.top_n = top_n_override
+
+    # Hard exclusions (e.g. titles already shown that a refine must not repeat).
+    if exclude_titles:
+        extra_excludes = set(extra_excludes) | set(exclude_titles)
 
     if intent.special_intent == 'abandoned':
         return _handle_abandoned(query, intent, ctx)

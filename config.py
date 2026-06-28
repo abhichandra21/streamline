@@ -119,9 +119,13 @@ MIN_RATING = float(_cfg.get("min_rating", 0))
 MIN_YEAR = int(_cfg.get("min_year", 0))
 RECENCY_HALF_LIFE_DAYS = _cfg.get("recency_half_life_days", 90)
 
-# ── Concierge wizard ──
+# ── Mood Match wizard ──
 _wizard = _cfg.get("wizard", {})
 WIZARD_MAX_QUESTIONS = int(_wizard.get("max_questions", 4))
+# Output-token ceiling for each wizard turn. The finalize turn emits a full
+# QueryIntent JSON (summary + intent + context_note), which overflows the
+# smaller intent-parsing budget and gets truncated, so it needs its own limit.
+WIZARD_MAX_TOKENS = int(_wizard.get("max_tokens", 1200))
 
 # ── Streaming availability ──
 WATCH_REGION = _cfg.get("watch_region", "US")

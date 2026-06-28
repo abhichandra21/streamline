@@ -60,7 +60,7 @@ def _prompt(state: WizardState, profile: str, force_finish: bool) -> str:
         "Ask another only if it would materially change the recommendation; otherwise finish.\n"
     )
     return (
-        "You are a film/TV concierge helping someone who cannot decide what to watch. "
+        "You are a film and TV guide helping someone who cannot decide what to watch. "
         "Use their taste profile as a PRIOR: do not ask what it already implies; probe only "
         "tonight's context (mood, energy, time available, alone or with others, novelty vs comfort).\n\n"
         f"TASTE PROFILE:\n{profile}\n\n"
@@ -69,7 +69,9 @@ def _prompt(state: WizardState, profile: str, force_finish: bool) -> str:
         "Return ONLY valid JSON, exactly one of:\n"
         '1) {"action":"ask","prompt":str,"subtext":str,'
         '"chips":[{"label":str,"value":str}],"multi":bool,"allow_free_text":bool}\n'
-        "   3-5 short, tappable chips. Set multi=true when several answers can co-apply.\n"
+        "   3-5 tappable chips. Chip labels MUST be short, plain, everyday words "
+        "(1-3 words, no jargon or fancy phrasing) — e.g. \"Funny\", \"Tense\", \"Easy watch\", "
+        "\"Under an hour\". Set multi=true when several answers can co-apply.\n"
         '2) {"action":"recommend","summary":str,'
         '"intent":{"genres":[],"origin_countries":[],"languages":[],"mood_descriptors":[],'
         '"similar_to":[],"max_runtime_minutes":null,"year_from":null,"year_to":null,'
@@ -83,7 +85,7 @@ def _prompt(state: WizardState, profile: str, force_finish: bool) -> str:
 def _finalize(state: WizardState, profile: str, llm) -> dict:
     """Force a recommend turn. Used on cap hit or early-exit."""
     raw = llm.generate(_prompt(state, profile, force_finish=True),
-                        role="reason", max_tokens=config.TOKENS_INTENT,
+                        role="reason", max_tokens=config.WIZARD_MAX_TOKENS,
                         timeout=config.TIMEOUT_REASON)
     try:
         data = _parse_json_response(raw)
@@ -108,7 +110,7 @@ def next_turn(state: WizardState, ctx, force_finish: bool = False) -> dict:
         return _finalize(state, profile, ctx.llm)
 
     raw = ctx.llm.generate(_prompt(state, profile, force_finish=False),
-                           role="reason", max_tokens=config.TOKENS_INTENT,
+                           role="reason", max_tokens=config.WIZARD_MAX_TOKENS,
                            timeout=config.TIMEOUT_REASON)
     try:
         data = _parse_json_response(raw)

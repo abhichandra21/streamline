@@ -19,6 +19,19 @@
   <input type="hidden" name="state" value="{{ state_json }}">
   <input type="hidden" name="prompt" value="{{ turn.prompt }}">
 
+  {% if answered %}
+  <div style="margin-bottom:1.25rem; padding:0.75rem 1rem; background:var(--surface); border:1px solid var(--border); border-radius:6px;">
+    <div class="mono" style="font-size:0.55rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:0.5rem;">Your answers so far</div>
+    {% for t in answered %}
+    {% set ans = t.selected | join(', ') %}{% if t.free_text %}{% set ans = ans ~ ('  ·  ' if ans else '') ~ t.free_text %}{% endif %}
+    <div style="font-size:0.82rem; line-height:1.5; margin-bottom:0.25rem;">
+      <span style="color:var(--muted);">{{ t.prompt }}</span>
+      <span style="color:var(--text);"> — {{ ans or 'skipped' }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   <div class="mono" style="font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:0.4rem;">
     Question {{ question_number }}{% if max_questions %} of up to {{ max_questions }}{% endif %}
   </div>
@@ -46,23 +59,31 @@
 </form>
 <script>
 (function(){
-  document.querySelectorAll('#wizard-stage .wiz-chip').forEach(function(chip){
+  var stage = document.getElementById('wizard-stage');
+  if (!stage) return;
+  function syncAll(){
+    stage.querySelectorAll('.wiz-chip').forEach(function(c){
+      var inp = c.querySelector('input');
+      var on = !!(inp && inp.checked);
+      c.classList.toggle('selected', on);
+      c.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+  stage.querySelectorAll('.wiz-chip').forEach(function(chip){
     var input = chip.querySelector('input');
-    function sync(){
-      if (input.type === 'radio') {
-        document.querySelectorAll('#wizard-stage .wiz-chip').forEach(function(c){
-          c.classList.toggle('selected', c.querySelector('input').checked);
-        });
-      } else {
-        chip.classList.toggle('selected', input.checked);
-      }
-      chip.setAttribute('aria-pressed', input.checked);
-    }
+    if (!input) return;
     chip.addEventListener('click', function(e){
-      if (e.target.tagName !== 'INPUT'){ input.checked = !input.checked; }
-      sync();
+      // Cancel the label's native toggle so it does not double-toggle with ours.
+      e.preventDefault();
+      if (input.type === 'radio') {
+        stage.querySelectorAll('.wiz-chip input').forEach(function(i){ i.checked = (i === input); });
+      } else {
+        input.checked = !input.checked;
+      }
+      syncAll();
     });
   });
+  syncAll();
 })();
 </script>
 {% endif %}

@@ -28,6 +28,10 @@ def test_get_wizard_renders_shell(client):
     resp = client.get("/wizard")
     assert resp.status_code == 200
     assert b"wizard-stage" in resp.data
+    # Landing describes the feature and waits for an explicit Start (no auto-fire).
+    assert b"Mood Match" in resp.data
+    assert b"Start" in resp.data
+    assert b'hx-trigger="load"' not in resp.data
 
 
 def test_post_next_ask_branch_renders_question(client):

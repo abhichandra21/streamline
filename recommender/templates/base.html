@@ -294,7 +294,7 @@
        (the nav strips below) opt back in explicitly. */
     html, body { overflow-x: hidden; }
 
-    /* Concierge wizard */
+    /* Mood Match wizard */
     .wiz-progress { display:flex; gap:5px; margin-bottom:1rem; }
     .wiz-progress span { height:3px; flex:1; border-radius:2px; background:var(--border); }
     .wiz-progress span.filled { background:var(--accent); }
@@ -399,7 +399,7 @@
     </a>
     <div class="nav-group" style="margin-left:0.5rem;">
       <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">Home</a>
-      <a href="/wizard" class="nav-link {% if request.path == '/wizard' %}active{% endif %}">Concierge</a>
+      <a href="/wizard" class="nav-link {% if request.path == '/wizard' %}active{% endif %}">Mood Match</a>
       <a href="/searches" class="nav-link {% if request.path == '/searches' %}active{% endif %}">Searches</a>
       <a href="/watchlist" class="nav-link {% if request.path == '/watchlist' %}active{% endif %}" style="display:flex; align-items:center; gap:0.3rem;">
         Watchlist

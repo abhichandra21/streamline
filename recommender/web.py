@@ -123,13 +123,17 @@ def _run_recommend_job(query: str) -> dict:
     return {"items": items, "query": query}
 
 
-def _run_wizard_recommend_job(intent_dict: dict, context_note: str, summary: str) -> dict:
+def _run_wizard_recommend_job(intent_dict: dict, context_note: str, summary: str,
+                              exclude: list[str] | None = None) -> dict:
     from recommender.query_engine import QueryIntent
     ctx = _get_job_context()
     intent = QueryIntent(**intent_dict)
-    results = ask("", ctx, intent_override=intent, context_note=context_note)
+    # Use the human-readable recap as the query so semantic suggestions and the
+    # ranker stay tied to the wizard answers rather than an empty string.
+    results = ask(summary, ctx, intent_override=intent, context_note=context_note,
+                  exclude_titles=set(exclude) if exclude else None)
     items = _build_result_items(results, ctx)
-    label = f"concierge: {summary}"
+    label = f"mood match: {summary}"
     try:
         query_history.record(label, items, ctx.llm.provider, ctx.llm.usage.summary())
     except OSError as exc:
@@ -576,7 +580,7 @@ def poll_job(job_id: str) -> str:
 
 @app.route("/wizard")
 def wizard_page() -> str:
-    return render_template("wizard.html")
+    return render_template("wizard.html", max_questions=config.WIZARD_MAX_QUESTIONS)
 
 
 def _collect_answers(form) -> tuple[wizard.WizardState, dict | None]:
@@ -617,6 +621,7 @@ def wizard_next() -> str:
 
     return render_template("_wizard_step.html", turn=turn,
                            state_json=state.to_json(),
+                           answered=state.turns,
                            question_number=state.turn_count + 1,
                            max_questions=config.WIZARD_MAX_QUESTIONS)
 
@@ -645,7 +650,6 @@ def wizard_poll(job_id: str) -> str:
 
 @app.route("/wizard/refine", methods=["POST"])
 def wizard_refine() -> str:
-    from recommender.query_engine import QueryIntent
     intent_dict = json.loads(request.form.get("intent", "{}"))
     base_note = request.form.get("context_note", "")
     directive = request.form.get("directive", "")     # e.g. "make it lighter"
@@ -653,11 +657,11 @@ def wizard_refine() -> str:
     note = base_note
     if directive:
         note = f"{note}\nRefinement: {directive}."
-    if shown:
-        note = f"{note}\nAlready shown, avoid repeating: {shown}."
+    # Hard-exclude the titles already shown so a refine never repeats them.
+    exclude = [t.strip() for t in shown.split(",") if t.strip()]
     summary = request.form.get("summary", "your picks")
     job_id = job_registry.submit(
-        _run_wizard_recommend_job, intent_dict, note, summary, label="wizard")
+        _run_wizard_recommend_job, intent_dict, note, summary, exclude, label="wizard")
     return render_template("_polling.html", job_id=job_id,
                            poll_url=f"/wizard/jobs/{job_id}/poll",
                            poll_target="#wizard-stage")

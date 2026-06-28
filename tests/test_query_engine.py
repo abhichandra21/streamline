@@ -90,6 +90,47 @@ def make_meta(title, tmdb_id=1, content_type="tv", genres=None, vote_avg=8.0):
     )
 
 
+def test_ask_hard_excludes_titles(monkeypatch):
+    """exclude_titles must drop matching candidates from the pool."""
+    import recommender.query_engine as qe
+
+    def _no_parse(*a, **k):
+        raise AssertionError("parse_intent must not run with intent_override")
+    monkeypatch.setattr(qe, "parse_intent", _no_parse)
+
+    cand = make_meta("Excluded Movie", tmdb_id=1, content_type="movie")
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return [cand]
+        def get_metadata(self, title, ct):
+            return None
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return "[]"  # no LLM suggestions
+
+    ctx = qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    intent = qe.QueryIntent(
+        genres=["drama"], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=[], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent=None, content_type="movie",
+        top_n=5, platforms=[],
+    )
+    # Excluding the only candidate empties the pool -> early empty return.
+    results = qe.ask("q", ctx, intent_override=intent,
+                     exclude_titles={"Excluded Movie"})
+    assert results == []
+
+
 def test_rank_candidates_returns_recommendations():
     candidates = [make_meta("Broadchurch", tmdb_id=1), make_meta("Hinterland", tmdb_id=2)]
     enrichments = {"tv/1": "Dark coastal crime.", "tv/2": "Welsh noir."}
