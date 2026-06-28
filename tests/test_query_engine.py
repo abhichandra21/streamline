@@ -588,3 +588,53 @@ def test_rank_path_falls_back_to_prose_profile_without_structured_profile():
         ask("crime", ctx)
     prompts = [call.args[0] for call in ctx.llm.generate.call_args_list]
     assert any("FULL PROSE PROFILE" in prompt for prompt in prompts)
+
+
+def test_rank_candidates_includes_context_note_in_prompt():
+    from recommender import query_engine
+
+    captured = {}
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, prompt, role="reason", max_tokens=1000, timeout=30.0):
+            captured["prompt"] = prompt
+            return "[]"
+
+    cand = make_meta("Example", tmdb_id=1, content_type="movie")
+    query_engine.rank_candidates(
+        "something", "PROFILE", [cand], {}, FakeLLM(), top_n=1,
+        context_note="Wants something short and low-energy tonight.",
+    )
+    assert "short and low-energy" in captured["prompt"]
+
+
+def test_ask_with_intent_override_skips_parse_intent(monkeypatch):
+    from recommender import query_engine
+    from recommender.query_engine import QueryIntent, RecommendContext
+
+    def boom(*a, **k):
+        raise AssertionError("parse_intent must not be called when intent_override is given")
+    monkeypatch.setattr(query_engine, "parse_intent", boom)
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return []
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, prompt, role="reason", max_tokens=1000, timeout=30.0):
+            return "[]"   # no LLM suggestions
+
+    ctx = RecommendContext(
+        taste_profile="PROFILE", watch_index=None, tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    intent = QueryIntent(
+        genres=[], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=[], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent=None, content_type="movie",
+        top_n=3, platforms=[],
+    )
+    results = query_engine.ask("ignored", ctx, intent_override=intent,
+                               context_note="low energy")
+    assert results == []   # no candidates -> empty, but parse_intent never ran
