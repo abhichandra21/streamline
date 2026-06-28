@@ -66,3 +66,21 @@ def test_state_from_json_resets_on_garbage():
     assert wizard.WizardState.from_json("{bad json").turns == []
     s = wizard.WizardState(turns=[{"prompt": "q", "selected": ["a"], "free_text": ""}], turn_count=1)
     assert wizard.WizardState.from_json(s.to_json()).turn_count == 1
+
+
+def test_finalize_handles_array_response():
+    llm = FakeLLM(["[]"])
+    out = wizard.next_turn(WizardState(turns=[], turn_count=0), _ctx(llm), force_finish=True)
+    assert out["action"] == "recommend"
+    assert isinstance(out["intent"], QueryIntent)
+
+
+def test_next_turn_array_response_falls_back_to_finalize():
+    llm = FakeLLM([
+        "[]",
+        json.dumps({"action": "recommend", "summary": "x",
+                    "intent": {"content_type": "both"}, "context_note": ""}),
+    ])
+    out = wizard.next_turn(WizardState(turns=[], turn_count=1), _ctx(llm))
+    assert out["action"] == "recommend"
+    assert len(llm.calls) == 2

@@ -85,7 +85,13 @@ def _finalize(state: WizardState, profile: str, llm) -> dict:
     raw = llm.generate(_prompt(state, profile, force_finish=True),
                         role="reason", max_tokens=config.TOKENS_INTENT,
                         timeout=config.TIMEOUT_REASON)
-    data = _parse_json_response(raw)
+    try:
+        data = _parse_json_response(raw)
+        if not isinstance(data, dict):
+            data = {}
+    except (json.JSONDecodeError, ValueError, TypeError, AttributeError) as exc:
+        log.warning("Malformed finalize response, using defaults: %s", exc)
+        data = {}
     return {
         "action": "recommend",
         "summary": data.get("summary", "based on what you told me"),
@@ -108,6 +114,10 @@ def next_turn(state: WizardState, ctx, force_finish: bool = False) -> dict:
         data = _parse_json_response(raw)
     except (json.JSONDecodeError, ValueError, TypeError) as exc:
         log.warning("Malformed wizard turn, finalizing instead: %s", exc)
+        return _finalize(state, profile, ctx.llm)
+
+    if not isinstance(data, dict):
+        log.warning("Wizard turn returned non-object JSON, finalizing instead")
         return _finalize(state, profile, ctx.llm)
 
     if data.get("action") == "recommend":
