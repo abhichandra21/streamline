@@ -71,7 +71,9 @@ def _prompt(state: WizardState, profile: str, force_finish: bool) -> str:
         '"chips":[{"label":str,"value":str}],"multi":bool,"allow_free_text":bool}\n'
         "   3-5 tappable chips. Chip labels MUST be short, plain, everyday words "
         "(1-3 words, no jargon or fancy phrasing) — e.g. \"Funny\", \"Tense\", \"Easy watch\", "
-        "\"Under an hour\". Set multi=true when several answers can co-apply.\n"
+        "\"Under an hour\". The user can ALWAYS select more than one chip (every question "
+        "is multi-select), so phrase the question and chips so that picking several is "
+        "natural (it means they are open to any of them). Keep multi=true.\n"
         '2) {"action":"recommend","summary":str,'
         '"intent":{"genres":[],"origin_countries":[],"languages":[],"mood_descriptors":[],'
         '"similar_to":[],"max_runtime_minutes":null,"year_from":null,"year_to":null,'
