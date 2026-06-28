@@ -119,6 +119,10 @@ MIN_RATING = float(_cfg.get("min_rating", 0))
 MIN_YEAR = int(_cfg.get("min_year", 0))
 RECENCY_HALF_LIFE_DAYS = _cfg.get("recency_half_life_days", 90)
 
+# ── Concierge wizard ──
+_wizard = _cfg.get("wizard", {})
+WIZARD_MAX_QUESTIONS = int(_wizard.get("max_questions", 4))
+
 # ── Streaming availability ──
 WATCH_REGION = _cfg.get("watch_region", "US")
 STREAMING_PLATFORMS: list[str] = _cfg.get("streaming_platforms", [])
