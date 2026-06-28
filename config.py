@@ -114,6 +114,11 @@ MANUAL_MOVIE_DURATION_MINUTES = _manual.get("movie_duration_minutes", 120)
 # ── Recommendation settings ──
 DEFAULT_TOP_N = _cfg.get("default_top_n", 3)
 CANDIDATE_POOL_SIZE = _cfg.get("candidate_pool_size", 500)
+# Upper bound on how many candidates get LLM enrichment + ranking. Enrichment is
+# one serial LLM call per uncached title, so a broad query (e.g. from the Mood
+# Match wizard) can otherwise enrich 100+ titles and take minutes. Filtered
+# queries normally stay well under this, so they are unaffected.
+MAX_ENRICH_CANDIDATES = int(_cfg.get("max_enrich_candidates", 40))
 MIN_VOTE_COUNT = _cfg.get("min_vote_count", 20)
 MIN_RATING = float(_cfg.get("min_rating", 0))
 MIN_YEAR = int(_cfg.get("min_year", 0))

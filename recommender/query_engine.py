@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import re
 import sys
 from dataclasses import dataclass, field
@@ -637,6 +638,18 @@ def ask(
     if not candidates:
         log.debug("No candidates after all sources, returning empty")
         return []
+
+    # Bound enrichment/ranking cost: enrichment is one serial LLM call per
+    # uncached title, so a broad query can otherwise enrich 100+ titles. Keep the
+    # strongest candidates by rating weighted by vote volume.
+    if len(candidates) > config.MAX_ENRICH_CANDIDATES:
+        candidates.sort(
+            key=lambda c: (c.vote_average or 0) * math.log10((c.vote_count or 0) + 10),
+            reverse=True,
+        )
+        log.debug("Trimming candidate pool %d -> %d before enrichment",
+                  len(candidates), config.MAX_ENRICH_CANDIDATES)
+        candidates = candidates[:config.MAX_ENRICH_CANDIDATES]
 
     log.debug("Enriching %d candidates", len(candidates))
     meta_dict = {c.title: c for c in candidates}
