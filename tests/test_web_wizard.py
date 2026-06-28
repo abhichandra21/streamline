@@ -62,3 +62,23 @@ def test_post_next_recommend_branch_starts_job(client):
     assert resp.status_code == 200
     assert b"job-123" in resp.data   # polling partial carries the job id
     sub.assert_called_once()
+
+
+def test_post_refine_starts_job(client):
+    intent_json = json.dumps({
+        "genres": [], "origin_countries": [], "languages": [], "mood_descriptors": [],
+        "similar_to": [], "max_runtime_minutes": None, "year_from": None, "year_to": None,
+        "unwatched_only": True, "special_intent": None, "content_type": "both",
+        "top_n": 5, "platforms": [],
+    })
+    with patch.object(web.job_registry, "submit", return_value="job-xyz") as sub:
+        resp = client.post("/wizard/refine", data=_csrf_form(
+            intent=intent_json,
+            context_note="low energy",
+            directive="lighter",
+            shown="A, B",
+            summary="light picks",
+        ), headers={"HX-Request": "true"})
+    assert resp.status_code == 200
+    assert b"job-xyz" in resp.data
+    sub.assert_called_once()

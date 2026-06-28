@@ -134,7 +134,8 @@ def _run_wizard_recommend_job(intent_dict: dict, context_note: str, summary: str
         query_history.record(label, items, ctx.llm.provider, ctx.llm.usage.summary())
     except OSError as exc:
         log.warning("Failed to persist wizard history: %s", exc)
-    return {"items": items, "query": summary, "summary": summary}
+    return {"items": items, "query": summary, "summary": summary,
+            "intent_dict": intent_dict, "context_note": context_note}
 
 
 def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
@@ -636,12 +637,14 @@ def wizard_poll(job_id: str) -> str:
     result = job.result
     return render_template("_wizard_results.html", results=result["items"],
                            summary=result["summary"], error=None,
-                           query=result["summary"])
+                           query=result["summary"],
+                           intent_json=json.dumps(result["intent_dict"]),
+                           context_note=result["context_note"],
+                           shown=", ".join(i["title"] for i in result["items"]))
 
 
 @app.route("/wizard/refine", methods=["POST"])
 def wizard_refine() -> str:
-    from dataclasses import asdict
     from recommender.query_engine import QueryIntent
     intent_dict = json.loads(request.form.get("intent", "{}"))
     base_note = request.form.get("context_note", "")

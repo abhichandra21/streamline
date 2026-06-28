@@ -13,7 +13,7 @@
   <button class="btn-ghost" style="padding:4px 10px;"
           hx-post="/wizard/refine" hx-target="#wizard-stage" hx-swap="innerHTML"
           hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'
-          hx-vals='{"directive": "{{ d }}", "summary": "{{ summary }}"}'>{{ d }}</button>
+          hx-vals='{"directive": {{ d | tojson }}, "summary": {{ summary | tojson }}, "intent": {{ intent_json | tojson }}, "context_note": {{ context_note | tojson }}, "shown": {{ shown | tojson }}}'>{{ d }}</button>
   {% endfor %}
   <a href="/wizard" class="mono result-link" style="align-self:center;">start over</a>
 </div>
