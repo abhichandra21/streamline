@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Mood Match{% endblock %}
+{% block content %}
+<div style="margin-bottom:1.5rem;">
+  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">Guided Pick</span>
+  <h1 style="font-size:clamp(2rem,4.5vw,3rem); margin-top:0.2rem;">Mood Match</h1>
+</div>
+
+<div id="wizard-stage">
+  <div style="padding:1.5rem 1.6rem; background:var(--surface); border:1px solid var(--border); border-radius:8px;">
+    <p style="color:var(--body); margin-bottom:0.75rem;">
+      Can't decide what to watch? Mood Match asks a few quick questions about your
+      mood, energy, and how much time you have tonight, then suggests titles from
+      your streaming services. It uses your taste profile as a starting point, so
+      it already knows the kind of thing you tend to enjoy.
+    </p>
+    <p style="color:var(--muted); font-size:0.85rem; margin-bottom:1.5rem;">
+      Up to {{ max_questions }} short questions. You can stop and see picks at any point.
+    </p>
+    <div style="display:flex; align-items:center; gap:0.8rem;">
+      <button class="btn-primary" style="padding:0.75rem 1.6rem;"
+              hx-post="/wizard/next" hx-target="#wizard-stage" hx-swap="innerHTML"
+              hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'
+              hx-indicator="#wiz-start-spinner" hx-disabled-elt="this">
+        Start
+      </button>
+      <span id="wiz-start-spinner" class="htmx-indicator" style="align-items:center; gap:0.5rem;">
+        <span style="width:13px; height:13px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; display:inline-block; animation:spin 0.6s linear infinite;"></span>
+        <span class="mono" style="font-size:0.62rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">reading the room...</span>
+      </span>
+    </div>
+  </div>
+</div>
+{% endblock %}

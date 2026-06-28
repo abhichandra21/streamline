@@ -114,10 +114,23 @@ MANUAL_MOVIE_DURATION_MINUTES = _manual.get("movie_duration_minutes", 120)
 # ── Recommendation settings ──
 DEFAULT_TOP_N = _cfg.get("default_top_n", 3)
 CANDIDATE_POOL_SIZE = _cfg.get("candidate_pool_size", 500)
+# Upper bound on how many candidates get LLM enrichment + ranking. Enrichment is
+# one serial LLM call per uncached title, so a broad query (e.g. from the Mood
+# Match wizard) can otherwise enrich 100+ titles and take minutes. Filtered
+# queries normally stay well under this, so they are unaffected.
+MAX_ENRICH_CANDIDATES = int(_cfg.get("max_enrich_candidates", 40))
 MIN_VOTE_COUNT = _cfg.get("min_vote_count", 20)
 MIN_RATING = float(_cfg.get("min_rating", 0))
 MIN_YEAR = int(_cfg.get("min_year", 0))
 RECENCY_HALF_LIFE_DAYS = _cfg.get("recency_half_life_days", 90)
+
+# ── Mood Match wizard ──
+_wizard = _cfg.get("wizard", {})
+WIZARD_MAX_QUESTIONS = int(_wizard.get("max_questions", 4))
+# Output-token ceiling for each wizard turn. The finalize turn emits a full
+# QueryIntent JSON (summary + intent + context_note), which overflows the
+# smaller intent-parsing budget and gets truncated, so it needs its own limit.
+WIZARD_MAX_TOKENS = int(_wizard.get("max_tokens", 1200))
 
 # ── Streaming availability ──
 WATCH_REGION = _cfg.get("watch_region", "US")

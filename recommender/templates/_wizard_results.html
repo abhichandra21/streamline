@@ -1,0 +1,25 @@
+{% if error %}
+<div style="padding:1rem 1.25rem; background:rgba(232,93,74,0.08); border:1px solid rgba(232,93,74,0.2); border-radius:6px; color:#e88;">
+  {{ error }}
+</div>
+{% elif results %}
+<p style="font-family:'DM Serif Display',serif; font-size:1.3rem; color:var(--text); margin-bottom:1rem;">
+  Because you wanted {{ summary }} —
+</p>
+{% include "_results.html" with context %}
+<div style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-top:1.25rem;">
+  <span class="mono" style="font-size:0.6rem; color:var(--muted); align-self:center;">Not quite?</span>
+  {% for d in ["lighter", "shorter", "more obscure", "surprise me"] %}
+  <button class="btn-ghost" style="padding:4px 10px;"
+          hx-post="/wizard/refine" hx-target="#wizard-stage" hx-swap="innerHTML"
+          hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'
+          hx-vals='{"directive": {{ d | tojson }}, "summary": {{ summary | tojson }}, "intent": {{ intent_json | tojson }}, "context_note": {{ context_note | tojson }}, "shown": {{ shown | tojson }}}'>{{ d }}</button>
+  {% endfor %}
+  <a href="/wizard" class="mono result-link" style="align-self:center;">start over</a>
+</div>
+{% else %}
+<div style="padding:2rem; text-align:center;">
+  <p class="mono" style="font-size:0.7rem; text-transform:uppercase; color:var(--muted);">Nothing matched on your platforms.</p>
+  <a href="/wizard" class="btn-ghost" style="display:inline-block; margin-top:0.75rem; padding:6px 14px;">Try again</a>
+</div>
+{% endif %}

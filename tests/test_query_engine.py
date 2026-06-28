@@ -90,6 +90,97 @@ def make_meta(title, tmdb_id=1, content_type="tv", genres=None, vote_avg=8.0):
     )
 
 
+def test_ask_hard_excludes_titles(monkeypatch):
+    """exclude_titles must drop matching candidates from the pool."""
+    import recommender.query_engine as qe
+
+    def _no_parse(*a, **k):
+        raise AssertionError("parse_intent must not run with intent_override")
+    monkeypatch.setattr(qe, "parse_intent", _no_parse)
+
+    cand = make_meta("Excluded Movie", tmdb_id=1, content_type="movie")
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return [cand]
+        def get_metadata(self, title, ct):
+            return None
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return "[]"  # no LLM suggestions
+
+    ctx = qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    intent = qe.QueryIntent(
+        genres=["drama"], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=[], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent=None, content_type="movie",
+        top_n=5, platforms=[],
+    )
+    # Excluding the only candidate empties the pool -> early empty return.
+    results = qe.ask("q", ctx, intent_override=intent,
+                     exclude_titles={"Excluded Movie"})
+    assert results == []
+
+
+def test_ask_caps_candidate_pool_before_enrichment(monkeypatch):
+    """A broad query must not enrich more than MAX_ENRICH_CANDIDATES titles."""
+    import recommender.query_engine as qe
+
+    monkeypatch.setattr(qe.config, "MAX_ENRICH_CANDIDATES", 5)
+
+    def _no_parse(*a, **k):
+        raise AssertionError("parse_intent must not run with intent_override")
+    monkeypatch.setattr(qe, "parse_intent", _no_parse)
+
+    cands = [make_meta(f"M{i}", tmdb_id=i, content_type="movie", vote_avg=8.0)
+             for i in range(1, 21)]
+
+    captured = {}
+
+    def fake_enrich(meta_dict, cache_dir, client):
+        captured["n"] = len(meta_dict)
+        return {}
+    monkeypatch.setattr(qe, "enrich_batch", fake_enrich)
+    monkeypatch.setattr(qe, "rank_candidates", lambda *a, **k: [])
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return list(cands)
+        def get_metadata(self, title, ct):
+            return None
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return "[]"
+
+    ctx = qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    intent = qe.QueryIntent(
+        genres=["drama"], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=[], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent=None, content_type="movie",
+        top_n=5, platforms=[],
+    )
+    qe.ask("q", ctx, intent_override=intent)
+    assert captured["n"] == 5
+
+
 def test_rank_candidates_returns_recommendations():
     candidates = [make_meta("Broadchurch", tmdb_id=1), make_meta("Hinterland", tmdb_id=2)]
     enrichments = {"tv/1": "Dark coastal crime.", "tv/2": "Welsh noir."}
@@ -588,3 +679,53 @@ def test_rank_path_falls_back_to_prose_profile_without_structured_profile():
         ask("crime", ctx)
     prompts = [call.args[0] for call in ctx.llm.generate.call_args_list]
     assert any("FULL PROSE PROFILE" in prompt for prompt in prompts)
+
+
+def test_rank_candidates_includes_context_note_in_prompt():
+    from recommender import query_engine
+
+    captured = {}
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, prompt, role="reason", max_tokens=1000, timeout=30.0):
+            captured["prompt"] = prompt
+            return "[]"
+
+    cand = make_meta("Example", tmdb_id=1, content_type="movie")
+    query_engine.rank_candidates(
+        "something", "PROFILE", [cand], {}, FakeLLM(), top_n=1,
+        context_note="Wants something short and low-energy tonight.",
+    )
+    assert "short and low-energy" in captured["prompt"]
+
+
+def test_ask_with_intent_override_skips_parse_intent(monkeypatch):
+    from recommender import query_engine
+    from recommender.query_engine import QueryIntent, RecommendContext
+
+    def boom(*a, **k):
+        raise AssertionError("parse_intent must not be called when intent_override is given")
+    monkeypatch.setattr(query_engine, "parse_intent", boom)
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return []
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, prompt, role="reason", max_tokens=1000, timeout=30.0):
+            return "[]"   # no LLM suggestions
+
+    ctx = RecommendContext(
+        taste_profile="PROFILE", watch_index=None, tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    intent = QueryIntent(
+        genres=[], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=[], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent=None, content_type="movie",
+        top_n=3, platforms=[],
+    )
+    results = query_engine.ask("ignored", ctx, intent_override=intent,
+                               context_note="low energy")
+    assert results == []   # no candidates -> empty, but parse_intent never ran

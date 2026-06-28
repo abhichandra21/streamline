@@ -294,6 +294,30 @@
        (the nav strips below) opt back in explicitly. */
     html, body { overflow-x: hidden; }
 
+    /* Mood Match wizard */
+    .wiz-progress { display:flex; gap:5px; margin-bottom:1rem; }
+    .wiz-progress span { height:3px; flex:1; border-radius:2px; background:var(--border); }
+    .wiz-progress span.filled { background:var(--accent); }
+
+    .wiz-chip {
+      display:inline-flex; align-items:center; gap:0.4rem; cursor:pointer;
+      padding:0.5rem 0.95rem; border:1px solid var(--border); border-radius:999px;
+      color:var(--body); font-size:0.9rem; user-select:none;
+      transition:border-color 0.15s, background 0.15s, transform 0.1s;
+      animation: slideUp 0.3s ease both;
+    }
+    .wiz-chip:hover { border-color:var(--muted); }
+    .wiz-chip.selected {
+      border-color:var(--accent); background:rgba(232,93,74,0.12); color:var(--text);
+      transform:translateY(-1px);
+    }
+    .wiz-chip.selected::before { content:"\2713"; color:var(--accent); font-size:0.8rem; }
+    .wiz-chips .wiz-chip:nth-child(1){animation-delay:.02s}
+    .wiz-chips .wiz-chip:nth-child(2){animation-delay:.06s}
+    .wiz-chips .wiz-chip:nth-child(3){animation-delay:.10s}
+    .wiz-chips .wiz-chip:nth-child(4){animation-delay:.14s}
+    .wiz-chips .wiz-chip:nth-child(5){animation-delay:.18s}
+
     /* Mobile masthead: three deliberate rows.
        Row 1: brand alone.
        Row 2: primary nav, horizontally scrollable if needed.
@@ -375,6 +399,7 @@
     </a>
     <div class="nav-group" style="margin-left:0.5rem;">
       <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">Home</a>
+      <a href="/wizard" class="nav-link {% if request.path == '/wizard' %}active{% endif %}">Mood Match</a>
       <a href="/searches" class="nav-link {% if request.path == '/searches' %}active{% endif %}">Searches</a>
       <a href="/watchlist" class="nav-link {% if request.path == '/watchlist' %}active{% endif %}" style="display:flex; align-items:center; gap:0.3rem;">
         Watchlist

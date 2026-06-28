@@ -1,0 +1,95 @@
+{% if error %}
+<div style="padding:1rem 1.25rem; background:rgba(232,93,74,0.08); border:1px solid rgba(232,93,74,0.2); border-radius:6px; color:#e88;">
+  {{ error }}
+  <form hx-post="/wizard/next" hx-target="#wizard-stage" hx-swap="innerHTML" style="margin-top:0.75rem;">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="state" value="{{ state_json }}">
+    <button type="submit" class="btn-ghost" style="padding:6px 12px;">Try again</button>
+  </form>
+  <a href="/recommend" class="mono result-link">use classic search instead</a>
+</div>
+{% else %}
+<form hx-post="/wizard/next" hx-target="#wizard-stage" hx-swap="innerHTML"
+      hx-indicator="#wiz-next-spinner" hx-disabled-elt="find button">
+  <div class="wiz-progress" aria-hidden="true">
+    {% for i in range(max_questions or 4) %}
+    <span class="{{ 'filled' if i < question_number else '' }}"></span>
+    {% endfor %}
+  </div>
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="state" value="{{ state_json }}">
+  <input type="hidden" name="prompt" value="{{ turn.prompt }}">
+
+  {% if answered %}
+  <div style="margin-bottom:1.25rem; padding:0.75rem 1rem; background:var(--surface); border:1px solid var(--border); border-radius:6px;">
+    <div class="mono" style="font-size:0.55rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:0.5rem;">Your answers so far</div>
+    {% for t in answered %}
+    {% set ans = t.selected | join(', ') %}{% if t.free_text %}{% set ans = ans ~ ('  ·  ' if ans else '') ~ t.free_text %}{% endif %}
+    <div style="font-size:0.82rem; line-height:1.5; margin-bottom:0.25rem;">
+      <span style="color:var(--muted);">{{ t.prompt }}</span>
+      <span style="color:var(--text);"> — {{ ans or 'skipped' }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="mono" style="font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:0.4rem;">
+    Question {{ question_number }}{% if max_questions %} of up to {{ max_questions }}{% endif %}
+  </div>
+  <h2 style="font-size:1.5rem; margin-bottom:0.3rem;">{{ turn.prompt }}</h2>
+  {% if turn.subtext %}<p style="color:var(--body); margin-bottom:1rem;">{{ turn.subtext }}</p>{% endif %}
+
+  {% if turn.chips %}
+  <div class="mono" style="font-size:0.55rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); margin-bottom:0.5rem;">
+    Pick any that fit — choose more than one if you're open to either
+  </div>
+  {% endif %}
+  <div class="wiz-chips" style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:1rem;">
+    {% for chip in turn.chips %}
+    <label class="wiz-chip">
+      <input type="checkbox" name="selected" value="{{ chip.value }}" hidden>
+      <span>{{ chip.label }}</span>
+    </label>
+    {% endfor %}
+  </div>
+
+  {% if turn.allow_free_text %}
+  <input type="text" name="free_text" class="input-field" placeholder="or tell me in your own words..."
+         style="padding:0.7rem 1rem; width:100%; margin-bottom:1rem;">
+  {% endif %}
+
+  <div style="display:flex; align-items:center; gap:1rem;">
+    <button type="submit" class="btn-primary" style="padding:0.7rem 1.4rem;">Continue</button>
+    <button type="submit" name="finish" value="1" class="btn-ghost" style="padding:0.7rem 1.2rem;">Show me something now</button>
+    <span id="wiz-next-spinner" class="htmx-indicator" style="align-items:center; gap:0.5rem;">
+      <span style="width:13px; height:13px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; display:inline-block; animation:spin 0.6s linear infinite;"></span>
+      <span class="mono" style="font-size:0.62rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">thinking...</span>
+    </span>
+  </div>
+</form>
+<script>
+(function(){
+  var stage = document.getElementById('wizard-stage');
+  if (!stage) return;
+  function syncAll(){
+    stage.querySelectorAll('.wiz-chip').forEach(function(c){
+      var inp = c.querySelector('input');
+      var on = !!(inp && inp.checked);
+      c.classList.toggle('selected', on);
+      c.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+  stage.querySelectorAll('.wiz-chip').forEach(function(chip){
+    var input = chip.querySelector('input');
+    if (!input) return;
+    chip.addEventListener('click', function(e){
+      // Cancel the label's native toggle so it does not double-toggle with ours.
+      e.preventDefault();
+      input.checked = !input.checked;
+      syncAll();
+    });
+  });
+  syncAll();
+})();
+</script>
+{% endif %}

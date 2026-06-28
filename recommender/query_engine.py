@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import re
 import sys
 from dataclasses import dataclass, field
@@ -232,6 +233,7 @@ def rank_candidates(
     enrichments: dict[str, str],
     client: LLMClient,
     top_n: int = 1,
+    context_note: str | None = None,
 ) -> list[Recommendation]:
     """Rank candidates against taste profile."""
     log.debug("Ranking %d candidates for query: %r (top_n=%d)", len(candidates), query, top_n)
@@ -248,7 +250,9 @@ def rank_candidates(
         f'a candidate must match what the user asked for. The taste profile is secondary, '
         f'used to break ties between candidates that all fit the query.\n\n'
         f'QUERY: "{query}"\n\n'
-        f'TASTE PROFILE:\n{taste_profile}\n\n'
+        + (f'TONIGHT\'S CONTEXT (use to nudge ordering, not as a hard filter):\n{context_note}\n\n'
+           if context_note else '')
+        + f'TASTE PROFILE:\n{taste_profile}\n\n'
         f'CANDIDATES:\n{cands_str}\n\n'
         f'Return ONLY valid JSON: a list of objects with fields:\n'
         f'- title: string (exact title from candidates)\n'
@@ -512,8 +516,15 @@ def ask(
     ctx: RecommendContext,
     top_n_override: int | None = None,
     conv_ctx: "ConversationContext | None" = None,
+    intent_override: "QueryIntent | None" = None,
+    context_note: str | None = None,
+    exclude_titles: set[str] | None = None,
 ) -> list[Recommendation]:
-    """Answer a natural language recommendation query end-to-end."""
+    """Answer a natural language recommendation query end-to-end.
+
+    ``exclude_titles`` are hard-excluded from the candidate pool (exact title
+    match), e.g. titles already shown that a refinement should not repeat.
+    """
     why_not_title = _extract_why_not_title(query)
     if why_not_title:
         return _handle_why_not(why_not_title, ctx)
@@ -536,9 +547,16 @@ def ask(
                     log.debug("'More like #%d' → using %r as similar_to", idx + 1, picked)
                     query = f"more like {picked}"
 
-        intent = parse_intent(query, ctx.llm, conv_ctx=conv_ctx)
+        if intent_override is not None:
+            intent = intent_override
+        else:
+            intent = parse_intent(query, ctx.llm, conv_ctx=conv_ctx)
         if top_n_override is not None:
             intent.top_n = top_n_override
+
+    # Hard exclusions (e.g. titles already shown that a refine must not repeat).
+    if exclude_titles:
+        extra_excludes = set(extra_excludes) | set(exclude_titles)
 
     if intent.special_intent == 'abandoned':
         return _handle_abandoned(query, intent, ctx)
@@ -621,6 +639,18 @@ def ask(
         log.debug("No candidates after all sources, returning empty")
         return []
 
+    # Bound enrichment/ranking cost: enrichment is one serial LLM call per
+    # uncached title, so a broad query can otherwise enrich 100+ titles. Keep the
+    # strongest candidates by rating weighted by vote volume.
+    if len(candidates) > config.MAX_ENRICH_CANDIDATES:
+        candidates.sort(
+            key=lambda c: (c.vote_average or 0) * math.log10((c.vote_count or 0) + 10),
+            reverse=True,
+        )
+        log.debug("Trimming candidate pool %d -> %d before enrichment",
+                  len(candidates), config.MAX_ENRICH_CANDIDATES)
+        candidates = candidates[:config.MAX_ENRICH_CANDIDATES]
+
     log.debug("Enriching %d candidates", len(candidates))
     meta_dict = {c.title: c for c in candidates}
     enrichments = enrich_batch(meta_dict, ctx.cache_dir, ctx.llm)
@@ -635,7 +665,8 @@ def ask(
         # Rank with a larger pool when platform filtering is active, so we have
         # enough candidates after discarding titles not on the requested service.
         rank_size = max(intent.top_n * 3, 15) if requested_platforms else intent.top_n
-        results = rank_candidates(query, profile_for_prompt, candidates, enrichments, ctx.llm, rank_size)
+        results = rank_candidates(query, profile_for_prompt, candidates, enrichments,
+                                  ctx.llm, rank_size, context_note=context_note)
 
         annotated = []
         unfiltered = []
@@ -665,7 +696,8 @@ def ask(
             conv_ctx.last_intent = intent
         return annotated
 
-    results = rank_candidates(query, profile_for_prompt, candidates, enrichments, ctx.llm, intent.top_n)
+    results = rank_candidates(query, profile_for_prompt, candidates, enrichments,
+                              ctx.llm, intent.top_n, context_note=context_note)
     if conv_ctx is not None:
         conv_ctx.last_intent = intent
     return results
