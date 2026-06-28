@@ -9,7 +9,8 @@
   <a href="/recommend" class="mono result-link">use classic search instead</a>
 </div>
 {% else %}
-<form hx-post="/wizard/next" hx-target="#wizard-stage" hx-swap="innerHTML">
+<form hx-post="/wizard/next" hx-target="#wizard-stage" hx-swap="innerHTML"
+      hx-indicator="#wiz-next-spinner" hx-disabled-elt="find button">
   <div class="wiz-progress" aria-hidden="true">
     {% for i in range(max_questions or 4) %}
     <span class="{{ 'filled' if i < question_number else '' }}"></span>
@@ -55,6 +56,10 @@
   <div style="display:flex; align-items:center; gap:1rem;">
     <button type="submit" class="btn-primary" style="padding:0.7rem 1.4rem;">Continue</button>
     <button type="submit" name="finish" value="1" class="btn-ghost" style="padding:0.7rem 1.2rem;">Show me something now</button>
+    <span id="wiz-next-spinner" class="htmx-indicator" style="align-items:center; gap:0.5rem;">
+      <span style="width:13px; height:13px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; display:inline-block; animation:spin 0.6s linear infinite;"></span>
+      <span class="mono" style="font-size:0.62rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">thinking...</span>
+    </span>
   </div>
 </form>
 <script>
