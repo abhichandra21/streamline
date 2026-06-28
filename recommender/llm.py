@@ -38,6 +38,12 @@ def _int_model_setting(models: dict[str, object], key: str, default: int) -> int
     return int(raw)
 
 
+# Prompt-cache pricing multipliers relative to base input price (Anthropic).
+# Cache writes cost 1.25x the base input rate; cache reads cost 0.1x.
+_CACHE_WRITE_MULTIPLIER = 1.25
+_CACHE_READ_MULTIPLIER = 0.10
+
+
 @dataclass
 class UsageStats:
     """Accumulated token usage across multiple LLM calls."""
@@ -45,33 +51,44 @@ class UsageStats:
     input_tokens: int = 0
     output_tokens: int = 0
     thinking_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     cost_usd: float = 0.0
     total_latency_ms: float = 0.0
     _by_model: dict = field(default_factory=dict)
 
     def record(self, model: str, input_t: int, output_t: int, thinking_t: int = 0,
-               latency_ms: float = 0.0) -> None:
+               latency_ms: float = 0.0, cache_read_t: int = 0,
+               cache_write_t: int = 0) -> None:
         self.calls += 1
         self.input_tokens += input_t
         self.output_tokens += output_t
         self.thinking_tokens += thinking_t
+        self.cache_read_tokens += cache_read_t
+        self.cache_write_tokens += cache_write_t
         self.total_latency_ms += latency_ms
 
         pricing = _PRICING.get(model, {"input": 0, "output": 0, "thinking": 0})
+        input_price = pricing.get("input", 0)
         cost = (
-            input_t * pricing.get("input", 0) / 1_000_000
+            input_t * input_price / 1_000_000
             + output_t * pricing.get("output", 0) / 1_000_000
             + thinking_t * pricing.get("thinking", 0) / 1_000_000
+            + cache_read_t * input_price * _CACHE_READ_MULTIPLIER / 1_000_000
+            + cache_write_t * input_price * _CACHE_WRITE_MULTIPLIER / 1_000_000
         )
         self.cost_usd += cost
 
         if model not in self._by_model:
             self._by_model[model] = {"calls": 0, "input": 0, "output": 0, "thinking": 0,
+                                     "cache_read": 0, "cache_write": 0,
                                      "cost": 0.0, "latency_ms": 0.0}
         self._by_model[model]["calls"] += 1
         self._by_model[model]["input"] += input_t
         self._by_model[model]["output"] += output_t
         self._by_model[model]["thinking"] += thinking_t
+        self._by_model[model]["cache_read"] += cache_read_t
+        self._by_model[model]["cache_write"] += cache_write_t
         self._by_model[model]["cost"] += cost
         self._by_model[model]["latency_ms"] += latency_ms
 
@@ -84,6 +101,9 @@ class UsageStats:
         parts.append(f"{self.input_tokens:,} in / {self.output_tokens:,} out")
         if self.thinking_tokens:
             parts.append(f"{self.thinking_tokens:,} thinking")
+        if self.cache_read_tokens or self.cache_write_tokens:
+            parts.append(f"{self.cache_read_tokens:,} cache read / "
+                         f"{self.cache_write_tokens:,} cache write")
         if self.total_latency_ms:
             parts.append(f"{self.avg_latency_ms():.0f}ms avg latency")
         parts.append(f"~${self.cost_usd:.4f}")
@@ -94,7 +114,10 @@ class UsageStats:
         self.input_tokens = 0
         self.output_tokens = 0
         self.thinking_tokens = 0
+        self.cache_read_tokens = 0
+        self.cache_write_tokens = 0
         self.cost_usd = 0.0
+        self.total_latency_ms = 0.0
         self._by_model.clear()
 
 
@@ -113,11 +136,16 @@ class LLMClient(ABC):
         role: str = "reason",
         max_tokens: int = 1000,
         timeout: float = 30.0,
+        system: str | None = None,
     ) -> str:
         """Send a prompt and return the response text.
 
         Args:
             role: "fast" (enrichment, simple tasks) or "reason" (intent, ranking, profile)
+            system: Stable instruction/context prefix. Pass content that repeats
+                across calls (e.g. the taste profile) here rather than in `prompt`
+                so providers can serve it from a prompt cache. Anthropic caches it
+                explicitly; Gemini and OpenAI cache long prefixes automatically.
         """
 
 
@@ -134,20 +162,33 @@ class AnthropicClient(LLMClient):
         log.debug("Using Anthropic provider (fast=%s, reason=%s)", models.get("fast"), models.get("reason"))
 
     def generate(self, prompt: str, role: str = "reason",
-                 max_tokens: int = 1000, timeout: float = 30.0) -> str:
+                 max_tokens: int = 1000, timeout: float = 30.0,
+                 system: str | None = None) -> str:
         model = self.models.get(role, self.models.get("reason", "claude-sonnet-4-6"))
+        kwargs: dict = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "timeout": timeout,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if system:
+            # Mark the stable prefix as cacheable. The prefix must be byte-identical
+            # across calls to hit the cache; below the model's minimum cacheable size
+            # the API silently skips caching (no write premium charged).
+            kwargs["system"] = [{
+                "type": "text",
+                "text": system,
+                "cache_control": {"type": "ephemeral"},
+            }]
         t0 = time.monotonic()
-        message = self._client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            timeout=timeout,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        message = self._client.messages.create(**kwargs)
         latency_ms = (time.monotonic() - t0) * 1000
         self.usage.record(
             model=model,
             input_t=message.usage.input_tokens,
             output_t=message.usage.output_tokens,
+            cache_read_t=getattr(message.usage, "cache_read_input_tokens", 0) or 0,
+            cache_write_t=getattr(message.usage, "cache_creation_input_tokens", 0) or 0,
             latency_ms=latency_ms,
         )
         self.was_truncated = message.stop_reason == "max_tokens"
@@ -173,7 +214,8 @@ class GeminiClient(LLMClient):
                  models.get("fast"), models.get("reason"))
 
     def generate(self, prompt: str, role: str = "reason",
-                 max_tokens: int = 1000, timeout: float = 30.0) -> str:
+                 max_tokens: int = 1000, timeout: float = 30.0,
+                 system: str | None = None) -> str:
         from google.genai import types
 
         model = self.models.get(role, self.models.get("reason", "gemini-2.5-flash"))
@@ -182,6 +224,10 @@ class GeminiClient(LLMClient):
         adjusted_tokens = max(max_tokens * 3, 4000)
 
         config_params: dict = {"max_output_tokens": adjusted_tokens}
+        # A stable system instruction lets Gemini serve repeated prefixes from its
+        # implicit context cache.
+        if system:
+            config_params["system_instruction"] = system
         # Enable JSON mode when prompt asks for structured JSON output
         prompt_lower = prompt.lower()
         if any(phrase in prompt_lower for phrase in [
@@ -268,8 +314,16 @@ class OpenAIClient(LLMClient):
         )
 
     def generate(self, prompt: str, role: str = "reason",
-                 max_tokens: int = 1000, timeout: float = 30.0) -> str:
+                 max_tokens: int = 1000, timeout: float = 30.0,
+                 system: str | None = None) -> str:
         model = self.models.get(role, self.models.get("reason", "gpt-4.1-mini"))
+
+        # A stable system message lets OpenAI serve long repeated prefixes from its
+        # automatic prompt cache.
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
 
         # Some OpenAI-compatible thinking models spend output budget on reasoning
         # before the final answer. Scale/floor are configurable because providers
@@ -287,7 +341,7 @@ class OpenAIClient(LLMClient):
                     model=model,
                     max_tokens=adjusted_tokens,
                     timeout=scaled_timeout,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=messages,
                 )
                 break
             except Exception as exc:
