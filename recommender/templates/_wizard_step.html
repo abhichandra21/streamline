@@ -10,6 +10,11 @@
 </div>
 {% else %}
 <form hx-post="/wizard/next" hx-target="#wizard-stage" hx-swap="innerHTML">
+  <div class="wiz-progress" aria-hidden="true">
+    {% for i in range(max_questions or 4) %}
+    <span class="{{ 'filled' if i < question_number else '' }}"></span>
+    {% endfor %}
+  </div>
   <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
   <input type="hidden" name="state" value="{{ state_json }}">
   <input type="hidden" name="prompt" value="{{ turn.prompt }}">
@@ -39,4 +44,25 @@
     <button type="submit" name="finish" value="1" class="btn-ghost" style="padding:0.7rem 1.2rem;">Show me something now</button>
   </div>
 </form>
+<script>
+(function(){
+  document.querySelectorAll('#wizard-stage .wiz-chip').forEach(function(chip){
+    var input = chip.querySelector('input');
+    function sync(){
+      if (input.type === 'radio') {
+        document.querySelectorAll('#wizard-stage .wiz-chip').forEach(function(c){
+          c.classList.toggle('selected', c.querySelector('input').checked);
+        });
+      } else {
+        chip.classList.toggle('selected', input.checked);
+      }
+      chip.setAttribute('aria-pressed', input.checked);
+    }
+    chip.addEventListener('click', function(e){
+      if (e.target.tagName !== 'INPUT'){ input.checked = !input.checked; }
+      sync();
+    });
+  });
+})();
+</script>
 {% endif %}

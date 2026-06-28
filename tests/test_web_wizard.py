@@ -64,6 +64,20 @@ def test_post_next_recommend_branch_starts_job(client):
     sub.assert_called_once()
 
 
+def test_question_renders_progress_segments(client):
+    from unittest.mock import patch
+    import json
+    fake_turn = {"action": "ask", "prompt": "Q?", "subtext": "",
+                 "chips": [{"label": "A", "value": "a"}], "multi": False,
+                 "allow_free_text": False}
+    with patch.object(web.wizard, "next_turn", return_value=fake_turn), \
+         patch.object(web, "_get_job_context"):
+        resp = client.post("/wizard/next", data=_csrf_form(
+            state=json.dumps({"turns": [], "turn_count": 0})),
+            headers={"HX-Request": "true"})
+    assert b"wiz-progress" in resp.data
+
+
 def test_post_refine_starts_job(client):
     intent_json = json.dumps({
         "genres": [], "origin_countries": [], "languages": [], "mood_descriptors": [],

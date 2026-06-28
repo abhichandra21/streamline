@@ -10,6 +10,9 @@
 <div id="wizard-stage"
      hx-post="/wizard/next" hx-trigger="load" hx-target="#wizard-stage" hx-swap="innerHTML"
      hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
-  <div class="mono" style="font-size:0.65rem; color:var(--muted);">reading the room...</div>
+  <div style="display:flex; align-items:center; gap:0.6rem;">
+    <div style="width:14px; height:14px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 0.6s linear infinite;"></div>
+    <span class="mono" style="font-size:0.65rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">reading the room...</span>
+  </div>
 </div>
 {% endblock %}
