@@ -29,6 +29,7 @@ from recommender.llm import create_client
 from recommender.log import setup_logging
 from recommender.enricher import enrichment_key_from_parts
 from recommender.query_engine import RecommendContext, ask
+from recommender import wizard
 from recommender.structured_profile import load_structured_profile
 from recommender.tmdb_client import TmdbClient
 
@@ -120,6 +121,20 @@ def _run_recommend_job(query: str) -> dict:
     except OSError as exc:
         log.warning("Failed to persist query history for %r: %s", query, exc)
     return {"items": items, "query": query}
+
+
+def _run_wizard_recommend_job(intent_dict: dict, context_note: str, summary: str) -> dict:
+    from recommender.query_engine import QueryIntent
+    ctx = _get_job_context()
+    intent = QueryIntent(**intent_dict)
+    results = ask("", ctx, intent_override=intent, context_note=context_note)
+    items = _build_result_items(results, ctx)
+    label = f"concierge: {summary}"
+    try:
+        query_history.record(label, items, ctx.llm.provider, ctx.llm.usage.summary())
+    except OSError as exc:
+        log.warning("Failed to persist wizard history: %s", exc)
+    return {"items": items, "query": summary, "summary": summary}
 
 
 def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
@@ -556,6 +571,93 @@ def poll_job(job_id: str) -> str:
 
     result = job.result
     return render_template("_results.html", results=result["items"], query=result["query"], error=None)
+
+
+@app.route("/wizard")
+def wizard_page() -> str:
+    return render_template("wizard.html")
+
+
+def _collect_answers(form) -> tuple[wizard.WizardState, dict | None]:
+    """Load state from the form and append the just-answered question, if any."""
+    state = wizard.WizardState.from_json(form.get("state", ""))
+    prompt = (form.get("prompt") or "").strip()
+    if prompt:
+        state.turns.append({
+            "prompt": prompt,
+            "selected": form.getlist("selected"),
+            "free_text": (form.get("free_text") or "").strip(),
+        })
+        state.turn_count += 1
+    return state, None
+
+
+@app.route("/wizard/next", methods=["POST"])
+def wizard_next() -> str:
+    state, _ = _collect_answers(request.form)
+    force_finish = request.form.get("finish") == "1"
+    ctx = _get_job_context()
+    try:
+        turn = wizard.next_turn(state, ctx, force_finish=force_finish)
+    except Exception as exc:   # network / provider failure
+        log.exception("Wizard turn failed")
+        return render_template("_wizard_step.html", error=str(exc),
+                               state_json=state.to_json())
+
+    if turn["action"] == "recommend":
+        from dataclasses import asdict
+        intent_dict = asdict(turn["intent"])
+        job_id = job_registry.submit(
+            _run_wizard_recommend_job, intent_dict, turn["context_note"],
+            turn["summary"], label="wizard")
+        return render_template("_polling.html", job_id=job_id,
+                               poll_url=f"/wizard/jobs/{job_id}/poll",
+                               poll_target="#wizard-stage")
+
+    return render_template("_wizard_step.html", turn=turn,
+                           state_json=state.to_json(),
+                           question_number=state.turn_count + 1,
+                           max_questions=config.WIZARD_MAX_QUESTIONS)
+
+
+@app.route("/wizard/jobs/<job_id>/poll")
+def wizard_poll(job_id: str) -> str:
+    job = job_registry.get(job_id)
+    if job is None:
+        return render_template("_wizard_results.html", results=None,
+                               error="Session expired. Start again.", query="")
+    if job.status in ("pending", "running"):
+        return render_template("_polling.html", job_id=job_id,
+                               poll_url=f"/wizard/jobs/{job_id}/poll",
+                               poll_target="#wizard-stage",
+                               elapsed=job.elapsed_seconds)
+    if job.status == "error":
+        return render_template("_wizard_results.html", results=None, error=job.error, query="")
+    result = job.result
+    return render_template("_wizard_results.html", results=result["items"],
+                           summary=result["summary"], error=None,
+                           query=result["summary"])
+
+
+@app.route("/wizard/refine", methods=["POST"])
+def wizard_refine() -> str:
+    from dataclasses import asdict
+    from recommender.query_engine import QueryIntent
+    intent_dict = json.loads(request.form.get("intent", "{}"))
+    base_note = request.form.get("context_note", "")
+    directive = request.form.get("directive", "")     # e.g. "make it lighter"
+    shown = request.form.get("shown", "")             # comma-joined titles
+    note = base_note
+    if directive:
+        note = f"{note}\nRefinement: {directive}."
+    if shown:
+        note = f"{note}\nAlready shown, avoid repeating: {shown}."
+    summary = request.form.get("summary", "your picks")
+    job_id = job_registry.submit(
+        _run_wizard_recommend_job, intent_dict, note, summary, label="wizard")
+    return render_template("_polling.html", job_id=job_id,
+                           poll_url=f"/wizard/jobs/{job_id}/poll",
+                           poll_target="#wizard-stage")
 
 
 @app.route("/title/<int:tmdb_id>")

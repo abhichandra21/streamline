@@ -1,0 +1,42 @@
+{% if error %}
+<div style="padding:1rem 1.25rem; background:rgba(232,93,74,0.08); border:1px solid rgba(232,93,74,0.2); border-radius:6px; color:#e88;">
+  {{ error }}
+  <form hx-post="/wizard/next" hx-target="#wizard-stage" hx-swap="innerHTML" style="margin-top:0.75rem;">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="state" value="{{ state_json }}">
+    <button type="submit" class="btn-ghost" style="padding:6px 12px;">Try again</button>
+  </form>
+  <a href="/recommend" class="mono result-link">use classic search instead</a>
+</div>
+{% else %}
+<form hx-post="/wizard/next" hx-target="#wizard-stage" hx-swap="innerHTML">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="state" value="{{ state_json }}">
+  <input type="hidden" name="prompt" value="{{ turn.prompt }}">
+
+  <div class="mono" style="font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:0.4rem;">
+    Question {{ question_number }}{% if max_questions %} of up to {{ max_questions }}{% endif %}
+  </div>
+  <h2 style="font-size:1.5rem; margin-bottom:0.3rem;">{{ turn.prompt }}</h2>
+  {% if turn.subtext %}<p style="color:var(--body); margin-bottom:1rem;">{{ turn.subtext }}</p>{% endif %}
+
+  <div class="wiz-chips" style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:1rem;">
+    {% for chip in turn.chips %}
+    <label class="wiz-chip">
+      <input type="{{ 'checkbox' if turn.multi else 'radio' }}" name="selected" value="{{ chip.value }}" hidden>
+      <span>{{ chip.label }}</span>
+    </label>
+    {% endfor %}
+  </div>
+
+  {% if turn.allow_free_text %}
+  <input type="text" name="free_text" class="input-field" placeholder="or tell me in your own words..."
+         style="padding:0.7rem 1rem; width:100%; margin-bottom:1rem;">
+  {% endif %}
+
+  <div style="display:flex; align-items:center; gap:1rem;">
+    <button type="submit" class="btn-primary" style="padding:0.7rem 1.4rem;">Continue</button>
+    <button type="submit" name="finish" value="1" class="btn-ghost" style="padding:0.7rem 1.2rem;">Show me something now</button>
+  </div>
+</form>
+{% endif %}

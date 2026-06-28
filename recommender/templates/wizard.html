@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Concierge{% endblock %}
+{% block content %}
+<div style="margin-bottom:1.5rem;">
+  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">Guided Pick</span>
+  <h1 style="font-size:clamp(2rem,4.5vw,3rem); margin-top:0.2rem;">Concierge</h1>
+  <p style="color:var(--body);">A few quick questions and I'll find something for tonight.</p>
+</div>
+
+<div id="wizard-stage"
+     hx-post="/wizard/next" hx-trigger="load" hx-target="#wizard-stage" hx-swap="innerHTML"
+     hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
+  <div class="mono" style="font-size:0.65rem; color:var(--muted);">reading the room...</div>
+</div>
+{% endblock %}

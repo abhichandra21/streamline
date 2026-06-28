@@ -1,6 +1,6 @@
-<div hx-get="/jobs/{{ job_id }}/poll"
+<div hx-get="{{ poll_url or '/jobs/' ~ job_id ~ '/poll' }}"
      hx-trigger="every 2s"
-     hx-target="#results"
+     hx-target="{{ poll_target or '#results' }}"
      hx-swap="innerHTML"
      style="padding:1.5rem 0; display:flex; align-items:center; gap:0.6rem;">
   <div style="width:14px; height:14px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 0.6s linear infinite; flex-shrink:0;"></div>

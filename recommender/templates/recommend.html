@@ -28,6 +28,12 @@
     <div style="width:14px; height:14px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 0.6s linear infinite;"></div>
     <span class="mono" style="font-size:0.65rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">Finding matches...</span>
   </div>
+
+  <a href="/wizard" style="display:block; margin-top:1rem; padding:0.85rem 1.1rem; background:var(--surface); border:1px solid var(--border); border-radius:6px; text-decoration:none; transition:border-color 0.2s;"
+     onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+    <span style="color:var(--body);">Not sure what to watch?</span>
+    <span style="color:var(--accent); font-family:'JetBrains Mono',monospace; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em;"> Let me ask a few quick questions -></span>
+  </a>
 </div>
 
 {% if error %}
