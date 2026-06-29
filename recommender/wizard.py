@@ -88,6 +88,10 @@ def _prompt(state: WizardState, profile: str, force_finish: bool) -> str:
         '"platforms":[]},"context_note":str}\n'
         '   "summary" is a one-line recap ("something light, short, a little offbeat"). '
         '"context_note" carries soft signals (runtime/energy/company) for ranking.\n'
+        "   When the user gave a time window, set intent.max_runtime_minutes (an integer): "
+        "\"under an hour\" -> 60, \"around 90 minutes\" -> 90, \"a couple of hours\" -> 120. "
+        "For \"one episode\", keep content_type 'tv' and set a reasonable episode max "
+        "(e.g. 60). Carry time in max_runtime_minutes, not only in context_note.\n"
     )
 
 

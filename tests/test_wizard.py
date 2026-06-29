@@ -101,3 +101,22 @@ def test_wizard_prompt_explains_single_select_mode():
     low = prompt.lower()
     assert "single-select" in low
     assert "multi-select" in low
+
+
+def test_finalize_preserves_max_runtime_minutes():
+    recommend_json = json.dumps({
+        "action": "recommend", "summary": "short and light",
+        "intent": {"content_type": "movie", "max_runtime_minutes": 90, "top_n": 5},
+        "context_note": "around 90 minutes",
+    })
+    llm = FakeLLM([recommend_json])
+    out = wizard.next_turn(WizardState(turns=[], turn_count=0), _ctx(llm), force_finish=True)
+    assert out["intent"].max_runtime_minutes == 90
+
+
+def test_wizard_prompt_maps_time_to_max_runtime():
+    prompt = wizard._prompt(WizardState(turns=[], turn_count=0), "profile", force_finish=True)
+    low = prompt.lower()
+    assert "max_runtime_minutes" in low
+    assert "under an hour" in low
+    assert "90" in low
