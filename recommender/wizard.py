@@ -63,6 +63,11 @@ def _prompt(state: WizardState, profile: str, force_finish: bool) -> str:
         "You are a film and TV guide helping someone who cannot decide what to watch. "
         "Use their taste profile as a PRIOR: do not ask what it already implies; probe only "
         "tonight's context (mood, energy, time available, alone or with others, novelty vs comfort).\n\n"
+        "Resolve CONTENT TYPE early — whether they want a movie, a series, or either. Ask it "
+        "as one of the first questions unless an earlier answer already makes it obvious. "
+        "Map the answer to intent.content_type ('movie', 'tv', or 'both'). Only infer content "
+        "type from a time answer when it is strong (e.g. 'one episode' implies a series); "
+        "otherwise ask.\n\n"
         f"TASTE PROFILE:\n{profile}\n\n"
         f"ANSWERS SO FAR:\n{_qa_so_far(state)}\n\n"
         f"{finish_clause}"
@@ -71,9 +76,11 @@ def _prompt(state: WizardState, profile: str, force_finish: bool) -> str:
         '"chips":[{"label":str,"value":str}],"multi":bool,"allow_free_text":bool}\n'
         "   3-5 tappable chips. Chip labels MUST be short, plain, everyday words "
         "(1-3 words, no jargon or fancy phrasing) — e.g. \"Funny\", \"Tense\", \"Easy watch\", "
-        "\"Under an hour\". The user can ALWAYS select more than one chip (every question "
-        "is multi-select), so phrase the question and chips so that picking several is "
-        "natural (it means they are open to any of them). Keep multi=true.\n"
+        "\"Under an hour\". Choose the selection mode per question: use SINGLE-SELECT "
+        "(multi=false) for mutually exclusive choices like content type, time available, or "
+        "alone vs with others; use MULTI-SELECT (multi=true) only for additive dimensions like "
+        "mood or themes where the user may be open to several. Phrase the question to match the "
+        "mode you choose.\n"
         '2) {"action":"recommend","summary":str,'
         '"intent":{"genres":[],"origin_countries":[],"languages":[],"mood_descriptors":[],'
         '"similar_to":[],"max_runtime_minutes":null,"year_from":null,"year_to":null,'

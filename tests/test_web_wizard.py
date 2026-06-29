@@ -82,6 +82,34 @@ def test_question_renders_progress_segments(client):
     assert b"wiz-progress" in resp.data
 
 
+def test_question_can_render_single_select_mode(client):
+    fake_turn = {"action": "ask", "prompt": "Movie or series?", "subtext": "",
+                 "chips": [{"label": "Movie", "value": "movie"},
+                           {"label": "Series", "value": "tv"}],
+                 "multi": False, "allow_free_text": False}
+    with patch.object(web.wizard, "next_turn", return_value=fake_turn), \
+         patch.object(web, "_get_job_context"):
+        resp = client.post("/wizard/next", data=_csrf_form(
+            state=json.dumps({"turns": [], "turn_count": 0})),
+            headers={"HX-Request": "true"})
+    assert resp.status_code == 200
+    assert b'type="radio"' in resp.data
+
+
+def test_question_renders_checkbox_for_multi_select(client):
+    fake_turn = {"action": "ask", "prompt": "Which moods?", "subtext": "",
+                 "chips": [{"label": "Light", "value": "light"},
+                           {"label": "Tense", "value": "tense"}],
+                 "multi": True, "allow_free_text": False}
+    with patch.object(web.wizard, "next_turn", return_value=fake_turn), \
+         patch.object(web, "_get_job_context"):
+        resp = client.post("/wizard/next", data=_csrf_form(
+            state=json.dumps({"turns": [], "turn_count": 0})),
+            headers={"HX-Request": "true"})
+    assert resp.status_code == 200
+    assert b'type="checkbox"' in resp.data
+
+
 def test_post_refine_starts_job(client):
     intent_json = json.dumps({
         "genres": [], "origin_countries": [], "languages": [], "mood_descriptors": [],

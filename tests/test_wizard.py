@@ -84,3 +84,20 @@ def test_next_turn_array_response_falls_back_to_finalize():
     out = wizard.next_turn(WizardState(turns=[], turn_count=1), _ctx(llm))
     assert out["action"] == "recommend"
     assert len(llm.calls) == 2
+
+
+def test_wizard_prompt_asks_to_resolve_content_type_early():
+    prompt = wizard._prompt(WizardState(turns=[], turn_count=0), "profile", force_finish=False)
+    low = prompt.lower()
+    assert "content type" in low
+    assert "movie" in low and "series" in low and "either" in low
+    assert "early" in low
+    # The wizard no longer forces every question to be multi-select.
+    assert "every question is multi-select" not in low
+
+
+def test_wizard_prompt_explains_single_select_mode():
+    prompt = wizard._prompt(WizardState(turns=[], turn_count=0), "profile", force_finish=False)
+    low = prompt.lower()
+    assert "single-select" in low
+    assert "multi-select" in low

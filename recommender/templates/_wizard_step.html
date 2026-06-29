@@ -41,13 +41,13 @@
 
   {% if turn.chips %}
   <div class="mono" style="font-size:0.55rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); margin-bottom:0.5rem;">
-    Pick any that fit — choose more than one if you're open to either
+    {% if turn.multi %}Pick any that fit — choose more than one if you're open to either{% else %}Pick one{% endif %}
   </div>
   {% endif %}
-  <div class="wiz-chips" style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:1rem;">
+  <div class="wiz-chips" data-multi="{{ 'true' if turn.multi else 'false' }}" style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:1rem;">
     {% for chip in turn.chips %}
     <label class="wiz-chip">
-      <input type="checkbox" name="selected" value="{{ chip.value }}" hidden>
+      <input type="{{ 'checkbox' if turn.multi else 'radio' }}" name="selected" value="{{ chip.value }}" hidden>
       <span>{{ chip.label }}</span>
     </label>
     {% endfor %}
@@ -79,13 +79,23 @@
       c.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
   }
+  var chipGroup = stage.querySelector('.wiz-chips');
+  var single = chipGroup && chipGroup.getAttribute('data-multi') === 'false';
   stage.querySelectorAll('.wiz-chip').forEach(function(chip){
     var input = chip.querySelector('input');
     if (!input) return;
     chip.addEventListener('click', function(e){
       // Cancel the label's native toggle so it does not double-toggle with ours.
       e.preventDefault();
-      input.checked = !input.checked;
+      if (single){
+        // Single-select: clicking selects this one and clears the rest, but a
+        // second click on the active chip clears it (lets the user pick nothing).
+        var wasChecked = input.checked;
+        stage.querySelectorAll('.wiz-chip input').forEach(function(i){ i.checked = false; });
+        input.checked = !wasChecked;
+      } else {
+        input.checked = !input.checked;
+      }
       syncAll();
     });
   });
