@@ -91,7 +91,12 @@
         {% if r.imdb_url %}
         <a href="{{ r.imdb_url }}" target="_blank" rel="noopener" class="mono result-link">IMDB</a>
         {% endif %}
-        {% if not r.user_state.in_archive and not r.user_state.in_watchlist %}
+        {% if r.user_state.in_archive %}
+        <span class="mono" style="font-size:0.58rem; color:var(--muted);">Watched</span>
+        {% else %}
+        {% if r.user_state.in_watchlist %}
+        <span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>
+        {% else %}
         <span id="save-{{ loop.index }}">
           <form hx-post="/watchlist/save" hx-target="#save-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
@@ -101,10 +106,16 @@
             <button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;">+ Save</button>
           </form>
         </span>
-        {% elif r.user_state.in_watchlist %}
-        <span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>
-        {% elif r.user_state.in_archive %}
-        <span class="mono" style="font-size:0.58rem; color:var(--muted);">Watched</span>
+        {% endif %}
+        <span id="seen-{{ loop.index }}">
+          <form hx-post="/archive/add" hx-target="#seen-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="title" value="{{ r.title }}">
+            <input type="hidden" name="content_type" value="{{ r.content_type }}">
+            {% if r.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ r.tmdb_id }}">{% endif %}
+            <button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;" title="Mark as already watched">Seen it</button>
+          </form>
+        </span>
         {% endif %}
       </div>
     </div>

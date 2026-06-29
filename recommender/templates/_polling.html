@@ -4,7 +4,13 @@
      hx-swap="innerHTML"
      style="padding:1.5rem 0; display:flex; align-items:center; gap:0.6rem;">
   <div style="width:14px; height:14px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 0.6s linear infinite; flex-shrink:0;"></div>
+  {# Loosely track the real pipeline stages by elapsed time so the wait is narrated. #}
+  {% set e = (elapsed or 0) | int %}
+  {% if e < 3 %}{% set stage = "Reading your taste" %}
+  {% elif e < 8 %}{% set stage = "Finding options on your services" %}
+  {% elif e < 14 %}{% set stage = "Checking what's streaming now" %}
+  {% else %}{% set stage = "Ranking by what you love" %}{% endif %}
   <span class="mono" style="font-size:0.65rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">
-    Finding matches{% if elapsed %}… {{ elapsed | int }}s{% endif %}
+    {{ stage }}{% if elapsed %}… {{ elapsed | int }}s{% endif %}
   </span>
 </div>
