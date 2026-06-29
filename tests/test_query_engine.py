@@ -639,8 +639,10 @@ def test_rank_path_uses_structured_profile_slice_when_available():
     )
     with patch("recommender.query_engine.enrich_batch", return_value={"tv/77": "British coastal crime."}):
         ask("serious British crime", ctx)
-    prompts = [call.args[0] for call in ctx.llm.generate.call_args_list]
-    combined = "\n\n".join(prompts)
+    calls = ctx.llm.generate.call_args_list
+    texts = ([call.args[0] for call in calls]
+             + [call.kwargs.get("system") or "" for call in calls])
+    combined = "\n\n".join(texts)
     assert "Relevant taste profile slice:" in combined
     assert "British crime" in combined
     assert "Family animation" not in combined
@@ -677,8 +679,10 @@ def test_rank_path_falls_back_to_prose_profile_without_structured_profile():
     )
     with patch("recommender.query_engine.enrich_batch", return_value={"tv/77": "British coastal crime."}):
         ask("crime", ctx)
-    prompts = [call.args[0] for call in ctx.llm.generate.call_args_list]
-    assert any("FULL PROSE PROFILE" in prompt for prompt in prompts)
+    calls = ctx.llm.generate.call_args_list
+    texts = ([call.args[0] for call in calls]
+             + [call.kwargs.get("system") or "" for call in calls])
+    assert any("FULL PROSE PROFILE" in t for t in texts)
 
 
 def test_rank_candidates_includes_context_note_in_prompt():
@@ -688,7 +692,7 @@ def test_rank_candidates_includes_context_note_in_prompt():
 
     class FakeLLM:
         provider = "fake"
-        def generate(self, prompt, role="reason", max_tokens=1000, timeout=30.0):
+        def generate(self, prompt, role="reason", max_tokens=1000, timeout=30.0, system=None):
             captured["prompt"] = prompt
             return "[]"
 
@@ -713,7 +717,7 @@ def test_ask_with_intent_override_skips_parse_intent(monkeypatch):
             return []
     class FakeLLM:
         provider = "fake"
-        def generate(self, prompt, role="reason", max_tokens=1000, timeout=30.0):
+        def generate(self, prompt, role="reason", max_tokens=1000, timeout=30.0, system=None):
             return "[]"   # no LLM suggestions
 
     ctx = RecommendContext(

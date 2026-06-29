@@ -245,15 +245,21 @@ def rank_candidates(
     )
     log.debug("Candidate list sent to ranker:\n%s", cands_str)
 
+    # Stable across queries within a session (instructions + taste profile), so it
+    # goes in the cacheable system block. The taste profile can be large; caching it
+    # avoids re-sending it on every query.
+    system = (
+        'You rank streaming candidates for one user. IMPORTANT: the query is the '
+        'primary filter — a candidate must match what the user asked for. The taste '
+        'profile below is secondary, used only to break ties between candidates that '
+        'all fit the query.\n\n'
+        f'TASTE PROFILE:\n{taste_profile}'
+    )
     prompt = (
-        f'Rank these candidates for a user. IMPORTANT: the query is the primary filter — '
-        f'a candidate must match what the user asked for. The taste profile is secondary, '
-        f'used to break ties between candidates that all fit the query.\n\n'
         f'QUERY: "{query}"\n\n'
         + (f'TONIGHT\'S CONTEXT (use to nudge ordering, not as a hard filter):\n{context_note}\n\n'
            if context_note else '')
-        + f'TASTE PROFILE:\n{taste_profile}\n\n'
-        f'CANDIDATES:\n{cands_str}\n\n'
+        + f'CANDIDATES:\n{cands_str}\n\n'
         f'Return ONLY valid JSON: a list of objects with fields:\n'
         f'- title: string (exact title from candidates)\n'
         f'- explanation: string (1-2 sentences why this fits the query and this user)\n'
@@ -265,7 +271,7 @@ def rank_candidates(
     # Scale output tokens based on result count
     rank_tokens = max(config.TOKENS_RANKING, top_n * 200 + 200)
     response_text = client.generate(prompt, role="reason", max_tokens=rank_tokens,
-                                     timeout=config.TIMEOUT_REASON)
+                                     timeout=config.TIMEOUT_REASON, system=system)
 
     log.debug("Raw ranking response: %s", response_text[:500])
     try:

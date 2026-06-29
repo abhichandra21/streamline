@@ -8,7 +8,7 @@ class FakeLLM:
     def __init__(self, responses):
         self._responses = list(responses)
         self.calls = []
-    def generate(self, prompt, role="reason", max_tokens=1000, timeout=30.0):
+    def generate(self, prompt, role="reason", max_tokens=1000, timeout=30.0, system=None):
         self.calls.append(prompt)
         return self._responses.pop(0)
 

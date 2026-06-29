@@ -51,21 +51,17 @@ def _qa_so_far(state: WizardState) -> str:
     return "\n".join(lines)
 
 
-def _prompt(state: WizardState, profile: str, force_finish: bool) -> str:
-    cap = config.WIZARD_MAX_QUESTIONS
-    finish_clause = (
-        "You MUST finish now: return the recommend action. Do not ask another question.\n"
-        if force_finish else
-        f"You may ask at most {cap} questions total ({state.turn_count} asked so far). "
-        "Ask another only if it would materially change the recommendation; otherwise finish.\n"
-    )
+def _system(profile: str) -> str:
+    """Stable per-session prefix: role, taste profile, and output contract.
+
+    Identical across every turn of a session, so it is passed as the cacheable
+    `system` block — the taste profile is re-read from cache instead of re-sent.
+    """
     return (
         "You are a film and TV guide helping someone who cannot decide what to watch. "
         "Use their taste profile as a PRIOR: do not ask what it already implies; probe only "
         "tonight's context (mood, energy, time available, alone or with others, novelty vs comfort).\n\n"
         f"TASTE PROFILE:\n{profile}\n\n"
-        f"ANSWERS SO FAR:\n{_qa_so_far(state)}\n\n"
-        f"{finish_clause}"
         "Return ONLY valid JSON, exactly one of:\n"
         '1) {"action":"ask","prompt":str,"subtext":str,'
         '"chips":[{"label":str,"value":str}],"multi":bool,"allow_free_text":bool}\n'
@@ -84,11 +80,27 @@ def _prompt(state: WizardState, profile: str, force_finish: bool) -> str:
     )
 
 
+def _user(state: WizardState, force_finish: bool) -> str:
+    """Volatile per-turn content: answers so far and the finish directive."""
+    cap = config.WIZARD_MAX_QUESTIONS
+    finish_clause = (
+        "You MUST finish now: return the recommend action. Do not ask another question.\n"
+        if force_finish else
+        f"You may ask at most {cap} questions total ({state.turn_count} asked so far). "
+        "Ask another only if it would materially change the recommendation; otherwise finish.\n"
+    )
+    return (
+        f"ANSWERS SO FAR:\n{_qa_so_far(state)}\n\n"
+        f"{finish_clause}"
+        "Decide the next turn."
+    )
+
+
 def _finalize(state: WizardState, profile: str, llm) -> dict:
     """Force a recommend turn. Used on cap hit or early-exit."""
-    raw = llm.generate(_prompt(state, profile, force_finish=True),
+    raw = llm.generate(_user(state, force_finish=True),
                         role="reason", max_tokens=config.WIZARD_MAX_TOKENS,
-                        timeout=config.TIMEOUT_REASON)
+                        timeout=config.TIMEOUT_REASON, system=_system(profile))
     try:
         data = _parse_json_response(raw)
         if not isinstance(data, dict):
@@ -111,9 +123,9 @@ def next_turn(state: WizardState, ctx, force_finish: bool = False) -> dict:
     if force_finish or cap_hit:
         return _finalize(state, profile, ctx.llm)
 
-    raw = ctx.llm.generate(_prompt(state, profile, force_finish=False),
+    raw = ctx.llm.generate(_user(state, force_finish=False),
                            role="reason", max_tokens=config.WIZARD_MAX_TOKENS,
-                           timeout=config.TIMEOUT_REASON)
+                           timeout=config.TIMEOUT_REASON, system=_system(profile))
     try:
         data = _parse_json_response(raw)
     except (json.JSONDecodeError, ValueError, TypeError) as exc:
