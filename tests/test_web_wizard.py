@@ -1,6 +1,7 @@
 """Tests for the concierge wizard routes."""
 
 import json
+from html.parser import HTMLParser
 from unittest.mock import patch
 
 import pytest
@@ -22,6 +23,19 @@ def client():
 
 def _csrf_form(**kwargs):
     return {"_csrf_token": "test-csrf-token", **kwargs}
+
+
+class _HiddenInputParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.hidden_inputs = {}
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "input":
+            return
+        data = dict(attrs)
+        if data.get("type") == "hidden" and data.get("name"):
+            self.hidden_inputs[data["name"]] = data.get("value", "")
 
 
 def test_get_wizard_renders_shell(client):
@@ -240,13 +254,14 @@ def test_classic_history_research_still_uses_query(client):
 
 
 def test_searches_wizard_entry_renders_replay_form(client):
+    intent_dict = _full_intent_dict(content_type="movie")
     entries = [{
         "timestamp": "2026-06-29T12:00:00+00:00",
         "query": "mood match: something short and light",
         "label": "Mood Match - short and light",
         "source": "wizard",
         "summary": "something short and light",
-        "intent_dict": _full_intent_dict(content_type="movie"),
+        "intent_dict": intent_dict,
         "context_note": "low energy",
         "provider": "fake", "results": [], "usage": "",
     }]
@@ -254,6 +269,9 @@ def test_searches_wizard_entry_renders_replay_form(client):
         resp = client.get("/searches")
     assert resp.status_code == 200
     assert b"/wizard/replay" in resp.data
+    parser = _HiddenInputParser()
+    parser.feed(resp.data.decode())
+    assert json.loads(parser.hidden_inputs["intent"]) == intent_dict
 
 
 def test_wizard_refine_shorter_updates_runtime():

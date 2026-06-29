@@ -141,6 +141,16 @@ def _parse_json_response(text: str) -> dict | list:
     return json.loads(text.strip())
 
 
+def _optional_positive_int(value) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _safe_query_intent(data: dict) -> QueryIntent:
     """Construct QueryIntent with validation and defaults for missing/extra fields."""
     known_fields = {f.name for f in QueryIntent.__dataclass_fields__.values()}
@@ -158,6 +168,7 @@ def _safe_query_intent(data: dict) -> QueryIntent:
             filtered[key] = default
     if isinstance(filtered.get("top_n"), str):
         filtered["top_n"] = int(filtered["top_n"])
+    filtered["max_runtime_minutes"] = _optional_positive_int(filtered.get("max_runtime_minutes"))
     if filtered.get("content_type") not in ("tv", "movie", "both"):
         filtered["content_type"] = "both"
     return QueryIntent(**filtered)
@@ -497,9 +508,9 @@ def _candidate_allowed(
     # Runtime is a hard filter when known. For TV, runtime_minutes is the episode
     # runtime, so "under an hour" matches a 45-minute episode. Unknown runtime
     # cannot be safely filtered, so those candidates are kept.
-    if (max_runtime_minutes
-            and candidate.runtime_minutes
-            and candidate.runtime_minutes > max_runtime_minutes):
+    runtime_ceiling = _optional_positive_int(max_runtime_minutes)
+    candidate_runtime = _optional_positive_int(candidate.runtime_minutes)
+    if runtime_ceiling and candidate_runtime and candidate_runtime > runtime_ceiling:
         return False
     return True
 

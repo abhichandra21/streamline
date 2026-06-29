@@ -69,7 +69,7 @@
         {% if entry.source == "wizard" and entry.intent_dict %}
         <form action="/wizard/replay" method="post" style="margin:0; display:inline;">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-          <input type="hidden" name="intent" value="{{ entry.intent_dict | tojson }}">
+          <input type="hidden" name="intent" value='{{ entry.intent_dict | tojson }}'>
           <input type="hidden" name="context_note" value="{{ entry.context_note or '' }}">
           <input type="hidden" name="summary" value="{{ entry.summary or entry.query }}">
           <button type="submit" class="btn-ghost" style="padding:4px 12px; font-size:0.55rem; cursor:pointer;">Replay</button>
