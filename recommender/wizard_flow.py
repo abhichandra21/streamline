@@ -108,40 +108,54 @@ def current_turn(state: WizardState) -> dict:
     """
     step = state.step
     if step == "content_type":
-        return {
+        turn = {
             "action": "ask", "step": "content_type",
             "prompt": "Movie or series tonight?", "subtext": "",
             "chips": list(_CONTENT_TYPE_CHIPS), "multi": False,
             "allow_free_text": False, "can_go_back": False,
         }
-    if step == "time_window":
+    elif step == "time_window":
         ct = _content_type(state)
         chips = [{"label": o["label"], "value": o["value"]} for o in _TIME_WINDOWS[ct]]
-        return {
+        turn = {
             "action": "ask", "step": "time_window",
             "prompt": "How much time do you have?", "subtext": "",
             "chips": chips, "multi": False,
             "allow_free_text": False, "can_go_back": True,
         }
-    if step == "energy":
-        return {
+    elif step == "energy":
+        turn = {
             "action": "ask", "step": "energy",
             "prompt": "What's your energy like?", "subtext": "",
             "chips": list(_ENERGY_CHIPS), "multi": False,
             "allow_free_text": False, "can_go_back": True,
         }
-    if step == "tone":
-        return {
+    elif step == "tone":
+        turn = {
             "action": "ask", "step": "tone",
             "prompt": "Any particular tone?",
             "subtext": "Optional — pick any that fit, or tell me in your own words.",
             "chips": list(_TONE_CHIPS), "multi": True,
             "allow_free_text": True, "can_go_back": True,
         }
-    if step == "review":
+    elif step == "review":
         return review_model(state)
-    # Adaptive and any unexpected step are handled by the LLM path in web.py.
-    return {"action": "adaptive", "step": step}
+    else:
+        # Adaptive and any unexpected step are handled by the LLM path in web.py.
+        return {"action": "adaptive", "step": step}
+
+    # Surface the previously recorded answer so Back/Edit re-renders it as
+    # selected rather than appearing blank while the old value is still stored.
+    turn["selected"] = _selected_for(step, state.answers)
+    turn["free_text"] = state.answers.get("free_text", "") if step == "tone" else ""
+    return turn
+
+
+def _selected_for(step: str, answers: dict) -> list[str]:
+    if step == "tone":
+        return list(answers.get("tone") or [])
+    value = answers.get(step)
+    return [value] if value else []
 
 
 def _next_step(step: str) -> str:
@@ -153,13 +167,34 @@ def _next_step(step: str) -> str:
     return step
 
 
+def _clear_dependents(state: WizardState, step: str) -> None:
+    """Drop answers that depend on ``step`` (later steps; free text belongs to tone)."""
+    if step not in _DETERMINISTIC_ORDER:
+        return
+    for key in _DETERMINISTIC_ORDER[_DETERMINISTIC_ORDER.index(step) + 1:]:
+        state.answers.pop(key, None)
+    if step != "tone":
+        state.answers.pop("free_text", None)
+
+
 def apply_answer(state: WizardState, step: str, selected: list[str], free_text: str) -> WizardState:
-    """Record an answer for ``step`` and advance to the next step."""
+    """Record an answer for ``step`` and advance to the next step.
+
+    Changing an earlier answer (e.g. via Back) invalidates later answers, so
+    dependents are cleared whenever the recorded value actually changes.
+    """
     selected = [s for s in (selected or []) if s]
+    changed = False
     if step == "tone":
+        if selected != (state.answers.get("tone") or []):
+            changed = True
         state.answers["tone"] = selected
     elif selected:
+        if selected[0] != state.answers.get(step):
+            changed = True
         state.answers[step] = selected[0]
+    if changed:
+        _clear_dependents(state, step)
     free_text = (free_text or "").strip()
     if free_text:
         state.answers["free_text"] = free_text
@@ -205,6 +240,11 @@ def _summary(answers: dict) -> str:
     tone = answers.get("tone") or []
     if tone:
         summary += f" with a {', '.join(tone)} tone"
+    free_text = (answers.get("free_text") or "").strip()
+    if free_text:
+        # Carry the user's own words into the query so candidate generation and
+        # ranking see them, not only the context note.
+        summary += f" — {free_text}"
     return summary
 
 
@@ -281,7 +321,11 @@ def merge_intent_with_seed(llm_intent: QueryIntent, seed: dict) -> QueryIntent:
     merged = asdict(llm_intent)
     merged["content_type"] = seed.get("content_type", merged.get("content_type", "both"))
     merged["max_runtime_minutes"] = seed.get("max_runtime_minutes")
-    # Preserve deterministic tone if the LLM dropped it.
-    if seed.get("mood_descriptors") and not merged.get("mood_descriptors"):
-        merged["mood_descriptors"] = list(seed["mood_descriptors"])
+    # Union the user's chosen tone with any adaptive moods so an explicit
+    # selection is never dropped, order-stable and de-duplicated.
+    unioned = list(dict.fromkeys(
+        list(seed.get("mood_descriptors") or []) + list(merged.get("mood_descriptors") or [])
+    ))
+    if unioned:
+        merged["mood_descriptors"] = unioned
     return _safe_query_intent(merged)

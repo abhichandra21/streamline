@@ -1,5 +1,60 @@
 from recommender.wizard import WizardState
+from recommender.query_engine import _safe_query_intent
 from recommender import wizard_flow
+
+
+def test_changing_earlier_answer_via_back_clears_downstream():
+    # User went Back to content_type and changes both -> movie; the stale
+    # under_hour time window (which forced TV) must not survive.
+    state = WizardState(
+        step="content_type",
+        answers={"content_type": "both", "time_window": "under_hour",
+                 "energy": "easy", "tone": ["funny"]},
+    )
+    wizard_flow.apply_answer(state, "content_type", ["movie"], "")
+    assert state.answers["content_type"] == "movie"
+    assert "time_window" not in state.answers
+    assert "energy" not in state.answers
+    assert "tone" not in state.answers
+
+
+def test_reanswering_same_value_keeps_downstream():
+    state = WizardState(
+        step="content_type",
+        answers={"content_type": "movie", "time_window": "short_movie", "energy": "easy"},
+    )
+    wizard_flow.apply_answer(state, "content_type", ["movie"], "")
+    assert state.answers["time_window"] == "short_movie"
+    assert state.answers["energy"] == "easy"
+
+
+def test_tone_answer_with_free_text_keeps_free_text():
+    state = WizardState(step="tone", answers={"content_type": "movie"})
+    wizard_flow.apply_answer(state, "tone", ["funny"], "nothing bleak")
+    assert state.answers["tone"] == ["funny"]
+    assert state.answers["free_text"] == "nothing bleak"
+
+
+def test_build_seed_includes_free_text_in_query():
+    state = WizardState(
+        step="review",
+        answers={"content_type": "movie", "time_window": "short_movie",
+                 "energy": "easy", "free_text": "dark academia"},
+    )
+    _, _, summary = wizard_flow.build_recommendation_seed(state)
+    assert "dark academia" in summary.lower()
+
+
+def test_merge_unions_seed_and_adaptive_moods():
+    seed = {"content_type": "movie", "max_runtime_minutes": 95,
+            "mood_descriptors": ["funny"]}
+    llm_intent = _safe_query_intent({"mood_descriptors": ["offbeat"], "content_type": "tv"})
+    merged = wizard_flow.merge_intent_with_seed(llm_intent, seed)
+    assert "funny" in merged.mood_descriptors
+    assert "offbeat" in merged.mood_descriptors
+    # Deterministic content type still wins.
+    assert merged.content_type == "movie"
+    assert merged.max_runtime_minutes == 95
 
 
 def test_first_step_is_content_type():

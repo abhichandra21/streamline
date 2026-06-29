@@ -104,6 +104,20 @@ def test_back_action_does_not_append_answer(client):
     assert new_state["answers"] == {"content_type": "movie", "time_window": "short_movie"}
 
 
+def test_back_renders_saved_answer_as_checked(client):
+    import re
+    state = {"turns": [], "turn_count": 0, "step": "energy",
+             "answers": {"content_type": "movie", "time_window": "short_movie"}}
+    with patch.object(web.wizard, "next_turn"):
+        resp = client.post("/wizard/next", data=_csrf_form(
+            state=json.dumps(state), back="1"),
+            headers={"HX-Request": "true"})
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    # Back lands on time_window with the previously chosen option pre-checked.
+    assert re.search(r'value="short_movie"\s+checked', body)
+
+
 def test_edit_from_review_clears_dependent_answers(client):
     state = {"turns": [], "turn_count": 0, "step": "review",
              "answers": {"content_type": "movie", "time_window": "short_movie",
