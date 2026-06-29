@@ -130,6 +130,23 @@ def test_wizard_prompt_steers_short_time_away_from_movie_only():
     assert "feature films are rarely" in low
 
 
+def test_adaptive_prompt_includes_structured_preferences():
+    state = WizardState(
+        step="adaptive",
+        answers={
+            "content_type": "movie",
+            "time_window": "short_movie",
+            "energy": "easy",
+        },
+    )
+    prompt = wizard._prompt(state, "profile", force_finish=False)
+    low = prompt.lower()
+    assert "structured preferences" in low
+    assert "content_type: movie" in low
+    assert "max_runtime_minutes: 95" in low
+    assert "do not ask content type" in low
+
+
 def test_wizard_ignores_malformed_chips():
     # Non-list chips payload must not crash next_turn().
     llm = FakeLLM([json.dumps({
@@ -149,6 +166,27 @@ def test_wizard_keeps_only_valid_chips():
     })])
     out = wizard.next_turn(WizardState(turns=[], turn_count=0), _ctx(llm))
     assert out["chips"] == [{"label": "Light", "value": "light"}]
+
+
+def test_wizard_state_loads_legacy_payload_without_new_fields():
+    raw = json.dumps({"turns": [], "turn_count": 0})
+    state = wizard.WizardState.from_json(raw)
+    assert state.step == "content_type"
+    assert state.answers == {}
+    assert state.adaptive_turns == []
+
+
+def test_wizard_state_round_trips_structured_answers():
+    state = wizard.WizardState(
+        turns=[],
+        turn_count=0,
+        step="time_window",
+        answers={"content_type": "movie"},
+        adaptive_turns=[],
+    )
+    loaded = wizard.WizardState.from_json(state.to_json())
+    assert loaded.step == "time_window"
+    assert loaded.answers == {"content_type": "movie"}
 
 
 def test_wizard_state_rejects_oversized_payload():

@@ -31,6 +31,7 @@ from recommender.log import setup_logging
 from recommender.enricher import enrichment_key_from_parts
 from recommender.query_engine import RecommendContext, ask, _safe_query_intent
 from recommender import wizard
+from recommender import wizard_flow
 from recommender.structured_profile import load_structured_profile
 from recommender.tmdb_client import TmdbClient
 
@@ -621,46 +622,128 @@ def wizard_page() -> str:
     return render_template("wizard.html", max_questions=config.WIZARD_MAX_QUESTIONS)
 
 
-def _collect_answers(form) -> tuple[wizard.WizardState, dict | None]:
-    """Load state from the form and append the just-answered question, if any."""
-    state = wizard.WizardState.from_json(form.get("state", ""))
-    prompt = (form.get("prompt") or "").strip()
-    if prompt:
-        state.turns.append({
-            "prompt": prompt,
-            "selected": form.getlist("selected"),
-            "free_text": (form.get("free_text") or "").strip(),
-        })
-        state.turn_count += 1
-    return state, None
+def _wizard_question_number(state: wizard.WizardState) -> int:
+    """Position used for the progress display (deterministic intake + adaptive)."""
+    if state.step in wizard_flow._DETERMINISTIC_ORDER:
+        return wizard_flow._DETERMINISTIC_ORDER.index(state.step) + 1
+    if state.step == "adaptive":
+        return len(wizard_flow._DETERMINISTIC_ORDER) + 1
+    return state.turn_count + 1
+
+
+def _render_wizard_turn(turn: dict, state: wizard.WizardState) -> str:
+    """Render a deterministic or adaptive ask turn."""
+    return render_template(
+        "_wizard_step.html", turn=turn, state_json=state.to_json(),
+        question_number=_wizard_question_number(state),
+        max_questions=config.WIZARD_MAX_QUESTIONS)
+
+
+def _render_wizard_state(state: wizard.WizardState) -> str:
+    """Render whatever the current deterministic step / review surface is."""
+    turn = wizard_flow.current_turn(state)
+    if turn["action"] == "review":
+        state.review_seen = True
+        return render_template("_wizard_review.html", review=turn,
+                               state_json=state.to_json())
+    return _render_wizard_turn(turn, state)
+
+
+def _wizard_polling(job_id: str) -> str:
+    return render_template("_polling.html", job_id=job_id,
+                           poll_url=f"/wizard/jobs/{job_id}/poll",
+                           poll_target="#wizard-stage")
+
+
+def _start_wizard_seed_job(state: wizard.WizardState) -> str:
+    """Build a recommendation from structured answers alone — no LLM turn."""
+    intent_dict, context_note, summary = wizard_flow.build_recommendation_seed(state)
+    job_id = job_registry.submit(
+        _run_wizard_recommend_job, intent_dict, context_note, summary, label="wizard")
+    return _wizard_polling(job_id)
+
+
+def _combine_notes(*notes: str) -> str:
+    return "\n".join(n.strip() for n in notes if n and n.strip()).strip()
+
+
+def _finish_with_adaptive(state: wizard.WizardState, intent, context_note: str,
+                          summary: str) -> str:
+    """Merge an adaptive LLM turn over the deterministic seed and submit."""
+    seed, seed_note, seed_summary = wizard_flow.build_recommendation_seed(state)
+    merged = wizard_flow.merge_intent_with_seed(intent, seed)
+    note = _combine_notes(seed_note, context_note)
+    job_id = job_registry.submit(
+        _run_wizard_recommend_job, asdict(merged), note,
+        summary or seed_summary, label="wizard")
+    return _wizard_polling(job_id)
+
+
+def _wizard_adaptive_turn(state: wizard.WizardState, *, answering: bool) -> str:
+    """Drive the single optional adaptive LLM question.
+
+    ``answering=True`` finalizes (force_finish) and submits; otherwise it asks
+    one adaptive question, or submits immediately if the model chose to.
+    """
+    state.step = "adaptive"
+    ctx = _get_job_context()
+    turn = wizard.next_turn(state, ctx, force_finish=answering)
+    if turn["action"] == "recommend":
+        return _finish_with_adaptive(state, turn["intent"], turn["context_note"],
+                                     turn["summary"])
+    turn["step"] = "adaptive"
+    turn["can_go_back"] = True
+    return _render_wizard_turn(turn, state)
 
 
 @app.route("/wizard/next", methods=["POST"])
 def wizard_next() -> str:
-    state, _ = _collect_answers(request.form)
-    force_finish = request.form.get("finish") == "1"
-    ctx = _get_job_context()
+    form = request.form
+    state = wizard.WizardState.from_json(form.get("state", ""))
+
+    # 1. Navigation actions never append answers.
+    if form.get("back") == "1":
+        wizard_flow.previous_step(state)
+        return _render_wizard_state(state)
+    edit_target = (form.get("edit_step") or "").strip()
+    if edit_target:
+        wizard_flow.edit_step(state, edit_target)
+        return _render_wizard_state(state)
+
+    finish = form.get("finish") == "1"
+    ask_more = form.get("ask_more") == "1"
+    posted_step = (form.get("step") or "").strip()
+
+    # 2. Record a deterministic answer when one was posted.
+    if posted_step in wizard_flow._DETERMINISTIC_ORDER:
+        wizard_flow.apply_answer(state, posted_step,
+                                 form.getlist("selected"),
+                                 form.get("free_text", ""))
+
     try:
-        turn = wizard.next_turn(state, ctx, force_finish=force_finish)
+        # 3. Finish now → recommendation from structured answers, no LLM.
+        if finish:
+            return _start_wizard_seed_job(state)
+        # 4. Optional adaptive question requested from review.
+        if ask_more:
+            return _wizard_adaptive_turn(state, answering=False)
+        # 5. Still inside deterministic intake (or at review) → render it.
+        if state.step in wizard_flow._DETERMINISTIC_ORDER or state.step == "review":
+            return _render_wizard_state(state)
+        # 6. Answering the adaptive question → finalize.
+        prompt = (form.get("prompt") or "").strip()
+        if prompt:
+            state.turns.append({
+                "prompt": prompt,
+                "selected": form.getlist("selected"),
+                "free_text": (form.get("free_text") or "").strip(),
+            })
+            state.turn_count += 1
+        return _wizard_adaptive_turn(state, answering=True)
     except Exception as exc:   # network / provider failure
         log.exception("Wizard turn failed")
         return render_template("_wizard_step.html", error=str(exc),
                                state_json=state.to_json())
-
-    if turn["action"] == "recommend":
-        intent_dict = asdict(turn["intent"])
-        job_id = job_registry.submit(
-            _run_wizard_recommend_job, intent_dict, turn["context_note"],
-            turn["summary"], label="wizard")
-        return render_template("_polling.html", job_id=job_id,
-                               poll_url=f"/wizard/jobs/{job_id}/poll",
-                               poll_target="#wizard-stage")
-
-    return render_template("_wizard_step.html", turn=turn,
-                           state_json=state.to_json(),
-                           answered=state.turns,
-                           question_number=state.turn_count + 1,
-                           max_questions=config.WIZARD_MAX_QUESTIONS)
 
 
 @app.route("/wizard/jobs/<job_id>/poll")

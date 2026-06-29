@@ -22,6 +22,7 @@
   <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
   <input type="hidden" name="state" value="{{ state_json }}">
   <input type="hidden" name="prompt" value="{{ turn.prompt }}">
+  {% if turn.step %}<input type="hidden" name="step" value="{{ turn.step }}">{% endif %}
 
   {% if answered %}
   <div style="margin-bottom:1.25rem; padding:0.75rem 1rem; background:var(--surface); border:1px solid var(--border); border-radius:6px;">
@@ -62,8 +63,11 @@
   {% endif %}
 
   <div style="display:flex; align-items:center; gap:1rem;">
+    {% if turn.can_go_back %}
+    <button type="submit" name="back" value="1" formnovalidate class="btn-ghost" style="padding:0.7rem 1.2rem;">Back</button>
+    {% endif %}
     <button type="submit" class="btn-primary" style="padding:0.7rem 1.4rem;">Continue</button>
-    <button type="submit" name="finish" value="1" class="btn-ghost" style="padding:0.7rem 1.2rem;">Show me something now</button>
+    <button type="submit" name="finish" value="1" formnovalidate class="btn-ghost" style="padding:0.7rem 1.2rem;">Show me something now</button>
     <span id="wiz-next-spinner" class="htmx-indicator" style="align-items:center; gap:0.5rem;">
       <span style="width:13px; height:13px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; display:inline-block; animation:spin 0.6s linear infinite;"></span>
       <span class="mono" style="font-size:0.62rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">thinking...</span>

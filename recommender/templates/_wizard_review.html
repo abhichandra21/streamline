@@ -1,0 +1,35 @@
+<form hx-post="/wizard/next" hx-target="#wizard-stage" hx-swap="innerHTML"
+      hx-indicator="#wiz-review-spinner" hx-disabled-elt="find button">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="state" value="{{ state_json }}">
+
+  <div class="mono" style="font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:0.4rem;">
+    Here's what I heard
+  </div>
+  <h2 style="font-size:1.5rem; margin-bottom:1rem;">{{ review.summary }}</h2>
+
+  <div style="margin-bottom:1.25rem; border:1px solid var(--border); border-radius:6px; overflow:hidden;">
+    {% for row in review.answers %}
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:0.6rem 0.9rem; {% if not loop.last %}border-bottom:1px solid var(--border);{% endif %}">
+      <div style="font-size:0.85rem;">
+        <span class="mono" style="font-size:0.55rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted);">{{ row.label }}</span>
+        <span style="color:var(--text); margin-left:0.5rem;">{{ row.display }}</span>
+      </div>
+      <button type="submit" name="edit_step" value="{{ row.step }}" formnovalidate
+              class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0; font-size:0.62rem;">Edit</button>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div style="display:flex; align-items:center; gap:1rem;">
+    <button type="submit" name="finish" value="1" class="btn-primary" style="padding:0.7rem 1.4rem;">Show picks</button>
+    <button type="submit" name="ask_more" value="1" class="btn-ghost" style="padding:0.7rem 1.2rem;">Ask one more</button>
+    <span id="wiz-review-spinner" class="htmx-indicator" style="align-items:center; gap:0.5rem;">
+      <span style="width:13px; height:13px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; display:inline-block; animation:spin 0.6s linear infinite;"></span>
+      <span class="mono" style="font-size:0.62rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">thinking...</span>
+    </span>
+  </div>
+</form>
+<div style="margin-top:1rem;">
+  <a href="/wizard" class="mono result-link" style="font-size:0.62rem;">Start over</a>
+</div>

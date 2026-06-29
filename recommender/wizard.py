@@ -23,11 +23,22 @@ log = logging.getLogger(__name__)
 _MAX_STATE_BYTES = 64_000
 _MAX_TURNS = 50
 
+# Valid wizard step ids. Deterministic intake steps come first, then the
+# review surface and the optional single adaptive (LLM) question.
+_VALID_STEPS = frozenset({
+    "content_type", "time_window", "energy", "tone", "review", "adaptive",
+})
+_DEFAULT_STEP = "content_type"
+
 
 @dataclass
 class WizardState:
     turns: list[dict] = field(default_factory=list)
     turn_count: int = 0
+    step: str = _DEFAULT_STEP
+    answers: dict = field(default_factory=dict)
+    adaptive_turns: list[dict] = field(default_factory=list)
+    review_seen: bool = False
 
     @classmethod
     def from_json(cls, raw: str) -> "WizardState":
@@ -40,13 +51,38 @@ class WizardState:
                 raise ValueError("turns must be a list")
             if len(turns) > _MAX_TURNS:
                 raise ValueError("too many wizard turns")
-            return cls(turns=turns, turn_count=int(data.get("turn_count", len(turns))))
+            answers = data.get("answers", {})
+            if not isinstance(answers, dict):
+                answers = {}
+            adaptive_turns = data.get("adaptive_turns", [])
+            if not isinstance(adaptive_turns, list):
+                adaptive_turns = []
+            if len(adaptive_turns) > _MAX_TURNS:
+                raise ValueError("too many adaptive turns")
+            step = data.get("step", _DEFAULT_STEP)
+            if step not in _VALID_STEPS:
+                step = _DEFAULT_STEP
+            return cls(
+                turns=turns,
+                turn_count=int(data.get("turn_count", len(turns))),
+                step=step,
+                answers=answers,
+                adaptive_turns=adaptive_turns,
+                review_seen=bool(data.get("review_seen", False)),
+            )
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
             log.warning("Resetting wizard state, could not parse: %s", exc)
-            return cls(turns=[], turn_count=0)
+            return cls()
 
     def to_json(self) -> str:
-        return json.dumps({"turns": self.turns, "turn_count": self.turn_count})
+        return json.dumps({
+            "turns": self.turns,
+            "turn_count": self.turn_count,
+            "step": self.step,
+            "answers": self.answers,
+            "adaptive_turns": self.adaptive_turns,
+            "review_seen": self.review_seen,
+        })
 
 
 def _qa_so_far(state: WizardState) -> str:
@@ -59,6 +95,37 @@ def _qa_so_far(state: WizardState) -> str:
         answer = " / ".join(p for p in (picks, free) if p) or "(skipped)"
         lines.append(f'Q: {t.get("prompt", "")}\nA: {answer}')
     return "\n".join(lines)
+
+
+def _structured_preferences_block(state: WizardState) -> str:
+    """Render the deterministic answers as a block the adaptive LLM must honor.
+
+    Returns "" when no structured intake has happened yet, so the legacy
+    LLM-only prompt is unchanged.
+    """
+    if not state.answers:
+        return ""
+    # Lazy import avoids a circular dependency (wizard_flow imports WizardState).
+    from recommender import wizard_flow
+    intent_dict, context_note, _ = wizard_flow.build_recommendation_seed(state)
+    lines = ["STRUCTURED PREFERENCES (already decided — do not re-ask):",
+             f"content_type: {intent_dict['content_type']}"]
+    if intent_dict.get("max_runtime_minutes"):
+        lines.append(f"max_runtime_minutes: {intent_dict['max_runtime_minutes']}")
+    energy = state.answers.get("energy")
+    if energy:
+        lines.append(f"energy: {energy}")
+    tone = state.answers.get("tone") or []
+    if tone:
+        lines.append(f"tone: {', '.join(tone)}")
+    if context_note:
+        lines.append(f"notes: {context_note}")
+    lines.append(
+        "Do not ask content type, time available, or energy again. Ask at most "
+        "ONE question that would materially improve mood, novelty, or theme fit. "
+        "If you already have enough signal, return the recommend action now."
+    )
+    return "\n".join(lines) + "\n\n"
 
 
 def _prompt(state: WizardState, profile: str, force_finish: bool) -> str:
@@ -82,6 +149,7 @@ def _prompt(state: WizardState, profile: str, force_finish: bool) -> str:
         "or 'both' (a single episode or short special), NOT 'movie' alone — feature films are "
         "rarely that short, so a movie-only short request usually finds nothing.\n\n"
         f"TASTE PROFILE:\n{profile}\n\n"
+        f"{_structured_preferences_block(state)}"
         f"ANSWERS SO FAR:\n{_qa_so_far(state)}\n\n"
         f"{finish_clause}"
         "Return ONLY valid JSON, exactly one of:\n"
