@@ -18,6 +18,12 @@ from recommender.query_engine import _parse_json_response, _safe_query_intent
 log = logging.getLogger(__name__)
 
 
+# Defensive caps on hidden-form wizard state. This is not a security boundary
+# for a single-user app, just protection against malformed or runaway payloads.
+_MAX_STATE_BYTES = 64_000
+_MAX_TURNS = 50
+
+
 @dataclass
 class WizardState:
     turns: list[dict] = field(default_factory=list)
@@ -26,10 +32,14 @@ class WizardState:
     @classmethod
     def from_json(cls, raw: str) -> "WizardState":
         try:
+            if raw and len(raw) > _MAX_STATE_BYTES:
+                raise ValueError("wizard state payload too large")
             data = json.loads(raw) if raw else {}
             turns = data.get("turns", [])
             if not isinstance(turns, list):
                 raise ValueError("turns must be a list")
+            if len(turns) > _MAX_TURNS:
+                raise ValueError("too many wizard turns")
             return cls(turns=turns, turn_count=int(data.get("turn_count", len(turns))))
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
             log.warning("Resetting wizard state, could not parse: %s", exc)
@@ -147,7 +157,19 @@ def next_turn(state: WizardState, ctx, force_finish: bool = False) -> dict:
         "action": "ask",
         "prompt": data.get("prompt", "What are you in the mood for?"),
         "subtext": data.get("subtext", ""),
-        "chips": [c for c in data.get("chips", []) if c.get("value")],
+        "chips": _normalize_chips(data.get("chips")),
         "multi": bool(data.get("multi", False)),
         "allow_free_text": bool(data.get("allow_free_text", True)),
     }
+
+
+def _normalize_chips(raw) -> list[dict]:
+    """Coerce LLM chip output into a list of {label, value} dicts, dropping junk."""
+    if not isinstance(raw, list):
+        return []
+    chips = []
+    for c in raw:
+        if isinstance(c, dict) and c.get("value"):
+            value = str(c["value"])
+            chips.append({"label": str(c.get("label") or value), "value": value})
+    return chips

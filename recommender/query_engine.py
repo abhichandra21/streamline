@@ -158,6 +158,8 @@ def _safe_query_intent(data: dict) -> QueryIntent:
             filtered[key] = default
     if isinstance(filtered.get("top_n"), str):
         filtered["top_n"] = int(filtered["top_n"])
+    if filtered.get("content_type") not in ("tv", "movie", "both"):
+        filtered["content_type"] = "both"
     return QueryIntent(**filtered)
 
 

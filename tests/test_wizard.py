@@ -120,3 +120,34 @@ def test_wizard_prompt_maps_time_to_max_runtime():
     assert "max_runtime_minutes" in low
     assert "under an hour" in low
     assert "90" in low
+
+
+def test_wizard_ignores_malformed_chips():
+    # Non-list chips payload must not crash next_turn().
+    llm = FakeLLM([json.dumps({
+        "action": "ask", "prompt": "Vibe?", "subtext": "",
+        "chips": "not a list", "multi": True, "allow_free_text": True,
+    })])
+    out = wizard.next_turn(WizardState(turns=[], turn_count=0), _ctx(llm))
+    assert out["action"] == "ask"
+    assert out["chips"] == []
+
+
+def test_wizard_keeps_only_valid_chips():
+    llm = FakeLLM([json.dumps({
+        "action": "ask", "prompt": "Vibe?", "subtext": "",
+        "chips": [{"label": "Light", "value": "light"}, "junk", {"label": "no value"}],
+        "multi": True, "allow_free_text": True,
+    })])
+    out = wizard.next_turn(WizardState(turns=[], turn_count=0), _ctx(llm))
+    assert out["chips"] == [{"label": "Light", "value": "light"}]
+
+
+def test_wizard_state_rejects_oversized_payload():
+    huge = json.dumps({
+        "turns": [{"prompt": "x" * 100} for _ in range(1000)],
+        "turn_count": 1000,
+    })
+    state = wizard.WizardState.from_json(huge)
+    assert state.turns == []
+    assert state.turn_count == 0

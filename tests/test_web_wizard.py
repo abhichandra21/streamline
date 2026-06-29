@@ -300,6 +300,16 @@ def test_wizard_refine_excludes_shown_titles_as_json(client):
     assert "B Show" in exclude
 
 
+def test_refine_bad_intent_returns_error(client):
+    # A JSON value that is not an object must be rejected, not crash a job.
+    with patch.object(web.job_registry, "submit") as sub:
+        resp = client.post("/wizard/refine", data=_csrf_form(
+            intent="[1,2,3]", directive="shorter", summary="x"),
+            headers={"HX-Request": "true"})
+    assert resp.status_code == 400
+    sub.assert_not_called()
+
+
 def test_post_refine_starts_job(client):
     intent_json = json.dumps({
         "genres": [], "origin_countries": [], "languages": [], "mood_descriptors": [],

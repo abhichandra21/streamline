@@ -783,6 +783,17 @@ def _runtime_intent(content_type, max_runtime_minutes):
     )
 
 
+def test_safe_query_intent_falls_back_on_invalid_content_type():
+    from recommender.query_engine import _safe_query_intent
+    intent = _safe_query_intent({"content_type": "audiobook"})
+    assert intent.content_type == "both"
+
+
+def test_safe_query_intent_keeps_valid_content_type():
+    from recommender.query_engine import _safe_query_intent
+    assert _safe_query_intent({"content_type": "movie"}).content_type == "movie"
+
+
 def test_ask_filters_movies_over_max_runtime(monkeypatch):
     long_movie = make_meta("Long Movie", tmdb_id=1, content_type="movie")
     long_movie.runtime_minutes = 150
