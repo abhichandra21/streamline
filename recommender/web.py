@@ -677,25 +677,89 @@ def wizard_poll(job_id: str) -> str:
     if job.status == "error":
         return render_template("_wizard_results.html", results=None, error=job.error, query="")
     result = job.result
+    shown = [
+        {"title": i["title"], "content_type": i["content_type"], "tmdb_id": i.get("tmdb_id")}
+        for i in result["items"]
+    ]
     return render_template("_wizard_results.html", results=result["items"],
                            summary=result["summary"], error=None,
                            query=result["summary"],
                            intent_json=json.dumps(result["intent_dict"]),
                            context_note=result["context_note"],
-                           shown=", ".join(i["title"] for i in result["items"]))
+                           shown=json.dumps(shown))
+
+
+# Default runtime ceiling a "shorter" refine applies when none is set yet,
+# and the step it shaves off an existing ceiling (with a floor).
+_SHORTER_DEFAULT_RUNTIME = {"movie": 100, "tv": 45}
+_SHORTER_STEP_MINUTES = 30
+_SHORTER_FLOOR_MINUTES = 30
+
+
+def _apply_refinement(intent_dict: dict, context_note: str, directive: str) -> tuple[dict, str]:
+    """Translate a refine directive into structured intent + context changes.
+
+    Constraints (runtime) are updated on the intent where a clean mapping exists;
+    softer directives append a ranker hint to the context note. Deterministic so
+    refinement behaves like a command rather than a vague prose nudge.
+    """
+    intent = dict(intent_dict)
+    note = context_note or ""
+    d = (directive or "").strip().lower()
+
+    if d == "shorter":
+        current = intent.get("max_runtime_minutes")
+        if current:
+            intent["max_runtime_minutes"] = max(_SHORTER_FLOOR_MINUTES,
+                                                 current - _SHORTER_STEP_MINUTES)
+        else:
+            ct = intent.get("content_type", "both")
+            intent["max_runtime_minutes"] = _SHORTER_DEFAULT_RUNTIME.get(ct, 90)
+        note = f"{note}\nRefinement: keep it shorter than {intent['max_runtime_minutes']} minutes.".strip()
+    elif d == "lighter":
+        note = f"{note}\nRefinement: prefer lighter, easier-going picks.".strip()
+    elif d == "more obscure":
+        note = f"{note}\nRefinement: prefer more obscure, lesser-known picks over obvious ones.".strip()
+    elif d == "surprise me":
+        note = f"{note}\nRefinement: surprise me — keep the same constraints but add variety and novelty.".strip()
+    elif d:
+        note = f"{note}\nRefinement: {directive}.".strip()
+
+    return intent, note
+
+
+def _parse_shown(raw: str) -> list[str]:
+    """Extract shown titles to hard-exclude. Accepts a JSON list of items
+    (``{"title", "content_type", "tmdb_id"}``) or a legacy comma-joined string."""
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            titles = []
+            for item in data:
+                if isinstance(item, dict) and item.get("title"):
+                    titles.append(str(item["title"]).strip())
+                elif isinstance(item, str) and item.strip():
+                    titles.append(item.strip())
+            return titles
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return [t.strip() for t in raw.split(",") if t.strip()]
 
 
 @app.route("/wizard/refine", methods=["POST"])
-def wizard_refine() -> str:
-    intent_dict = json.loads(request.form.get("intent", "{}"))
+def wizard_refine():
+    try:
+        intent_dict = _safe_intent_dict(request.form.get("intent", ""))
+    except (ValueError, json.JSONDecodeError):
+        return "Invalid or missing refine payload.", 400
     base_note = request.form.get("context_note", "")
-    directive = request.form.get("directive", "")     # e.g. "make it lighter"
-    shown = request.form.get("shown", "")             # comma-joined titles
-    note = base_note
-    if directive:
-        note = f"{note}\nRefinement: {directive}."
+    directive = request.form.get("directive", "")     # e.g. "lighter"
+    intent_dict, note = _apply_refinement(intent_dict, base_note, directive)
     # Hard-exclude the titles already shown so a refine never repeats them.
-    exclude = [t.strip() for t in shown.split(",") if t.strip()]
+    exclude = _parse_shown(request.form.get("shown", ""))
     summary = request.form.get("summary", "your picks")
     job_id = job_registry.submit(
         _run_wizard_recommend_job, intent_dict, note, summary, exclude, label="wizard")

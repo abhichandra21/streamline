@@ -229,6 +229,50 @@ def test_searches_wizard_entry_renders_replay_form(client):
     assert b"/wizard/replay" in resp.data
 
 
+def test_wizard_refine_shorter_updates_runtime():
+    # No runtime yet: "shorter" sets one based on content type.
+    intent_dict = _full_intent_dict(content_type="movie", max_runtime_minutes=None)
+    new_intent, _ = web._apply_refinement(intent_dict, "low energy", "shorter")
+    assert new_intent["max_runtime_minutes"] is not None
+    assert new_intent["max_runtime_minutes"] <= 120
+
+    # Existing runtime: "shorter" reduces it with a sensible floor.
+    intent2 = _full_intent_dict(content_type="movie", max_runtime_minutes=120)
+    reduced, _ = web._apply_refinement(intent2, "", "shorter")
+    assert reduced["max_runtime_minutes"] < 120
+
+
+def test_wizard_refine_more_obscure_adjusts_context():
+    intent_dict = _full_intent_dict()
+    _, note = web._apply_refinement(intent_dict, "low energy", "more obscure")
+    assert "obscure" in note.lower() or "lesser" in note.lower()
+
+
+def test_wizard_refine_rejects_bad_intent_json(client):
+    with patch.object(web.job_registry, "submit") as sub:
+        resp = client.post("/wizard/refine", data=_csrf_form(
+            intent="{not valid", directive="shorter", summary="x"),
+            headers={"HX-Request": "true"})
+    assert resp.status_code == 400
+    sub.assert_not_called()
+
+
+def test_wizard_refine_excludes_shown_titles_as_json(client):
+    intent_json = json.dumps(_full_intent_dict())
+    shown = json.dumps([
+        {"title": "A Movie", "content_type": "movie", "tmdb_id": 1},
+        {"title": "B Show", "content_type": "tv", "tmdb_id": 2},
+    ])
+    with patch.object(web.job_registry, "submit", return_value="job-r") as sub:
+        resp = client.post("/wizard/refine", data=_csrf_form(
+            intent=intent_json, directive="surprise me", shown=shown, summary="x"),
+            headers={"HX-Request": "true"})
+    assert resp.status_code == 200
+    exclude = sub.call_args.args[4]
+    assert "A Movie" in exclude
+    assert "B Show" in exclude
+
+
 def test_post_refine_starts_job(client):
     intent_json = json.dumps({
         "genres": [], "origin_countries": [], "languages": [], "mood_descriptors": [],
