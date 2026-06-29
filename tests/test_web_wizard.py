@@ -110,6 +110,33 @@ def test_question_renders_checkbox_for_multi_select(client):
     assert b'type="checkbox"' in resp.data
 
 
+def test_wizard_shell_advertises_short_flow(client):
+    resp = client.get("/wizard")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "Usually 3-4" in body
+    assert "stop and see picks at any point" in body
+
+
+def test_wizard_progress_does_not_use_max_as_expected_count(client):
+    import re
+    import config as cfg
+    fake_turn = {"action": "ask", "prompt": "Q?", "subtext": "",
+                 "chips": [{"label": "A", "value": "a"}], "multi": False,
+                 "allow_free_text": False}
+    with patch.object(cfg, "WIZARD_MAX_QUESTIONS", 8), \
+         patch.object(web.wizard, "next_turn", return_value=fake_turn), \
+         patch.object(web, "_get_job_context"):
+        resp = client.post("/wizard/next", data=_csrf_form(
+            state=json.dumps({"turns": [], "turn_count": 0})),
+            headers={"HX-Request": "true"})
+    body = resp.data.decode()
+    m = re.search(r'wiz-progress.*?>(.*?)</div>', body, re.S)
+    segments = m.group(1).count("<span") if m else 0
+    # The progress visual reflects an expected short flow, not one dot per cap.
+    assert 0 < segments < 8
+
+
 def _full_intent_dict(**overrides):
     base = {
         "genres": [], "origin_countries": [], "languages": [], "mood_descriptors": [],

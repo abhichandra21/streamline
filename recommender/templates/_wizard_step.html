@@ -11,8 +11,11 @@
 {% else %}
 <form hx-post="/wizard/next" hx-target="#wizard-stage" hx-swap="innerHTML"
       hx-indicator="#wiz-next-spinner" hx-disabled-elt="find button">
+  {# Progress reflects the expected short flow (3-4 questions), growing if the
+     conversation runs longer — never one dot per the hard cap. #}
+  {% set progress_segments = [question_number or 1, 4] | max %}
   <div class="wiz-progress" aria-hidden="true">
-    {% for i in range(max_questions or 4) %}
+    {% for i in range(progress_segments) %}
     <span class="{{ 'filled' if i < question_number else '' }}"></span>
     {% endfor %}
   </div>
