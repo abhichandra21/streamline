@@ -839,3 +839,62 @@ def test_ask_handles_unknown_runtime_conservatively(monkeypatch):
         monkeypatch, [unknown], _runtime_intent("movie", 90))
 
     assert "Unknown Runtime" in titles
+
+
+def test_ask_relaxes_runtime_when_all_candidates_exceed_max(monkeypatch):
+    # "movie under an hour" would otherwise drop every feature film. Rather than
+    # return nothing, keep the pool so the user still sees the closest matches.
+    long_one = make_meta("Long One", tmdb_id=1, content_type="movie")
+    long_one.runtime_minutes = 130
+    long_two = make_meta("Long Two", tmdb_id=2, content_type="movie")
+    long_two.runtime_minutes = 140
+
+    titles = _run_ask_capturing_enriched(
+        monkeypatch, [long_one, long_two], _runtime_intent("movie", 60))
+
+    assert set(titles) == {"Long One", "Long Two"}
+
+
+def test_ask_runtime_fallback_adds_ranker_hint(monkeypatch):
+    import recommender.query_engine as qe
+
+    def _no_parse(*a, **k):
+        raise AssertionError("parse_intent must not run with intent_override")
+    monkeypatch.setattr(qe, "parse_intent", _no_parse)
+
+    captured = {}
+    monkeypatch.setattr(qe, "enrich_batch", lambda *a, **k: {})
+
+    def fake_rank(*args, **kwargs):
+        captured["context_note"] = kwargs.get("context_note")
+        return []
+    monkeypatch.setattr(qe, "rank_candidates", fake_rank)
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    long_movie = make_meta("Long Only", tmdb_id=1, content_type="movie")
+    long_movie.runtime_minutes = 130
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return [long_movie]
+        def get_metadata(self, title, ct):
+            return None
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return "[]"
+
+    ctx = qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    qe.ask("q", ctx, intent_override=_runtime_intent("movie", 60),
+           context_note="low energy")
+
+    note = (captured["context_note"] or "").lower()
+    assert "runtime" in note
+    assert "low energy" in note   # original context preserved

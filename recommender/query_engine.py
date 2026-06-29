@@ -491,7 +491,6 @@ def _candidate_allowed(
     candidate: TmdbMetadata,
     ctx: "RecommendContext",
     extra_excludes: set[str],
-    max_runtime_minutes: int | None = None,
 ) -> bool:
     if ctx.watch_index.is_watched(candidate):
         return False
@@ -505,14 +504,23 @@ def _candidate_allowed(
         return False
     if config.MIN_YEAR > 0 and candidate.release_year and candidate.release_year < config.MIN_YEAR:
         return False
-    # Runtime is a hard filter when known. For TV, runtime_minutes is the episode
-    # runtime, so "under an hour" matches a 45-minute episode. Unknown runtime
-    # cannot be safely filtered, so those candidates are kept.
-    runtime_ceiling = _optional_positive_int(max_runtime_minutes)
-    candidate_runtime = _optional_positive_int(candidate.runtime_minutes)
-    if runtime_ceiling and candidate_runtime and candidate_runtime > runtime_ceiling:
-        return False
     return True
+
+
+def _within_runtime(candidate: TmdbMetadata, max_runtime_minutes: int | None) -> bool:
+    """True if the candidate fits the runtime ceiling.
+
+    Unknown runtime always passes — it cannot be safely filtered. For TV,
+    runtime_minutes is the episode runtime, so "under an hour" matches a
+    45-minute episode.
+    """
+    ceiling = _optional_positive_int(max_runtime_minutes)
+    if not ceiling:
+        return True
+    candidate_runtime = _optional_positive_int(candidate.runtime_minutes)
+    if not candidate_runtime:
+        return True
+    return candidate_runtime <= ceiling
 
 
 def _append_candidate(
@@ -521,12 +529,11 @@ def _append_candidate(
     candidate: TmdbMetadata,
     ctx: "RecommendContext",
     extra_excludes: set[str],
-    max_runtime_minutes: int | None = None,
 ) -> bool:
     key = (candidate.content_type, candidate.tmdb_id)
     if key in seen_ids:
         return False
-    if not _candidate_allowed(candidate, ctx, extra_excludes, max_runtime_minutes):
+    if not _candidate_allowed(candidate, ctx, extra_excludes):
         return False
     candidates.append(candidate)
     seen_ids.add(key)
@@ -617,8 +624,7 @@ def ask(
     pre_filter = len(candidates)
     filtered_candidates: list[TmdbMetadata] = []
     for candidate in candidates:
-        _append_candidate(filtered_candidates, seen_ids, candidate, ctx, extra_excludes,
-                          intent.max_runtime_minutes)
+        _append_candidate(filtered_candidates, seen_ids, candidate, ctx, extra_excludes)
     candidates = filtered_candidates
     log.debug("Candidate filters: %d -> %d candidates (%d excluded)",
               pre_filter, len(candidates), pre_filter - len(candidates))
@@ -636,8 +642,7 @@ def ask(
                     size=30,
                 )
                 for candidate in related:
-                    if _append_candidate(candidates, seen_ids, candidate, ctx, extra_excludes,
-                                         intent.max_runtime_minutes):
+                    if _append_candidate(candidates, seen_ids, candidate, ctx, extra_excludes):
                         related_added += 1
         log.debug("TMDB related titles added %d new candidates", related_added)
 
@@ -651,9 +656,27 @@ def ask(
         for ct in content_types:
             meta = ctx.tmdb_client.get_metadata(title, ct)
             if meta and meta.content_type == ct and _append_candidate(
-                    candidates, seen_ids, meta, ctx, extra_excludes, intent.max_runtime_minutes):
+                    candidates, seen_ids, meta, ctx, extra_excludes):
                 suggestion_count += 1
     log.debug("LLM suggestions added %d new candidates", suggestion_count)
+
+    # Runtime is a hard filter when known, applied once over the whole pool so a
+    # fallback is possible. If every candidate with a known runtime exceeds the
+    # ceiling (e.g. "movie under an hour" — feature films are rarely that short),
+    # a strict filter would empty the pool; instead keep it and downgrade runtime
+    # to a ranking signal so the user still sees the closest, shortest matches.
+    if intent.max_runtime_minutes and candidates:
+        within = [c for c in candidates if _within_runtime(c, intent.max_runtime_minutes)]
+        if within:
+            candidates = within
+        else:
+            log.debug("Runtime ceiling %d emptied the pool; relaxing to a ranking signal",
+                      intent.max_runtime_minutes)
+            context_note = (
+                (context_note or "")
+                + f"\nRuntime limit ({intent.max_runtime_minutes} min) was too restrictive; "
+                  "prefer the shortest strong matches and note if a pick runs longer."
+            ).strip()
 
     if log.isEnabledFor(logging.DEBUG) and candidates:
         log.debug("Final candidate pool (%d): %s",

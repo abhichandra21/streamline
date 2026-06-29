@@ -122,6 +122,14 @@ def test_wizard_prompt_maps_time_to_max_runtime():
     assert "90" in low
 
 
+def test_wizard_prompt_steers_short_time_away_from_movie_only():
+    prompt = wizard._prompt(WizardState(turns=[], turn_count=0), "profile", force_finish=False)
+    low = prompt.lower()
+    # Very-short answers should prefer tv/either, since feature films are rarely
+    # under an hour — a movie-only short request would otherwise return nothing.
+    assert "feature films are rarely" in low
+
+
 def test_wizard_ignores_malformed_chips():
     # Non-list chips payload must not crash next_turn().
     llm = FakeLLM([json.dumps({
