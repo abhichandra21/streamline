@@ -729,3 +729,90 @@ def test_ask_with_intent_override_skips_parse_intent(monkeypatch):
     results = query_engine.ask("ignored", ctx, intent_override=intent,
                                context_note="low energy")
     assert results == []   # no candidates -> empty, but parse_intent never ran
+
+
+def _run_ask_capturing_enriched(monkeypatch, candidates, intent):
+    """Run ask() with intent_override and return the titles that survived filtering.
+
+    Captures the candidate pool handed to enrichment, which is the set of titles
+    that passed candidate eligibility (including any runtime filter).
+    """
+    import recommender.query_engine as qe
+
+    def _no_parse(*a, **k):
+        raise AssertionError("parse_intent must not run with intent_override")
+    monkeypatch.setattr(qe, "parse_intent", _no_parse)
+
+    captured = {}
+
+    def fake_enrich(meta_dict, cache_dir, client):
+        captured["titles"] = list(meta_dict.keys())
+        return {}
+    monkeypatch.setattr(qe, "enrich_batch", fake_enrich)
+    monkeypatch.setattr(qe, "rank_candidates", lambda *a, **k: [])
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return list(candidates)
+        def get_metadata(self, title, ct):
+            return None
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return "[]"
+
+    ctx = qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    qe.ask("q", ctx, intent_override=intent)
+    return captured.get("titles", [])
+
+
+def _runtime_intent(content_type, max_runtime_minutes):
+    return QueryIntent(
+        genres=["drama"], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=[], max_runtime_minutes=max_runtime_minutes, year_from=None,
+        year_to=None, unwatched_only=True, special_intent=None,
+        content_type=content_type, top_n=5, platforms=[],
+    )
+
+
+def test_ask_filters_movies_over_max_runtime(monkeypatch):
+    long_movie = make_meta("Long Movie", tmdb_id=1, content_type="movie")
+    long_movie.runtime_minutes = 150
+    short_movie = make_meta("Short Movie", tmdb_id=2, content_type="movie")
+    short_movie.runtime_minutes = 80
+
+    titles = _run_ask_capturing_enriched(
+        monkeypatch, [long_movie, short_movie], _runtime_intent("movie", 90))
+
+    assert "Short Movie" in titles
+    assert "Long Movie" not in titles
+
+
+def test_ask_allows_tv_episode_under_max_runtime(monkeypatch):
+    # TmdbMetadata.runtime_minutes for TV is episode runtime, not series length.
+    episode = make_meta("Half Hour Show", tmdb_id=3, content_type="tv")
+    episode.runtime_minutes = 45
+
+    titles = _run_ask_capturing_enriched(
+        monkeypatch, [episode], _runtime_intent("tv", 60))
+
+    assert "Half Hour Show" in titles
+
+
+def test_ask_handles_unknown_runtime_conservatively(monkeypatch):
+    # Unknown runtime cannot be safely filtered; keep the candidate.
+    unknown = make_meta("Unknown Runtime", tmdb_id=4, content_type="movie")
+    unknown.runtime_minutes = None
+
+    titles = _run_ask_capturing_enriched(
+        monkeypatch, [unknown], _runtime_intent("movie", 90))
+
+    assert "Unknown Runtime" in titles

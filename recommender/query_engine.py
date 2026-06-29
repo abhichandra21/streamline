@@ -478,6 +478,7 @@ def _candidate_allowed(
     candidate: TmdbMetadata,
     ctx: "RecommendContext",
     extra_excludes: set[str],
+    max_runtime_minutes: int | None = None,
 ) -> bool:
     if ctx.watch_index.is_watched(candidate):
         return False
@@ -491,6 +492,13 @@ def _candidate_allowed(
         return False
     if config.MIN_YEAR > 0 and candidate.release_year and candidate.release_year < config.MIN_YEAR:
         return False
+    # Runtime is a hard filter when known. For TV, runtime_minutes is the episode
+    # runtime, so "under an hour" matches a 45-minute episode. Unknown runtime
+    # cannot be safely filtered, so those candidates are kept.
+    if (max_runtime_minutes
+            and candidate.runtime_minutes
+            and candidate.runtime_minutes > max_runtime_minutes):
+        return False
     return True
 
 
@@ -500,11 +508,12 @@ def _append_candidate(
     candidate: TmdbMetadata,
     ctx: "RecommendContext",
     extra_excludes: set[str],
+    max_runtime_minutes: int | None = None,
 ) -> bool:
     key = (candidate.content_type, candidate.tmdb_id)
     if key in seen_ids:
         return False
-    if not _candidate_allowed(candidate, ctx, extra_excludes):
+    if not _candidate_allowed(candidate, ctx, extra_excludes, max_runtime_minutes):
         return False
     candidates.append(candidate)
     seen_ids.add(key)
@@ -595,7 +604,8 @@ def ask(
     pre_filter = len(candidates)
     filtered_candidates: list[TmdbMetadata] = []
     for candidate in candidates:
-        _append_candidate(filtered_candidates, seen_ids, candidate, ctx, extra_excludes)
+        _append_candidate(filtered_candidates, seen_ids, candidate, ctx, extra_excludes,
+                          intent.max_runtime_minutes)
     candidates = filtered_candidates
     log.debug("Candidate filters: %d -> %d candidates (%d excluded)",
               pre_filter, len(candidates), pre_filter - len(candidates))
@@ -613,7 +623,8 @@ def ask(
                     size=30,
                 )
                 for candidate in related:
-                    if _append_candidate(candidates, seen_ids, candidate, ctx, extra_excludes):
+                    if _append_candidate(candidates, seen_ids, candidate, ctx, extra_excludes,
+                                         intent.max_runtime_minutes):
                         related_added += 1
         log.debug("TMDB related titles added %d new candidates", related_added)
 
@@ -626,7 +637,8 @@ def ask(
     for title in suggestions:
         for ct in content_types:
             meta = ctx.tmdb_client.get_metadata(title, ct)
-            if meta and meta.content_type == ct and _append_candidate(candidates, seen_ids, meta, ctx, extra_excludes):
+            if meta and meta.content_type == ct and _append_candidate(
+                    candidates, seen_ids, meta, ctx, extra_excludes, intent.max_runtime_minutes):
                 suggestion_count += 1
     log.debug("LLM suggestions added %d new candidates", suggestion_count)
 
