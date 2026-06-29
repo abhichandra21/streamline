@@ -172,6 +172,63 @@ def test_searches_fall_back_to_query_for_old_entries(client):
     assert b"good british crime drama" in resp.data
 
 
+def test_wizard_history_replay_uses_stored_intent(client):
+    intent_dict = _full_intent_dict(max_runtime_minutes=90, content_type="movie")
+    with patch.object(web.job_registry, "submit", return_value="job-replay") as sub:
+        resp = client.post("/wizard/replay", data=_csrf_form(
+            intent=json.dumps(intent_dict),
+            context_note="low energy",
+            summary="something short and light",
+        ), headers={"HX-Request": "true"})
+    assert resp.status_code == 200
+    assert b"job-replay" in resp.data
+    sub.assert_called_once()
+    args = sub.call_args.args
+    assert args[0] is web._run_wizard_recommend_job
+    assert args[1] == intent_dict
+    assert args[2] == "low energy"
+    assert args[3] == "something short and light"
+
+
+def test_wizard_history_replay_rejects_missing_payload(client):
+    with patch.object(web.job_registry, "submit") as sub:
+        resp = client.post("/wizard/replay", data=_csrf_form(
+            context_note="low energy", summary="x",
+        ), headers={"HX-Request": "true"})
+    assert resp.status_code == 400
+    sub.assert_not_called()
+
+
+def test_classic_history_research_still_uses_query(client):
+    entries = [{
+        "timestamp": "2026-06-29T12:00:00+00:00",
+        "query": "good british crime drama",
+        "provider": "fake", "results": [], "usage": "",
+    }]
+    with patch.object(web.query_history, "load", return_value=entries):
+        resp = client.get("/searches")
+    assert resp.status_code == 200
+    assert b"/?q=" in resp.data
+    assert b"/wizard/replay" not in resp.data
+
+
+def test_searches_wizard_entry_renders_replay_form(client):
+    entries = [{
+        "timestamp": "2026-06-29T12:00:00+00:00",
+        "query": "mood match: something short and light",
+        "label": "Mood Match - short and light",
+        "source": "wizard",
+        "summary": "something short and light",
+        "intent_dict": _full_intent_dict(content_type="movie"),
+        "context_note": "low energy",
+        "provider": "fake", "results": [], "usage": "",
+    }]
+    with patch.object(web.query_history, "load", return_value=entries):
+        resp = client.get("/searches")
+    assert resp.status_code == 200
+    assert b"/wizard/replay" in resp.data
+
+
 def test_post_refine_starts_job(client):
     intent_json = json.dumps({
         "genres": [], "origin_countries": [], "languages": [], "mood_descriptors": [],

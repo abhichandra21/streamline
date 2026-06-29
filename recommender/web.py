@@ -11,6 +11,7 @@ import secrets
 import sys
 import threading
 from copy import copy, deepcopy
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,7 +29,7 @@ from recommender.jobs import registry as job_registry
 from recommender.llm import create_client
 from recommender.log import setup_logging
 from recommender.enricher import enrichment_key_from_parts
-from recommender.query_engine import RecommendContext, ask
+from recommender.query_engine import RecommendContext, ask, _safe_query_intent
 from recommender import wizard
 from recommender.structured_profile import load_structured_profile
 from recommender.tmdb_client import TmdbClient
@@ -158,6 +159,25 @@ def _wizard_label(summary: str, max_len: int = 60) -> str:
     if len(label) > max_len:
         label = label[: max_len - 3].rstrip() + "..."
     return label
+
+
+def _safe_intent_dict(raw) -> dict:
+    """Parse posted intent into a normalized full intent dict.
+
+    Accepts a JSON string or an already-parsed dict. Routes untrusted form data
+    through ``_safe_query_intent`` so missing/extra fields are corrected and a
+    full, valid intent dict is returned. Raises ``ValueError`` when the payload
+    is absent or not a JSON object.
+    """
+    if isinstance(raw, dict):
+        data = raw
+    else:
+        if not raw or not str(raw).strip():
+            raise ValueError("missing intent payload")
+        data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("intent payload must be an object")
+    return asdict(_safe_query_intent(data))
 
 
 def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
@@ -628,7 +648,6 @@ def wizard_next() -> str:
                                state_json=state.to_json())
 
     if turn["action"] == "recommend":
-        from dataclasses import asdict
         intent_dict = asdict(turn["intent"])
         job_id = job_registry.submit(
             _run_wizard_recommend_job, intent_dict, turn["context_note"],
@@ -683,6 +702,23 @@ def wizard_refine() -> str:
     return render_template("_polling.html", job_id=job_id,
                            poll_url=f"/wizard/jobs/{job_id}/poll",
                            poll_target="#wizard-stage")
+
+
+@app.route("/wizard/replay", methods=["POST"])
+def wizard_replay():
+    """Replay a stored wizard run from its structured intent, not its recap text."""
+    try:
+        intent_dict = _safe_intent_dict(request.form.get("intent", ""))
+    except (ValueError, json.JSONDecodeError):
+        return "Invalid or missing replay payload.", 400
+    context_note = request.form.get("context_note", "")
+    summary = request.form.get("summary", "your picks")
+    job_id = job_registry.submit(
+        _run_wizard_recommend_job, intent_dict, context_note, summary, label="wizard")
+    # Full-page navigation from the Searches page: render the wizard shell with
+    # the polling stage already active so results land in #wizard-stage.
+    return render_template("wizard.html", max_questions=config.WIZARD_MAX_QUESTIONS,
+                           replay_job_id=job_id)
 
 
 @app.route("/title/<int:tmdb_id>")

@@ -66,7 +66,19 @@
         </div>
       </div>
       <div class="search-actions" style="display:flex; gap:0.4rem; flex-shrink:0;" onclick="event.stopPropagation();">
+        {% if entry.source == "wizard" and entry.intent_dict %}
+        <form action="/wizard/replay" method="post" style="margin:0; display:inline;">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="intent" value="{{ entry.intent_dict | tojson }}">
+          <input type="hidden" name="context_note" value="{{ entry.context_note or '' }}">
+          <input type="hidden" name="summary" value="{{ entry.summary or entry.query }}">
+          <button type="submit" class="btn-ghost" style="padding:4px 12px; font-size:0.55rem; cursor:pointer;">Replay</button>
+        </form>
+        {% elif entry.source == "wizard" %}
+        <span class="btn-ghost" style="padding:4px 12px; font-size:0.55rem; color:var(--muted); cursor:default;" title="No saved answers to replay">Open</span>
+        {% else %}
         <a href="/?q={{ entry.query|urlencode }}" class="btn-ghost" style="padding:4px 12px; font-size:0.55rem; text-decoration:none;">Re-search</a>
+        {% endif %}
         <button
           class="btn-ghost delete-trigger"
           style="padding:4px 10px; font-size:0.55rem; cursor:pointer; color:var(--muted);"

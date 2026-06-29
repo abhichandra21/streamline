@@ -7,6 +7,11 @@
 </div>
 
 <div id="wizard-stage">
+  {% if replay_job_id %}
+  {% with job_id = replay_job_id, poll_url = "/wizard/jobs/" ~ replay_job_id ~ "/poll", poll_target = "#wizard-stage" %}
+  {% include "_polling.html" %}
+  {% endwith %}
+  {% else %}
   <div style="padding:1.5rem 1.6rem; background:var(--surface); border:1px solid var(--border); border-radius:8px;">
     <p style="color:var(--body); margin-bottom:0.75rem;">
       Can't decide what to watch? Mood Match asks a few quick questions about your
@@ -30,5 +35,6 @@
       </span>
     </div>
   </div>
+  {% endif %}
 </div>
 {% endblock %}
