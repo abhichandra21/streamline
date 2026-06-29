@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from collections import Counter
 from dataclasses import dataclass, field
 
 import config
@@ -128,7 +130,66 @@ def _structured_preferences_block(state: WizardState) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def _prompt(state: WizardState, profile: str, force_finish: bool) -> str:
+# TMDB keywords that are production/technical noise, not watchable themes.
+_KEYWORD_STOPLIST = frozenset({
+    "aftercreditsstinger", "duringcreditsstinger", "based on novel or book",
+    "woman director", "sequel", "based on comic", "based on young adult novel",
+})
+
+# Memoized per (cache_dir, history size): the user's real genres/keywords change
+# only on a rebuild, so aggregating the TMDB cache once per process is enough.
+_TASTE_TAGS_CACHE: dict = {}
+
+
+def _taste_tags(ctx, top_genres: int = 6, top_keywords: int = 10) -> str:
+    """Build a chip vocabulary from the user's real TMDB genres + keywords.
+
+    Reads the cached TMDB metadata for every watched title and returns the most
+    common genres and keywords so the wizard offers concrete, recognizable
+    options instead of invented vibes. Returns "" when no data is available.
+    """
+    wi = getattr(ctx, "watch_index", None)
+    tmdb = getattr(ctx, "tmdb_client", None)
+    if wi is None or tmdb is None:
+        return ""
+    entries = getattr(wi, "entries", []) or []
+    key = (getattr(ctx, "cache_dir", ""), len(entries))
+    if key in _TASTE_TAGS_CACHE:
+        return _TASTE_TAGS_CACHE[key]
+
+    genres, keywords = Counter(), Counter()
+    for e in entries:
+        tmdb_id = e.get("tmdb_id")
+        if not tmdb_id:
+            continue
+        try:
+            meta = tmdb.get_cached_by_id(tmdb_id, e.get("content_type", "movie"))
+        except Exception:
+            meta = None
+        if not meta:
+            continue
+        genres.update(g for g in (meta.genres or []) if g)
+        keywords.update(k for k in (meta.keywords or [])
+                        if k and k.lower() not in _KEYWORD_STOPLIST)
+
+    top_g = [g for g, _ in genres.most_common(top_genres)]
+    top_k = [k for k, _ in keywords.most_common(top_keywords)]
+    if not top_g and not top_k:
+        block = ""
+    else:
+        block = (
+            "THE USER'S REAL CATEGORIES (pulled from their watch history — use THESE as the "
+            "chip options for any genre or theme question; never invent vague vibes):\n"
+            + (f"Genres they watch most: {', '.join(top_g)}\n" if top_g else "")
+            + (f"Themes/tags they watch most: {', '.join(top_k)}\n" if top_k else "")
+            + "Pick the 3-4 that fit the moment; you may add a \"Surprise me\" or \"Branch "
+              "out\" chip. Keep chip labels short and plain.\n\n"
+        )
+    _TASTE_TAGS_CACHE[key] = block
+    return block
+
+
+def _prompt(state: WizardState, profile: str, force_finish: bool, tags: str = "") -> str:
     cap = config.WIZARD_MAX_QUESTIONS
     finish_clause = (
         "You MUST finish now: return the recommend action. Do not ask another question.\n"
@@ -137,17 +198,23 @@ def _prompt(state: WizardState, profile: str, force_finish: bool) -> str:
         "Ask another only if it would materially change the recommendation; otherwise finish.\n"
     )
     return (
-        "You are a film and TV guide helping someone who cannot decide what to watch. "
-        "Use their taste profile as a PRIOR: do not ask what it already implies; probe only "
-        "tonight's context (mood, energy, time available, alone or with others, novelty vs comfort).\n\n"
-        "Resolve CONTENT TYPE early — whether they want a movie, a series, or either. Ask it "
-        "as one of the first questions unless an earlier answer already makes it obvious. "
-        "Map the answer to intent.content_type ('movie', 'tv', or 'both'). Only infer content "
-        "type from a time answer when it is strong (e.g. 'one episode' implies a series); "
-        "otherwise ask.\n"
-        "If they want something very short (around an hour or less), prefer content_type 'tv' "
-        "or 'both' (a single episode or short special), NOT 'movie' alone — feature films are "
-        "rarely that short, so a movie-only short request usually finds nothing.\n\n"
+        "You help the user pick something to watch tonight, and you know their whole viewing "
+        "history (the taste profile below). Be warm and engaging — talk like a friend who "
+        "knows their taste — but stay clear and easy to read.\n\n"
+        "Each turn, ask ONE question. A sentence or two of friendly, specific setup is good; "
+        "keep it tight and conversational, never a paragraph of flowery prose.\n"
+        "RULES:\n"
+        "- Plain, everyday words. No markdown, no asterisks or styling characters, no purple "
+        "metaphors (never say things like 'your heaviest gear').\n"
+        "- You may mention ONE show or movie they have watched if it sharpens the question; "
+        "do not list several titles.\n"
+        "- Build on their last answer and what their taste shows.\n\n"
+        f"{tags}"
+        "ANSWER CHIPS: 3-4 options, each 1-4 plain words a normal person instantly understands "
+        "— concrete, not vague. GOOD: \"Crime\", \"Easy watch\", \"Something gripping\", "
+        "\"Make me laugh\". BAD (never): \"Smart but easy\", \"Grip me\", \"Warm and safe\".\n\n"
+        "CONTENT TYPE is already chosen (see structured preferences) — never re-ask it. Ask "
+        "about tonight: mood, energy, how much time, genre or theme, comfort vs something new.\n\n"
         f"TASTE PROFILE:\n{profile}\n\n"
         f"{_structured_preferences_block(state)}"
         f"ANSWERS SO FAR:\n{_qa_so_far(state)}\n\n"
@@ -155,30 +222,26 @@ def _prompt(state: WizardState, profile: str, force_finish: bool) -> str:
         "Return ONLY valid JSON, exactly one of:\n"
         '1) {"action":"ask","prompt":str,"subtext":str,'
         '"chips":[{"label":str,"value":str}],"multi":bool,"allow_free_text":bool}\n'
-        "   3-5 tappable chips. Chip labels MUST be short, plain, everyday words "
-        "(1-3 words, no jargon or fancy phrasing) — e.g. \"Funny\", \"Tense\", \"Easy watch\", "
-        "\"Under an hour\". Choose the selection mode per question: use SINGLE-SELECT "
-        "(multi=false) for mutually exclusive choices like content type, time available, or "
-        "alone vs with others; use MULTI-SELECT (multi=true) only for additive dimensions like "
-        "mood or themes where the user may be open to several. Phrase the question to match the "
-        "mode you choose.\n"
+        "   3-4 chips as above; subtext is optional and, if present, ONE short plain sentence. "
+        "Use SINGLE-SELECT (multi=false) for either/or questions; MULTI-SELECT (multi=true) "
+        "when several can apply. Always set allow_free_text=true.\n"
         '2) {"action":"recommend","summary":str,'
         '"intent":{"genres":[],"origin_countries":[],"languages":[],"mood_descriptors":[],'
         '"similar_to":[],"max_runtime_minutes":null,"year_from":null,"year_to":null,'
         '"unwatched_only":true,"special_intent":null,"content_type":"both","top_n":5,'
         '"platforms":[]},"context_note":str}\n'
-        '   "summary" is a one-line recap ("something light, short, a little offbeat"). '
-        '"context_note" carries soft signals (runtime/energy/company) for ranking.\n'
+        '   "summary" is a short plain recap ("something light and funny, around an hour"). '
+        '"context_note" carries soft signals (runtime/energy/company) and which watched titles '
+        "this should feel like, for the ranker.\n"
         "   When the user gave a time window, set intent.max_runtime_minutes (an integer): "
         "\"under an hour\" -> 60, \"around 90 minutes\" -> 90, \"a couple of hours\" -> 120. "
-        "For \"one episode\", keep content_type 'tv' and set a reasonable episode max "
-        "(e.g. 60). Carry time in max_runtime_minutes, not only in context_note.\n"
+        "Carry time in max_runtime_minutes, not only in context_note.\n"
     )
 
 
-def _finalize(state: WizardState, profile: str, llm) -> dict:
+def _finalize(state: WizardState, profile: str, llm, tags: str = "") -> dict:
     """Force a recommend turn. Used on cap hit or early-exit."""
-    raw = llm.generate(_prompt(state, profile, force_finish=True),
+    raw = llm.generate(_prompt(state, profile, force_finish=True, tags=tags),
                         role="reason", max_tokens=config.WIZARD_MAX_TOKENS,
                         timeout=config.TIMEOUT_REASON)
     try:
@@ -199,22 +262,23 @@ def _finalize(state: WizardState, profile: str, llm) -> dict:
 def next_turn(state: WizardState, ctx, force_finish: bool = False) -> dict:
     """Produce the next wizard turn: a question, or a finish signal with intent."""
     profile = ctx.taste_profile or ""
+    tags = _taste_tags(ctx)
     cap_hit = state.turn_count >= config.WIZARD_MAX_QUESTIONS
     if force_finish or cap_hit:
-        return _finalize(state, profile, ctx.llm)
+        return _finalize(state, profile, ctx.llm, tags)
 
-    raw = ctx.llm.generate(_prompt(state, profile, force_finish=False),
+    raw = ctx.llm.generate(_prompt(state, profile, force_finish=False, tags=tags),
                            role="reason", max_tokens=config.WIZARD_MAX_TOKENS,
                            timeout=config.TIMEOUT_REASON)
     try:
         data = _parse_json_response(raw)
     except (json.JSONDecodeError, ValueError, TypeError) as exc:
         log.warning("Malformed wizard turn, finalizing instead: %s", exc)
-        return _finalize(state, profile, ctx.llm)
+        return _finalize(state, profile, ctx.llm, tags)
 
     if not isinstance(data, dict):
         log.warning("Wizard turn returned non-object JSON, finalizing instead")
-        return _finalize(state, profile, ctx.llm)
+        return _finalize(state, profile, ctx.llm, tags)
 
     if data.get("action") == "recommend":
         return {
@@ -226,12 +290,20 @@ def next_turn(state: WizardState, ctx, force_finish: bool = False) -> dict:
 
     return {
         "action": "ask",
-        "prompt": data.get("prompt", "What are you in the mood for?"),
-        "subtext": data.get("subtext", ""),
+        "prompt": _plain(data.get("prompt", "What are you in the mood for?")),
+        "subtext": _plain(data.get("subtext", "")),
         "chips": _normalize_chips(data.get("chips")),
         "multi": bool(data.get("multi", False)),
         "allow_free_text": bool(data.get("allow_free_text", True)),
     }
+
+
+_MARKDOWN_CHARS = re.compile(r"[*_`#]+")
+
+
+def _plain(text: str) -> str:
+    """Strip markdown emphasis the model sometimes emits, so it never renders raw."""
+    return _MARKDOWN_CHARS.sub("", str(text or "")).strip()
 
 
 def _normalize_chips(raw) -> list[dict]:
@@ -242,5 +314,5 @@ def _normalize_chips(raw) -> list[dict]:
     for c in raw:
         if isinstance(c, dict) and c.get("value"):
             value = str(c["value"])
-            chips.append({"label": str(c.get("label") or value), "value": value})
+            chips.append({"label": _plain(c.get("label") or value), "value": value})
     return chips

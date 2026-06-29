@@ -86,14 +86,35 @@ def test_next_turn_array_response_falls_back_to_finalize():
     assert len(llm.calls) == 2
 
 
-def test_wizard_prompt_asks_to_resolve_content_type_early():
+def test_wizard_prompt_is_engaging_but_plain_and_markdown_free():
     prompt = wizard._prompt(WizardState(turns=[], turn_count=0), "profile", force_finish=False)
     low = prompt.lower()
-    assert "content type" in low
-    assert "movie" in low and "series" in low and "either" in low
-    assert "early" in low
-    # The wizard no longer forces every question to be multi-select.
-    assert "every question is multi-select" not in low
+    # Warm and engaging, grounded in the taste profile, but plain and never markdown.
+    assert "taste profile" in low
+    assert "engaging" in low
+    assert "plain" in low
+    assert "no markdown" in low
+
+
+def test_wizard_prompt_injects_taste_tag_vocabulary():
+    tags = "THE USER'S REAL CATEGORIES\nGenres they watch most: Crime, Thriller\n\n"
+    prompt = wizard._prompt(WizardState(turns=[], turn_count=0), "profile",
+                            force_finish=False, tags=tags)
+    assert "Genres they watch most: Crime, Thriller" in prompt
+
+
+def test_wizard_strips_markdown_from_question_and_chips():
+    llm = FakeLLM([json.dumps({
+        "action": "ask",
+        "prompt": "Closer to *Slow Horses* or _Encanto_ tonight?",
+        "subtext": "**Knowing** helps.",
+        "chips": [{"label": "*Gripping*", "value": "gripping"}],
+        "multi": False, "allow_free_text": True,
+    })])
+    out = wizard.next_turn(WizardState(turns=[], turn_count=0), _ctx(llm))
+    assert "*" not in out["prompt"] and "_" not in out["prompt"]
+    assert "*" not in out["subtext"]
+    assert out["chips"][0]["label"] == "Gripping"
 
 
 def test_wizard_prompt_explains_single_select_mode():
@@ -120,14 +141,6 @@ def test_wizard_prompt_maps_time_to_max_runtime():
     assert "max_runtime_minutes" in low
     assert "under an hour" in low
     assert "90" in low
-
-
-def test_wizard_prompt_steers_short_time_away_from_movie_only():
-    prompt = wizard._prompt(WizardState(turns=[], turn_count=0), "profile", force_finish=False)
-    low = prompt.lower()
-    # Very-short answers should prefer tv/either, since feature films are rarely
-    # under an hour — a movie-only short request would otherwise return nothing.
-    assert "feature films are rarely" in low
 
 
 def test_adaptive_prompt_includes_structured_preferences():

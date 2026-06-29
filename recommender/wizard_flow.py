@@ -320,7 +320,11 @@ def merge_intent_with_seed(llm_intent: QueryIntent, seed: dict) -> QueryIntent:
     """
     merged = asdict(llm_intent)
     merged["content_type"] = seed.get("content_type", merged.get("content_type", "both"))
-    merged["max_runtime_minutes"] = seed.get("max_runtime_minutes")
+    # Deterministic runtime wins only when one was actually captured; otherwise
+    # keep the runtime the LLM derived from the conversation (the seed only
+    # carries content type in the LLM-led flow).
+    if seed.get("max_runtime_minutes"):
+        merged["max_runtime_minutes"] = seed["max_runtime_minutes"]
     # Union the user's chosen tone with any adaptive moods so an explicit
     # selection is never dropped, order-stable and de-duplicated.
     unioned = list(dict.fromkeys(

@@ -58,111 +58,49 @@ def test_wizard_start_renders_deterministic_content_type_without_llm(client):
     next_turn.assert_not_called()
 
 
-def test_wizard_content_type_advances_to_time_window_without_llm(client):
-    with patch.object(web.wizard, "next_turn") as next_turn:
+def test_wizard_content_type_hands_off_to_llm(client):
+    # After the instant content-type tap, the adaptive LLM loop drives the
+    # next (taste-grounded) question.
+    fake_turn = {"action": "ask", "prompt": "Antihero or someone to root for?",
+                 "subtext": "Your profile leans morally-grey.",
+                 "chips": [{"label": "Antihero", "value": "antihero"}],
+                 "multi": False, "allow_free_text": True}
+    with patch.object(web.wizard, "next_turn", return_value=fake_turn) as next_turn, \
+         patch.object(web, "_get_job_context"):
         resp = client.post("/wizard/next", data=_csrf_form(
             state=json.dumps({"turns": [], "turn_count": 0, "step": "content_type"}),
             step="content_type", selected=["movie"],
         ), headers={"HX-Request": "true"})
     assert resp.status_code == 200
-    # Movie time choices, and still no LLM call.
-    assert b"Short" in resp.data
-    next_turn.assert_not_called()
+    next_turn.assert_called_once()
+    assert b"Antihero or someone to root for?" in resp.data
 
 
 def test_post_next_ask_branch_renders_question(client):
-    # The adaptive (LLM) question only fires when the user asks for one more.
+    # Answering an adaptive question continues the LLM-led loop.
     fake_turn = {"action": "ask", "prompt": "Vibe tonight?", "subtext": "",
                  "chips": [{"label": "Light", "value": "light"}],
                  "multi": True, "allow_free_text": True}
     with patch.object(web.wizard, "next_turn", return_value=fake_turn), \
          patch.object(web, "_get_job_context"):
         resp = client.post("/wizard/next", data=_csrf_form(
-            state=json.dumps({"turns": [], "turn_count": 0, "step": "review"}),
-            ask_more="1",
+            state=json.dumps({"turns": [], "turn_count": 0, "step": "adaptive",
+                              "answers": {"content_type": "movie"}}),
+            prompt="Antihero?", selected=["antihero"],
         ), headers={"HX-Request": "true"})
     assert resp.status_code == 200
     assert b"Vibe tonight?" in resp.data
     assert b"light" in resp.data
 
 
-def test_back_action_does_not_append_answer(client):
-    state = {"turns": [], "turn_count": 0, "step": "energy",
-             "answers": {"content_type": "movie", "time_window": "short_movie"}}
-    with patch.object(web.wizard, "next_turn") as next_turn:
-        resp = client.post("/wizard/next", data=_csrf_form(
-            state=json.dumps(state), step="energy", selected=["easy"], back="1"),
-            headers={"HX-Request": "true"})
-    assert resp.status_code == 200
-    next_turn.assert_not_called()
-    parser = _HiddenInputParser()
-    parser.feed(resp.data.decode())
-    new_state = json.loads(parser.hidden_inputs["state"])
-    assert new_state["step"] == "time_window"
-    assert new_state["turns"] == []
-    # The current question's selection was discarded, not stored.
-    assert new_state["answers"] == {"content_type": "movie", "time_window": "short_movie"}
-
-
-def test_back_renders_saved_answer_as_checked(client):
-    import re
-    state = {"turns": [], "turn_count": 0, "step": "energy",
-             "answers": {"content_type": "movie", "time_window": "short_movie"}}
-    with patch.object(web.wizard, "next_turn"):
-        resp = client.post("/wizard/next", data=_csrf_form(
-            state=json.dumps(state), back="1"),
-            headers={"HX-Request": "true"})
-    assert resp.status_code == 200
-    body = resp.data.decode()
-    # Back lands on time_window with the previously chosen option pre-checked.
-    assert re.search(r'value="short_movie"\s+checked', body)
-
-
-def test_edit_from_review_clears_dependent_answers(client):
-    state = {"turns": [], "turn_count": 0, "step": "review",
-             "answers": {"content_type": "movie", "time_window": "short_movie",
-                         "energy": "easy"}}
-    with patch.object(web.wizard, "next_turn") as next_turn:
-        resp = client.post("/wizard/next", data=_csrf_form(
-            state=json.dumps(state), edit_step="content_type"),
-            headers={"HX-Request": "true"})
-    assert resp.status_code == 200
-    next_turn.assert_not_called()
-    assert b"Movie" in resp.data
-    parser = _HiddenInputParser()
-    parser.feed(resp.data.decode())
-    new_state = json.loads(parser.hidden_inputs["state"])
-    assert new_state["step"] == "content_type"
-    assert new_state["answers"] == {}
-
-
-def test_review_renders_before_results_without_submitting(client):
-    # Answering the last deterministic question (tone) lands on review.
-    state = {"turns": [], "turn_count": 0, "step": "tone",
-             "answers": {"content_type": "movie", "time_window": "short_movie",
-                         "energy": "easy"}}
-    with patch.object(web.job_registry, "submit") as sub, \
-         patch.object(web.wizard, "next_turn") as next_turn:
-        resp = client.post("/wizard/next", data=_csrf_form(
-            state=json.dumps(state), step="tone", selected=["funny"]),
-            headers={"HX-Request": "true"})
-    assert resp.status_code == 200
-    body = resp.data
-    assert b"Show picks" in body
-    assert b"edit_step" in body
-    assert b"a short, easy movie with a funny tone" in body
-    sub.assert_not_called()
-    next_turn.assert_not_called()
-
-
-def test_finish_from_review_submits_structured_seed(client):
-    state = {"turns": [], "turn_count": 0, "step": "review",
-             "answers": {"content_type": "movie", "time_window": "short_movie",
-                         "energy": "easy", "tone": ["funny"]}}
+def test_finish_after_content_type_only_submits_seed(client):
+    # Bailing right after the content-type tap recommends from the seed alone,
+    # no LLM round-trip.
     with patch.object(web.job_registry, "submit", return_value="job-seed") as sub, \
          patch.object(web.wizard, "next_turn") as next_turn:
         resp = client.post("/wizard/next", data=_csrf_form(
-            state=json.dumps(state), finish="1"),
+            state=json.dumps({"turns": [], "turn_count": 0, "step": "content_type"}),
+            step="content_type", selected=["movie"], finish="1"),
             headers={"HX-Request": "true"})
     assert resp.status_code == 200
     assert b"job-seed" in resp.data
@@ -170,8 +108,6 @@ def test_finish_from_review_submits_structured_seed(client):
     args = sub.call_args.args
     assert args[0] is web._run_wizard_recommend_job
     assert args[1]["content_type"] == "movie"
-    assert args[1]["max_runtime_minutes"] == 95
-    assert args[1]["mood_descriptors"] == ["funny"]
 
 
 def test_post_next_recommend_branch_starts_job(client):
@@ -186,7 +122,8 @@ def test_post_next_recommend_branch_starts_job(client):
          patch.object(web, "_get_job_context"), \
          patch.object(web.job_registry, "submit", return_value="job-123") as sub:
         resp = client.post("/wizard/next", data=_csrf_form(
-            state=json.dumps({"turns": [], "turn_count": 1, "step": "adaptive"}),
+            state=json.dumps({"turns": [], "turn_count": 1, "step": "adaptive",
+                              "answers": {"content_type": "movie"}}),
             prompt="Vibe tonight?", selected=["light"], free_text="",
         ), headers={"HX-Request": "true"})
     assert resp.status_code == 200
@@ -223,11 +160,17 @@ def test_question_can_render_single_select_mode(client):
 
 
 def test_question_renders_checkbox_for_multi_select(client):
-    # The deterministic tone step is the multi-select question.
-    with patch.object(web, "_get_job_context"):
+    # A multi-select adaptive question renders checkboxes.
+    fake_turn = {"action": "ask", "prompt": "Which moods?", "subtext": "",
+                 "chips": [{"label": "Light", "value": "light"},
+                           {"label": "Tense", "value": "tense"}],
+                 "multi": True, "allow_free_text": False}
+    with patch.object(web.wizard, "next_turn", return_value=fake_turn), \
+         patch.object(web, "_get_job_context"):
         resp = client.post("/wizard/next", data=_csrf_form(
-            state=json.dumps({"turns": [], "turn_count": 0, "step": "tone",
-                              "answers": {"content_type": "movie"}})),
+            state=json.dumps({"turns": [], "turn_count": 0, "step": "adaptive",
+                              "answers": {"content_type": "movie"}}),
+            prompt="Antihero?", selected=["antihero"]),
             headers={"HX-Request": "true"})
     assert resp.status_code == 200
     assert b'type="checkbox"' in resp.data

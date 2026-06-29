@@ -623,11 +623,14 @@ def wizard_page() -> str:
 
 
 def _wizard_question_number(state: wizard.WizardState) -> int:
-    """Position used for the progress display (deterministic intake + adaptive)."""
-    if state.step in wizard_flow._DETERMINISTIC_ORDER:
-        return wizard_flow._DETERMINISTIC_ORDER.index(state.step) + 1
+    """Position used for the progress display.
+
+    Content type is question 1; each adaptive question counts up from there.
+    """
+    if state.step == "content_type":
+        return 1
     if state.step == "adaptive":
-        return len(wizard_flow._DETERMINISTIC_ORDER) + 1
+        return state.turn_count + 2
     return state.turn_count + 1
 
 
@@ -680,10 +683,11 @@ def _finish_with_adaptive(state: wizard.WizardState, intent, context_note: str,
 
 
 def _wizard_adaptive_turn(state: wizard.WizardState, *, answering: bool) -> str:
-    """Drive the single optional adaptive LLM question.
+    """Drive one turn of the LLM-led adaptive loop.
 
-    ``answering=True`` finalizes (force_finish) and submits; otherwise it asks
-    one adaptive question, or submits immediately if the model chose to.
+    ``answering=True`` forces the model to finalize and submits; otherwise it
+    asks the next profile-grounded question (or recommends if it has enough
+    signal, or the question cap was hit).
     """
     state.step = "adaptive"
     ctx = _get_job_context()
@@ -692,7 +696,7 @@ def _wizard_adaptive_turn(state: wizard.WizardState, *, answering: bool) -> str:
         return _finish_with_adaptive(state, turn["intent"], turn["context_note"],
                                      turn["summary"])
     turn["step"] = "adaptive"
-    turn["can_go_back"] = True
+    turn["can_go_back"] = False
     return _render_wizard_turn(turn, state)
 
 
@@ -700,37 +704,30 @@ def _wizard_adaptive_turn(state: wizard.WizardState, *, answering: bool) -> str:
 def wizard_next() -> str:
     form = request.form
     state = wizard.WizardState.from_json(form.get("state", ""))
-
-    # 1. Navigation actions never append answers.
-    if form.get("back") == "1":
-        wizard_flow.previous_step(state)
-        return _render_wizard_state(state)
-    edit_target = (form.get("edit_step") or "").strip()
-    if edit_target:
-        wizard_flow.edit_step(state, edit_target)
-        return _render_wizard_state(state)
-
     finish = form.get("finish") == "1"
-    ask_more = form.get("ask_more") == "1"
     posted_step = (form.get("step") or "").strip()
 
-    # 2. Record a deterministic answer when one was posted.
-    if posted_step in wizard_flow._DETERMINISTIC_ORDER:
-        wizard_flow.apply_answer(state, posted_step,
-                                 form.getlist("selected"),
-                                 form.get("free_text", ""))
-
     try:
-        # 3. Finish now → recommendation from structured answers, no LLM.
-        if finish:
-            return _start_wizard_seed_job(state)
-        # 4. Optional adaptive question requested from review.
-        if ask_more:
+        # 1. Instant deterministic first step: content type (never an LLM call).
+        if posted_step == "content_type":
+            wizard_flow.apply_answer(state, "content_type", form.getlist("selected"), "")
+            state.step = "adaptive"
+            if finish:
+                return _start_wizard_seed_job(state)
             return _wizard_adaptive_turn(state, answering=False)
-        # 5. Still inside deterministic intake (or at review) → render it.
-        if state.step in wizard_flow._DETERMINISTIC_ORDER or state.step == "review":
+
+        # 2. Start, or no content type yet → render the content-type tap, no LLM.
+        if not state.answers.get("content_type"):
+            state.step = "content_type"
             return _render_wizard_state(state)
-        # 6. Answering the adaptive question → finalize.
+
+        # 3. Early exit → finalize from the conversation, or from content type alone.
+        if finish:
+            if state.turns:
+                return _wizard_adaptive_turn(state, answering=True)
+            return _start_wizard_seed_job(state)
+
+        # 4. Record the adaptive answer and continue the LLM-led loop.
         prompt = (form.get("prompt") or "").strip()
         if prompt:
             state.turns.append({
@@ -739,7 +736,7 @@ def wizard_next() -> str:
                 "free_text": (form.get("free_text") or "").strip(),
             })
             state.turn_count += 1
-        return _wizard_adaptive_turn(state, answering=True)
+        return _wizard_adaptive_turn(state, answering=False)
     except Exception as exc:   # network / provider failure
         log.exception("Wizard turn failed")
         return render_template("_wizard_step.html", error=str(exc),

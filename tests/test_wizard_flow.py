@@ -57,6 +57,16 @@ def test_merge_unions_seed_and_adaptive_moods():
     assert merged.max_runtime_minutes == 95
 
 
+def test_merge_keeps_llm_runtime_when_seed_has_none():
+    # In the LLM-led flow the seed carries only content type; the runtime the
+    # LLM derived from the conversation must survive the merge.
+    seed = {"content_type": "movie", "max_runtime_minutes": None}
+    llm_intent = _safe_query_intent({"max_runtime_minutes": 100, "content_type": "tv"})
+    merged = wizard_flow.merge_intent_with_seed(llm_intent, seed)
+    assert merged.content_type == "movie"
+    assert merged.max_runtime_minutes == 100
+
+
 def test_first_step_is_content_type():
     turn = wizard_flow.current_turn(WizardState())
     assert turn["action"] == "ask"
