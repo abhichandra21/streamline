@@ -58,7 +58,7 @@
         <path d="M3 1 L7 5 L3 9" stroke="var(--accent)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <div style="flex:1; min-width:0;">
-        <span style="font-family:'DM Serif Display',serif; font-size:1.05rem; color:var(--text);">{{ entry.query }}</span>
+        <span style="font-family:'DM Serif Display',serif; font-size:1.05rem; color:var(--text);"{% if entry.summary %} title="{{ entry.summary }}"{% endif %}>{{ entry.label or entry.query }}</span>
         <div style="display:flex; align-items:center; gap:0.75rem; margin-top:0.2rem;">
           <span class="mono" style="font-size:0.55rem; color:var(--muted);">{{ entry.timestamp_display }}</span>
           <span class="mono" style="font-size:0.55rem; color:var(--muted);">{{ entry.results|length }} results</span>

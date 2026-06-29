@@ -110,6 +110,68 @@ def test_question_renders_checkbox_for_multi_select(client):
     assert b'type="checkbox"' in resp.data
 
 
+def _full_intent_dict(**overrides):
+    base = {
+        "genres": [], "origin_countries": [], "languages": [], "mood_descriptors": [],
+        "similar_to": [], "max_runtime_minutes": None, "year_from": None, "year_to": None,
+        "unwatched_only": True, "special_intent": None, "content_type": "both",
+        "top_n": 5, "platforms": [],
+    }
+    base.update(overrides)
+    return base
+
+
+def test_wizard_job_records_structured_history():
+    intent_dict = _full_intent_dict(max_runtime_minutes=90, content_type="movie")
+    captured = {}
+
+    def fake_record(query, results, provider, usage_summary, *, metadata=None):
+        captured["query"] = query
+        captured["metadata"] = metadata
+
+    with patch.object(web, "_get_job_context") as gjc, \
+         patch.object(web, "ask", return_value=[]), \
+         patch.object(web, "_build_result_items", return_value=[]), \
+         patch.object(web.query_history, "record", side_effect=fake_record):
+        gjc.return_value.llm.provider = "fake"
+        gjc.return_value.llm.usage.summary.return_value = "usage"
+        web._run_wizard_recommend_job(intent_dict, "low energy", "something short and light")
+
+    md = captured["metadata"]
+    assert md["source"] == "wizard"
+    assert md["label"].startswith("Mood Match")
+    assert md["summary"] == "something short and light"
+    assert md["intent_dict"] == intent_dict
+    assert md["context_note"] == "low energy"
+
+
+def test_searches_render_label_when_present(client):
+    entries = [{
+        "timestamp": "2026-06-29T12:00:00+00:00",
+        "query": "mood match: something short and light",
+        "label": "Mood Match - short and light",
+        "source": "wizard",
+        "summary": "something short and light",
+        "provider": "fake", "results": [], "usage": "",
+    }]
+    with patch.object(web.query_history, "load", return_value=entries):
+        resp = client.get("/searches")
+    assert resp.status_code == 200
+    assert b"Mood Match - short and light" in resp.data
+
+
+def test_searches_fall_back_to_query_for_old_entries(client):
+    entries = [{
+        "timestamp": "2026-06-29T12:00:00+00:00",
+        "query": "good british crime drama",
+        "provider": "fake", "results": [], "usage": "",
+    }]
+    with patch.object(web.query_history, "load", return_value=entries):
+        resp = client.get("/searches")
+    assert resp.status_code == 200
+    assert b"good british crime drama" in resp.data
+
+
 def test_post_refine_starts_job(client):
     intent_json = json.dumps({
         "genres": [], "origin_countries": [], "languages": [], "mood_descriptors": [],

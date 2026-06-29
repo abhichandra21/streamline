@@ -133,13 +133,31 @@ def _run_wizard_recommend_job(intent_dict: dict, context_note: str, summary: str
     results = ask(summary, ctx, intent_override=intent, context_note=context_note,
                   exclude_titles=set(exclude) if exclude else None)
     items = _build_result_items(results, ctx)
-    label = f"mood match: {summary}"
+    label = _wizard_label(summary)
     try:
-        query_history.record(label, items, ctx.llm.provider, ctx.llm.usage.summary())
+        query_history.record(
+            label, items, ctx.llm.provider, ctx.llm.usage.summary(),
+            metadata={
+                "source": "wizard",
+                "label": label,
+                "summary": summary,
+                "intent_dict": intent_dict,
+                "context_note": context_note,
+            },
+        )
     except OSError as exc:
         log.warning("Failed to persist wizard history: %s", exc)
     return {"items": items, "query": summary, "summary": summary,
             "intent_dict": intent_dict, "context_note": context_note}
+
+
+def _wizard_label(summary: str, max_len: int = 60) -> str:
+    """Build a compact ASCII history label from a wizard recap summary."""
+    text = " ".join((summary or "").split()) or "guided pick"
+    label = f"Mood Match - {text}"
+    if len(label) > max_len:
+        label = label[: max_len - 3].rstrip() + "..."
+    return label
 
 
 def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
