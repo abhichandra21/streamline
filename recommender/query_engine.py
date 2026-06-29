@@ -3,6 +3,7 @@ import logging
 import math
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -476,6 +477,38 @@ _WHAT_ELSE_PATTERNS = re.compile(
 _MORE_LIKE_N = re.compile(r'^more like #?(\d+)', re.IGNORECASE)
 
 
+# Concurrency for candidate-generation TMDB lookups. These are independent
+# HTTP/cache reads, so fetching them in parallel collapses many serial round
+# trips. Candidates are still appended serially afterward to keep dedup
+# deterministic.
+_CANDIDATE_FETCH_CONCURRENCY = 8
+
+
+def _parallel_fetch(fn, items: list):
+    """Map ``fn`` over ``items`` in a thread pool, preserving input order.
+
+    Per-item exceptions are swallowed (return None for that slot) so one failed
+    TMDB lookup never aborts candidate generation — matching the old per-call
+    tolerance where get_metadata simply returned None.
+    """
+    items = list(items)
+    if not items:
+        return []
+
+    def _safe(item):
+        try:
+            return fn(item)
+        except Exception as exc:   # network / parse failure on one lookup
+            log.debug("Candidate fetch failed for %r: %s", item, exc)
+            return None
+
+    if len(items) == 1:
+        return [_safe(items[0])]
+    workers = min(_CANDIDATE_FETCH_CONCURRENCY, len(items))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(_safe, items))
+
+
 def _has_discover_filters(intent: "QueryIntent") -> bool:
     """Return True when TMDB Discover has user-specified narrowing filters."""
     return bool(
@@ -601,15 +634,18 @@ def ask(
     if not run_discover:
         log.debug("Skipping unfiltered TMDB Discover for similar_to-only query")
 
-    for ct in (content_types if run_discover else []):
+    # Use the more restrictive of intent year_from and config MIN_YEAR
+    effective_year_from = intent.year_from
+    if config.MIN_YEAR > 0:
+        effective_year_from = max(config.MIN_YEAR, intent.year_from or 0) or config.MIN_YEAR
+
+    discover_cts = list(content_types) if run_discover else []
+
+    def _discover(ct):
         log.debug("TMDB discover: type=%s genres=%s countries=%s languages=%s years=%s-%s",
                    ct, intent.genres, intent.origin_countries, intent.languages,
                    intent.year_from, intent.year_to)
-        # Use the more restrictive of intent year_from and config MIN_YEAR
-        effective_year_from = intent.year_from
-        if config.MIN_YEAR > 0:
-            effective_year_from = max(config.MIN_YEAR, intent.year_from or 0) or config.MIN_YEAR
-        batch = ctx.tmdb_client.search_by_filters(
+        return ctx.tmdb_client.search_by_filters(
             content_type=ct,
             genres=intent.genres,
             origin_countries=intent.origin_countries,
@@ -618,6 +654,9 @@ def ask(
             year_to=intent.year_to,
             size=30,
         )
+
+    for ct, batch in zip(discover_cts, _parallel_fetch(_discover, discover_cts)):
+        batch = batch or []
         log.debug("TMDB returned %d candidates for %s", len(batch), ct)
         candidates.extend(batch)
 
@@ -631,19 +670,20 @@ def ask(
 
     if intent.similar_to:
         related_added = 0
-        for seed_title in intent.similar_to:
-            for ct in content_types:
-                seed_meta = ctx.tmdb_client.get_metadata(seed_title, ct)
-                if not seed_meta:
-                    continue
-                related = ctx.tmdb_client.get_related_titles(
-                    seed_meta.tmdb_id,
-                    seed_meta.content_type,
-                    size=30,
-                )
-                for candidate in related:
-                    if _append_candidate(candidates, seen_ids, candidate, ctx, extra_excludes):
-                        related_added += 1
+        seed_tasks = [(seed, ct) for seed in intent.similar_to for ct in content_types]
+
+        def _related(task):
+            seed_title, ct = task
+            seed_meta = ctx.tmdb_client.get_metadata(seed_title, ct)
+            if not seed_meta:
+                return []
+            return ctx.tmdb_client.get_related_titles(
+                seed_meta.tmdb_id, seed_meta.content_type, size=30)
+
+        for related in _parallel_fetch(_related, seed_tasks):
+            for candidate in (related or []):
+                if _append_candidate(candidates, seen_ids, candidate, ctx, extra_excludes):
+                    related_added += 1
         log.debug("TMDB related titles added %d new candidates", related_added)
 
     # Source 2: LLM suggestions (semantic, taste-aware — always runs)
@@ -652,12 +692,19 @@ def ask(
                                          similar_to=intent.similar_to)
     log.debug("LLM suggested %d titles: %s", len(suggestions), suggestions[:10])
     suggestion_count = 0
-    for title in suggestions:
-        for ct in content_types:
-            meta = ctx.tmdb_client.get_metadata(title, ct)
-            if meta and meta.content_type == ct and _append_candidate(
-                    candidates, seen_ids, meta, ctx, extra_excludes):
-                suggestion_count += 1
+    suggestion_tasks = [(title, ct) for title in suggestions for ct in content_types]
+
+    def _resolve(task):
+        title, ct = task
+        return ct, ctx.tmdb_client.get_metadata(title, ct)
+
+    for resolved in _parallel_fetch(_resolve, suggestion_tasks):
+        if not resolved:
+            continue
+        ct, meta = resolved
+        if meta and meta.content_type == ct and _append_candidate(
+                candidates, seen_ids, meta, ctx, extra_excludes):
+            suggestion_count += 1
     log.debug("LLM suggestions added %d new candidates", suggestion_count)
 
     # Runtime is a hard filter when known, applied once over the whole pool so a

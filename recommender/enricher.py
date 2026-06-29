@@ -1,6 +1,7 @@
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import config
@@ -104,6 +105,12 @@ def enrich(metadata: TmdbMetadata, cache_dir: str, client: LLMClient) -> str:
     return description
 
 
+# Concurrency for query-time enrichment. Each enrich() is an independent HTTP
+# call per uncached title, so a thread pool collapses a serial wait into one
+# round-trip. Gemini stays serial because of its tight RPM limits.
+_ENRICH_CONCURRENCY = 8
+
+
 def enrich_batch(
     titles_metadata: dict[str, TmdbMetadata],
     cache_dir: str,
@@ -115,24 +122,39 @@ def enrich_batch(
     on_progress, if provided, is called as on_progress(done, total, cache_hit)
     after each title so callers can drive a progress bar.
     """
-    # Throttle API calls for providers with tight RPM limits
     is_gemini = hasattr(client, 'provider') and client.provider == 'gemini'
-    throttle = 1.2 if is_gemini else 0.0  # ~50 RPM for Gemini
-
     total = len(titles_metadata)
-    result = {}
-    api_calls = 0
-    for i, (title, metadata) in enumerate(titles_metadata.items()):
-        cache_path = _cache_path(metadata, cache_dir)
-        needs_api = not cache_path.exists()
-        result[enrichment_key(metadata)] = enrich(metadata, cache_dir, client)
-        if needs_api and throttle:
-            api_calls += 1
-            time.sleep(throttle)
-        if on_progress is not None:
-            on_progress(i + 1, total, not needs_api)
-        elif (i + 1) % 50 == 0:
-            log.info("%d/%d titles enriched...", i + 1, total)
-    if api_calls and throttle:
-        log.debug("Enrichment: %d API calls with %.1fs throttle", api_calls, throttle)
+    items = list(titles_metadata.items())
+    result: dict[str, str] = {}
+
+    if is_gemini or total <= 1:
+        # Serial + throttle for tight RPM limits (Gemini), or trivial batches.
+        throttle = 1.2 if is_gemini else 0.0
+        for i, (title, metadata) in enumerate(items):
+            needs_api = not _cache_path(metadata, cache_dir).exists()
+            result[enrichment_key(metadata)] = enrich(metadata, cache_dir, client)
+            if needs_api and throttle:
+                time.sleep(throttle)
+            if on_progress is not None:
+                on_progress(i + 1, total, not needs_api)
+            elif (i + 1) % 50 == 0:
+                log.info("%d/%d titles enriched...", i + 1, total)
+        return result
+
+    # Concurrent path: enrich independent titles in parallel.
+    workers = min(_ENRICH_CONCURRENCY, total)
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        future_to_meta = {}
+        for title, metadata in items:
+            cache_hit = _cache_path(metadata, cache_dir).exists()
+            future_to_meta[pool.submit(enrich, metadata, cache_dir, client)] = (metadata, cache_hit)
+        for future in as_completed(future_to_meta):
+            metadata, cache_hit = future_to_meta[future]
+            result[enrichment_key(metadata)] = future.result()
+            done += 1
+            if on_progress is not None:
+                on_progress(done, total, cache_hit)
+            elif done % 50 == 0:
+                log.info("%d/%d titles enriched...", done, total)
     return result
