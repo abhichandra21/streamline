@@ -1192,6 +1192,24 @@ def test_build_hints_map_manual_duration_not_used():
     assert ('Generic Movie', 'movie') not in hints_map
 
 
+def test_build_hints_map_disney_synthesized_duration_not_used():
+    """Disney's synthesized 45-min default must not be used as a runtime
+    hint -- it isn't a real measurement and would false-positive against
+    every short episode (#51 Layer 5)."""
+    from datetime import datetime, timedelta
+    import recommender.setup as setup
+    from recommender.ingestion.base import WatchEvent
+
+    event = WatchEvent(
+        platform='disney', title='Daddy Putdown', content_type='tv',
+        series_name='Bluey: Shorts Season 1', watched_duration=timedelta(minutes=45),
+        total_duration=timedelta(minutes=45), timestamp=datetime.now(),
+        profile='',
+    )
+    hints_map = setup._build_hints_map([event])
+    assert ('Bluey: Shorts Season 1', 'tv') not in hints_map
+
+
 def test_audit_reports_year_mismatch(tmp_path, capsys):
     import json
     import recommender.setup as setup
@@ -1268,3 +1286,87 @@ def test_audit_existing_title_mismatch_still_works(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "Kesari" in err
     assert "The King" in err
+
+
+def test_titles_are_compatible_strips_diacritics():
+    import recommender.setup as setup
+    assert setup._titles_are_compatible("Cafe Society", "Café Society")
+
+
+def test_titles_are_compatible_drops_leading_article():
+    import recommender.setup as setup
+    assert setup._titles_are_compatible("The Matrix", "Matrix")
+    assert setup._titles_are_compatible("Matrix", "The Matrix")
+
+
+def test_titles_are_compatible_normalizes_ampersand():
+    import recommender.setup as setup
+    assert setup._titles_are_compatible("Spy & Spy", "Spy and Spy")
+
+
+def test_titles_are_compatible_bidirectional_substring():
+    import recommender.setup as setup
+    # Longer index title containing a short cache title (existing direction).
+    assert setup._titles_are_compatible("Avatar: The Way of Water", "Avatar")
+    # Shorter index title contained in a longer cache title (new direction).
+    assert setup._titles_are_compatible("Avatar", "Avatar: The Way of Water")
+
+
+def test_titles_are_compatible_still_rejects_unrelated():
+    import recommender.setup as setup
+    assert not setup._titles_are_compatible("Don", "America's Sweethearts")
+
+
+def test_audit_high_confidence_real_bugs_section(tmp_path, capsys):
+    """An entry failing both the title check AND the year check should be
+    surfaced in a dedicated high-confidence section, not buried in noise."""
+    import json
+    import recommender.setup as setup
+    from recommender.watch_index import WatchIndex
+    from recommender.tmdb_client import MatchHints
+
+    cache_path = tmp_path / "movie" / "11467.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({
+        "id": 11467, "title": "America's Sweethearts", "release_date": "2001-07-20",
+        "runtime": 103, "vote_count": 2000, "popularity": 40, "poster_path": "/p.jpg",
+    }))
+    index = WatchIndex(
+        tmdb_ids={11467},
+        tmdb_keys={("movie", 11467)},
+        normalized_titles={("don", "movie")},
+        entries=[{"tmdb_id": 11467, "title": "Don", "content_type": "movie"}],
+    )
+    hints_map = {("Don", "movie"): MatchHints(release_year=2006)}
+
+    setup._audit_cache_mismatches(index, str(tmp_path), hints_map, audit_output_path=str(tmp_path / "audit.txt"))
+
+    err = capsys.readouterr().err
+    assert "likely real bugs" in err.lower()
+    assert "Don" in err
+    assert "America's Sweethearts" in err
+
+
+def test_audit_title_only_mismatch_not_flagged_as_high_confidence(tmp_path, capsys):
+    """A title mismatch with no corroborating year/runtime signal should
+    stay in the noisier 'title mismatches' section, not high-confidence."""
+    import json
+    import recommender.setup as setup
+    from recommender.watch_index import WatchIndex
+
+    cache_path = tmp_path / "tv" / "55063.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({
+        "id": 55063, "name": "Man on the Moon: The Epic Journey of Apollo 11",
+    }))
+    index = WatchIndex(
+        tmdb_ids={55063},
+        tmdb_keys={("tv", 55063)},
+        normalized_titles={("apollo 11", "tv")},
+        entries=[{"tmdb_id": 55063, "title": "Apollo 11", "content_type": "tv"}],
+    )
+
+    setup._audit_cache_mismatches(index, str(tmp_path), audit_output_path=str(tmp_path / "audit.txt"))
+
+    err = capsys.readouterr().err
+    assert "likely real bugs" not in err.lower()

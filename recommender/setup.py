@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import sys
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -188,8 +189,12 @@ def _title_keyed_enrichments(
 
 
 def _normalize_audit_title(title: str) -> str:
+    title = unicodedata.normalize("NFKD", title)
+    title = "".join(c for c in title if not unicodedata.combining(c))
     title = title.lower()
     title = re.sub(r'\s*\([^)]*\)', '', title)
+    title = title.replace('&', 'and')
+    title = re.sub(r'^(the|a|an)\s+', '', title.strip())
     return title.strip()
 
 
@@ -209,9 +214,11 @@ def _titles_are_compatible(index_title: str, cache_title: str) -> bool:
         return False
     if index_norm == cache_norm:
         return True
-    if len(cache_norm) < 4:
-        return False
-    return cache_norm in index_norm
+    if len(cache_norm) >= 4 and cache_norm in index_norm:
+        return True
+    if len(index_norm) >= 4 and index_norm in cache_norm:
+        return True
+    return False
 
 
 def _resolve_tmdb_id_override(tmdb: TmdbClient, title: str, ct: str, tmdb_id: int) -> object | None:
@@ -234,18 +241,22 @@ def _resolve_tmdb_id_override(tmdb: TmdbClient, title: str, ct: str, tmdb_id: in
         try:
             raw = tmdb._fetch_details(tmdb_id, ct)
         except Exception as exc:
-            log.warning("Override TMDB fetch failed for %s (ID %d): %s", title, tmdb_id, exc)
+            msg = f"Override TMDB fetch failed for {title} (ID {tmdb_id}): {exc}"
+            log.warning(msg)
+            console.print(f"  [yellow]{msg}[/yellow]")
             return None
         tmdb._save_cache(ct, tmdb_id, raw)
 
     cache_title = raw.get("name") or raw.get("title") or ""
     if not _titles_are_compatible(title, cache_title):
-        log.warning(
-            "Rejecting override for %r: tmdb_id %d resolves to %r, which does not "
-            "plausibly match the source title. Falling back to a fresh search — "
-            "fix or remove this entry in the overrides file.",
-            title, tmdb_id, cache_title,
+        msg = (
+            f"Rejecting override for {title!r}: tmdb_id {tmdb_id} resolves to "
+            f"{cache_title!r}, which does not plausibly match the source title. "
+            f"Falling back to a fresh search — fix or remove this entry in the "
+            f"overrides file."
         )
+        log.warning(msg)
+        console.print(f"  [yellow]{msg}[/yellow]")
         return None
 
     return tmdb._parse_metadata(raw, ct)
@@ -374,7 +385,22 @@ def _audit_cache_mismatches(
         else:
             missing.append((e["title"], ct, tmdb_id))
 
+    # High-confidence real bugs: entries failing the title check AND a
+    # year/runtime check. A title mismatch alone is often cosmetic noise
+    # (punctuation, diacritics); failing two independent checks at once is a
+    # much stronger signal of an actual wrong match.
+    title_mismatch_keys = {(t, c, tid) for t, c, tid, _ in title_mismatches}
+    year_mismatch_keys = {(t, c, tid) for t, c, tid, *_ in year_mismatches}
+    runtime_mismatch_keys = {(t, c, tid) for t, c, tid, *_ in runtime_mismatches}
+    high_confidence_keys = title_mismatch_keys & (year_mismatch_keys | runtime_mismatch_keys)
+    high_confidence = [
+        item for item in title_mismatches if (item[0], item[1], item[2]) in high_confidence_keys
+    ]
+
     sections = [
+        ("likely real bugs (title + year/runtime both off)",
+         high_confidence,
+         lambda x: f"{x[0]} -> {x[1]}/{x[2]} cached as {x[3]}"),
         ("unmatched titles (no TMDB ID)",
          unmatched,
          lambda x: f"[{x[1]}] {x[0]}"),
@@ -405,7 +431,10 @@ def _audit_cache_mismatches(
             console.print(f"    ... and {len(items) - limit} more")
 
     for label, items, formatter in sections:
-        _report(label, items, formatter)
+        # The high-confidence section is the prioritized signal -- show it
+        # in full rather than truncating to 10 like the noisier sections.
+        limit = len(high_confidence) if items is high_confidence else 10
+        _report(label, items, formatter, limit=limit)
 
     # Always rewrite the full audit so a clean rerun replaces stale findings
     # from a previous run. Empty sections are still written explicitly with
