@@ -8,5 +8,6 @@ config.local.yaml
 .web.pid
 logs/
 .superpowers/
+docs/superpowers/
 .worktrees/
 /.claude

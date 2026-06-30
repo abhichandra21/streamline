@@ -11,6 +11,7 @@ import secrets
 import sys
 import threading
 from copy import copy, deepcopy
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,8 +29,9 @@ from recommender.jobs import registry as job_registry
 from recommender.llm import create_client
 from recommender.log import setup_logging
 from recommender.enricher import enrichment_key_from_parts
-from recommender.query_engine import RecommendContext, ask
+from recommender.query_engine import RecommendContext, ask, _safe_query_intent
 from recommender import wizard
+from recommender import wizard_flow
 from recommender.structured_profile import load_structured_profile
 from recommender.tmdb_client import TmdbClient
 
@@ -133,13 +135,50 @@ def _run_wizard_recommend_job(intent_dict: dict, context_note: str, summary: str
     results = ask(summary, ctx, intent_override=intent, context_note=context_note,
                   exclude_titles=set(exclude) if exclude else None)
     items = _build_result_items(results, ctx)
-    label = f"mood match: {summary}"
+    label = _wizard_label(summary)
     try:
-        query_history.record(label, items, ctx.llm.provider, ctx.llm.usage.summary())
+        query_history.record(
+            label, items, ctx.llm.provider, ctx.llm.usage.summary(),
+            metadata={
+                "source": "wizard",
+                "label": label,
+                "summary": summary,
+                "intent_dict": intent_dict,
+                "context_note": context_note,
+            },
+        )
     except OSError as exc:
         log.warning("Failed to persist wizard history: %s", exc)
     return {"items": items, "query": summary, "summary": summary,
             "intent_dict": intent_dict, "context_note": context_note}
+
+
+def _wizard_label(summary: str, max_len: int = 60) -> str:
+    """Build a compact ASCII history label from a wizard recap summary."""
+    text = " ".join((summary or "").split()) or "guided pick"
+    label = f"Mood Match - {text}"
+    if len(label) > max_len:
+        label = label[: max_len - 3].rstrip() + "..."
+    return label
+
+
+def _safe_intent_dict(raw) -> dict:
+    """Parse posted intent into a normalized full intent dict.
+
+    Accepts a JSON string or an already-parsed dict. Routes untrusted form data
+    through ``_safe_query_intent`` so missing/extra fields are corrected and a
+    full, valid intent dict is returned. Raises ``ValueError`` when the payload
+    is absent or not a JSON object.
+    """
+    if isinstance(raw, dict):
+        data = raw
+    else:
+        if not raw or not str(raw).strip():
+            raise ValueError("missing intent payload")
+        data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("intent payload must be an object")
+    return asdict(_safe_query_intent(data))
 
 
 def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
@@ -583,47 +622,131 @@ def wizard_page() -> str:
     return render_template("wizard.html", max_questions=config.WIZARD_MAX_QUESTIONS)
 
 
-def _collect_answers(form) -> tuple[wizard.WizardState, dict | None]:
-    """Load state from the form and append the just-answered question, if any."""
-    state = wizard.WizardState.from_json(form.get("state", ""))
-    prompt = (form.get("prompt") or "").strip()
-    if prompt:
-        state.turns.append({
-            "prompt": prompt,
-            "selected": form.getlist("selected"),
-            "free_text": (form.get("free_text") or "").strip(),
-        })
-        state.turn_count += 1
-    return state, None
+def _wizard_question_number(state: wizard.WizardState) -> int:
+    """Position used for the progress display.
+
+    Content type is question 1; each adaptive question counts up from there.
+    """
+    if state.step == "content_type":
+        return 1
+    # Content type already counted in turn_count, so the next adaptive question
+    # is turn_count + 1 (e.g. after content type, turn_count=1 → question 2).
+    if state.step == "adaptive":
+        return state.turn_count + 1
+    return state.turn_count + 1
+
+
+def _render_wizard_turn(turn: dict, state: wizard.WizardState) -> str:
+    """Render a deterministic or adaptive ask turn."""
+    return render_template(
+        "_wizard_step.html", turn=turn, state_json=state.to_json(),
+        question_number=_wizard_question_number(state),
+        max_questions=config.WIZARD_MAX_QUESTIONS)
+
+
+def _render_wizard_state(state: wizard.WizardState) -> str:
+    """Render whatever the current deterministic step / review surface is."""
+    turn = wizard_flow.current_turn(state)
+    if turn["action"] == "review":
+        state.review_seen = True
+        return render_template("_wizard_review.html", review=turn,
+                               state_json=state.to_json())
+    return _render_wizard_turn(turn, state)
+
+
+def _wizard_polling(job_id: str) -> str:
+    return render_template("_polling.html", job_id=job_id,
+                           poll_url=f"/wizard/jobs/{job_id}/poll",
+                           poll_target="#wizard-stage")
+
+
+def _start_wizard_seed_job(state: wizard.WizardState) -> str:
+    """Build a recommendation from structured answers alone — no LLM turn."""
+    intent_dict, context_note, summary = wizard_flow.build_recommendation_seed(state)
+    job_id = job_registry.submit(
+        _run_wizard_recommend_job, intent_dict, context_note, summary, label="wizard")
+    return _wizard_polling(job_id)
+
+
+def _combine_notes(*notes: str) -> str:
+    return "\n".join(n.strip() for n in notes if n and n.strip()).strip()
+
+
+def _finish_with_adaptive(state: wizard.WizardState, intent, context_note: str,
+                          summary: str) -> str:
+    """Merge an adaptive LLM turn over the deterministic seed and submit."""
+    seed, seed_note, seed_summary = wizard_flow.build_recommendation_seed(state)
+    merged = wizard_flow.merge_intent_with_seed(intent, seed)
+    note = _combine_notes(seed_note, context_note)
+    job_id = job_registry.submit(
+        _run_wizard_recommend_job, asdict(merged), note,
+        summary or seed_summary, label="wizard")
+    return _wizard_polling(job_id)
+
+
+def _wizard_adaptive_turn(state: wizard.WizardState, *, answering: bool) -> str:
+    """Drive one turn of the LLM-led adaptive loop.
+
+    ``answering=True`` forces the model to finalize and submits; otherwise it
+    asks the next profile-grounded question (or recommends if it has enough
+    signal, or the question cap was hit).
+    """
+    state.step = "adaptive"
+    ctx = _get_job_context()
+    turn = wizard.next_turn(state, ctx, force_finish=answering)
+    if turn["action"] == "recommend":
+        return _finish_with_adaptive(state, turn["intent"], turn["context_note"],
+                                     turn["summary"])
+    turn["step"] = "adaptive"
+    turn["can_go_back"] = False
+    return _render_wizard_turn(turn, state)
 
 
 @app.route("/wizard/next", methods=["POST"])
 def wizard_next() -> str:
-    state, _ = _collect_answers(request.form)
-    force_finish = request.form.get("finish") == "1"
-    ctx = _get_job_context()
+    form = request.form
+    state = wizard.WizardState.from_json(form.get("state", ""))
+    finish = form.get("finish") == "1"
+    posted_step = (form.get("step") or "").strip()
+
     try:
-        turn = wizard.next_turn(state, ctx, force_finish=force_finish)
+        # 1. Instant deterministic first step: content type (never an LLM call).
+        #    It counts as question 1 toward the cap.
+        if posted_step == "content_type":
+            wizard_flow.apply_answer(state, "content_type", form.getlist("selected"), "")
+            state.step = "adaptive"
+            state.turn_count += 1
+            if finish:
+                return _start_wizard_seed_job(state)
+            return _wizard_adaptive_turn(state, answering=False)
+
+        # 2. Start, or no content type yet → render the content-type tap, no LLM.
+        if not state.answers.get("content_type"):
+            state.step = "content_type"
+            return _render_wizard_state(state)
+
+        # 3. Record the current adaptive answer FIRST, so finishing never drops it.
+        prompt = (form.get("prompt") or "").strip()
+        if prompt:
+            state.turns.append({
+                "prompt": prompt,
+                "selected": form.getlist("selected"),
+                "free_text": (form.get("free_text") or "").strip(),
+            })
+            state.turn_count += 1
+
+        # 4. Early exit → finalize from the conversation, or from content type alone.
+        if finish:
+            if state.turns:
+                return _wizard_adaptive_turn(state, answering=True)
+            return _start_wizard_seed_job(state)
+
+        # 5. Continue the LLM-led loop.
+        return _wizard_adaptive_turn(state, answering=False)
     except Exception as exc:   # network / provider failure
         log.exception("Wizard turn failed")
         return render_template("_wizard_step.html", error=str(exc),
                                state_json=state.to_json())
-
-    if turn["action"] == "recommend":
-        from dataclasses import asdict
-        intent_dict = asdict(turn["intent"])
-        job_id = job_registry.submit(
-            _run_wizard_recommend_job, intent_dict, turn["context_note"],
-            turn["summary"], label="wizard")
-        return render_template("_polling.html", job_id=job_id,
-                               poll_url=f"/wizard/jobs/{job_id}/poll",
-                               poll_target="#wizard-stage")
-
-    return render_template("_wizard_step.html", turn=turn,
-                           state_json=state.to_json(),
-                           answered=state.turns,
-                           question_number=state.turn_count + 1,
-                           max_questions=config.WIZARD_MAX_QUESTIONS)
 
 
 @app.route("/wizard/jobs/<job_id>/poll")
@@ -640,31 +763,112 @@ def wizard_poll(job_id: str) -> str:
     if job.status == "error":
         return render_template("_wizard_results.html", results=None, error=job.error, query="")
     result = job.result
+    shown = [
+        {"title": i["title"], "content_type": i["content_type"], "tmdb_id": i.get("tmdb_id")}
+        for i in result["items"]
+    ]
     return render_template("_wizard_results.html", results=result["items"],
                            summary=result["summary"], error=None,
                            query=result["summary"],
                            intent_json=json.dumps(result["intent_dict"]),
                            context_note=result["context_note"],
-                           shown=", ".join(i["title"] for i in result["items"]))
+                           shown=json.dumps(shown))
+
+
+# Default runtime ceiling a "shorter" refine applies when none is set yet,
+# and the step it shaves off an existing ceiling (with a floor).
+_SHORTER_DEFAULT_RUNTIME = {"movie": 100, "tv": 45}
+_SHORTER_STEP_MINUTES = 30
+_SHORTER_FLOOR_MINUTES = 30
+
+
+def _apply_refinement(intent_dict: dict, context_note: str, directive: str) -> tuple[dict, str]:
+    """Translate a refine directive into structured intent + context changes.
+
+    Constraints (runtime) are updated on the intent where a clean mapping exists;
+    softer directives append a ranker hint to the context note. Deterministic so
+    refinement behaves like a command rather than a vague prose nudge.
+    """
+    intent = dict(intent_dict)
+    note = context_note or ""
+    d = (directive or "").strip().lower()
+
+    if d == "shorter":
+        current = intent.get("max_runtime_minutes")
+        if current:
+            intent["max_runtime_minutes"] = max(_SHORTER_FLOOR_MINUTES,
+                                                 current - _SHORTER_STEP_MINUTES)
+        else:
+            ct = intent.get("content_type", "both")
+            intent["max_runtime_minutes"] = _SHORTER_DEFAULT_RUNTIME.get(ct, 90)
+        note = f"{note}\nRefinement: keep it shorter than {intent['max_runtime_minutes']} minutes.".strip()
+    elif d == "lighter":
+        note = f"{note}\nRefinement: prefer lighter, easier-going picks.".strip()
+    elif d == "more obscure":
+        note = f"{note}\nRefinement: prefer more obscure, lesser-known picks over obvious ones.".strip()
+    elif d == "surprise me":
+        note = f"{note}\nRefinement: surprise me — keep the same constraints but add variety and novelty.".strip()
+    elif d:
+        note = f"{note}\nRefinement: {directive}.".strip()
+
+    return intent, note
+
+
+def _parse_shown(raw: str) -> list[str]:
+    """Extract shown titles to hard-exclude. Accepts a JSON list of items
+    (``{"title", "content_type", "tmdb_id"}``) or a legacy comma-joined string."""
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            titles = []
+            for item in data:
+                if isinstance(item, dict) and item.get("title"):
+                    titles.append(str(item["title"]).strip())
+                elif isinstance(item, str) and item.strip():
+                    titles.append(item.strip())
+            return titles
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return [t.strip() for t in raw.split(",") if t.strip()]
 
 
 @app.route("/wizard/refine", methods=["POST"])
-def wizard_refine() -> str:
-    intent_dict = json.loads(request.form.get("intent", "{}"))
+def wizard_refine():
+    try:
+        intent_dict = _safe_intent_dict(request.form.get("intent", ""))
+    except (ValueError, json.JSONDecodeError):
+        return "Invalid or missing refine payload.", 400
     base_note = request.form.get("context_note", "")
-    directive = request.form.get("directive", "")     # e.g. "make it lighter"
-    shown = request.form.get("shown", "")             # comma-joined titles
-    note = base_note
-    if directive:
-        note = f"{note}\nRefinement: {directive}."
+    directive = request.form.get("directive", "")     # e.g. "lighter"
+    intent_dict, note = _apply_refinement(intent_dict, base_note, directive)
     # Hard-exclude the titles already shown so a refine never repeats them.
-    exclude = [t.strip() for t in shown.split(",") if t.strip()]
+    exclude = _parse_shown(request.form.get("shown", ""))
     summary = request.form.get("summary", "your picks")
     job_id = job_registry.submit(
         _run_wizard_recommend_job, intent_dict, note, summary, exclude, label="wizard")
     return render_template("_polling.html", job_id=job_id,
                            poll_url=f"/wizard/jobs/{job_id}/poll",
                            poll_target="#wizard-stage")
+
+
+@app.route("/wizard/replay", methods=["POST"])
+def wizard_replay():
+    """Replay a stored wizard run from its structured intent, not its recap text."""
+    try:
+        intent_dict = _safe_intent_dict(request.form.get("intent", ""))
+    except (ValueError, json.JSONDecodeError):
+        return "Invalid or missing replay payload.", 400
+    context_note = request.form.get("context_note", "")
+    summary = request.form.get("summary", "your picks")
+    job_id = job_registry.submit(
+        _run_wizard_recommend_job, intent_dict, context_note, summary, label="wizard")
+    # Full-page navigation from the Searches page: render the wizard shell with
+    # the polling stage already active so results land in #wizard-stage.
+    return render_template("wizard.html", max_questions=config.WIZARD_MAX_QUESTIONS,
+                           replay_job_id=job_id)
 
 
 @app.route("/title/<int:tmdb_id>")

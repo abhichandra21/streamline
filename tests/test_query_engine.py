@@ -181,6 +181,64 @@ def test_ask_caps_candidate_pool_before_enrichment(monkeypatch):
     assert captured["n"] == 5
 
 
+def test_ask_trim_reserves_llm_suggestions(monkeypatch):
+    """A low-popularity LLM suggestion must survive the trim that otherwise keeps
+    only the highest-rated/most-voted candidates."""
+    import recommender.query_engine as qe
+
+    monkeypatch.setattr(qe.config, "MAX_ENRICH_CANDIDATES", 5)
+    monkeypatch.setattr(qe, "parse_intent",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no parse")))
+
+    # 20 wildly popular Discover candidates that would normally crowd out a niche pick.
+    cands = [make_meta(f"M{i}", tmdb_id=i, content_type="movie", vote_avg=9.5)
+             for i in range(1, 21)]
+    for c in cands:
+        c.vote_count = 9000
+    # Passes the rating gate, but its tiny vote count makes the popularity-weighted
+    # sort rank it far below the crowd-pleasers — exactly the case the reserve guards.
+    niche = make_meta("Niche Pick", tmdb_id=999, content_type="movie", vote_avg=7.5)
+    niche.vote_count = 3
+    niche.release_year = 2015
+
+    captured = {}
+
+    def fake_enrich(meta_dict, cache_dir, client):
+        captured["titles"] = set(meta_dict.keys())
+        return {}
+    monkeypatch.setattr(qe, "enrich_batch", fake_enrich)
+    monkeypatch.setattr(qe, "rank_candidates", lambda *a, **k: [])
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return list(cands)
+        def get_metadata(self, title, ct):
+            return niche if title == "Niche Pick" else None
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return '["Niche Pick"]'   # the taste-aware suggestion
+
+    ctx = qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    intent = qe.QueryIntent(
+        genres=["drama"], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=[], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent=None, content_type="movie",
+        top_n=5, platforms=[],
+    )
+    qe.ask("q", ctx, intent_override=intent)
+    assert len(captured["titles"]) == 5
+    assert "Niche Pick" in captured["titles"]   # reserved despite low popularity
+
+
 def test_rank_candidates_returns_recommendations():
     candidates = [make_meta("Broadchurch", tmdb_id=1), make_meta("Hinterland", tmdb_id=2)]
     enrichments = {"tv/1": "Dark coastal crime.", "tv/2": "Welsh noir."}
@@ -729,3 +787,172 @@ def test_ask_with_intent_override_skips_parse_intent(monkeypatch):
     results = query_engine.ask("ignored", ctx, intent_override=intent,
                                context_note="low energy")
     assert results == []   # no candidates -> empty, but parse_intent never ran
+
+
+def _run_ask_capturing_enriched(monkeypatch, candidates, intent):
+    """Run ask() with intent_override and return the titles that survived filtering.
+
+    Captures the candidate pool handed to enrichment, which is the set of titles
+    that passed candidate eligibility (including any runtime filter).
+    """
+    import recommender.query_engine as qe
+
+    def _no_parse(*a, **k):
+        raise AssertionError("parse_intent must not run with intent_override")
+    monkeypatch.setattr(qe, "parse_intent", _no_parse)
+
+    captured = {}
+
+    def fake_enrich(meta_dict, cache_dir, client):
+        captured["titles"] = list(meta_dict.keys())
+        return {}
+    monkeypatch.setattr(qe, "enrich_batch", fake_enrich)
+    monkeypatch.setattr(qe, "rank_candidates", lambda *a, **k: [])
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return list(candidates)
+        def get_metadata(self, title, ct):
+            return None
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return "[]"
+
+    ctx = qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    qe.ask("q", ctx, intent_override=intent)
+    return captured.get("titles", [])
+
+
+def _runtime_intent(content_type, max_runtime_minutes):
+    return QueryIntent(
+        genres=["drama"], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=[], max_runtime_minutes=max_runtime_minutes, year_from=None,
+        year_to=None, unwatched_only=True, special_intent=None,
+        content_type=content_type, top_n=5, platforms=[],
+    )
+
+
+def test_safe_query_intent_falls_back_on_invalid_content_type():
+    from recommender.query_engine import _safe_query_intent
+    intent = _safe_query_intent({"content_type": "audiobook"})
+    assert intent.content_type == "both"
+
+
+def test_safe_query_intent_keeps_valid_content_type():
+    from recommender.query_engine import _safe_query_intent
+    assert _safe_query_intent({"content_type": "movie"}).content_type == "movie"
+
+
+def test_safe_query_intent_coerces_string_runtime():
+    from recommender.query_engine import _safe_query_intent
+    intent = _safe_query_intent({"max_runtime_minutes": "90"})
+    assert intent.max_runtime_minutes == 90
+
+
+def test_safe_query_intent_drops_invalid_runtime():
+    from recommender.query_engine import _safe_query_intent
+    intent = _safe_query_intent({"max_runtime_minutes": "soon"})
+    assert intent.max_runtime_minutes is None
+
+
+def test_ask_filters_movies_over_max_runtime(monkeypatch):
+    long_movie = make_meta("Long Movie", tmdb_id=1, content_type="movie")
+    long_movie.runtime_minutes = 150
+    short_movie = make_meta("Short Movie", tmdb_id=2, content_type="movie")
+    short_movie.runtime_minutes = 80
+
+    titles = _run_ask_capturing_enriched(
+        monkeypatch, [long_movie, short_movie], _runtime_intent("movie", 90))
+
+    assert "Short Movie" in titles
+    assert "Long Movie" not in titles
+
+
+def test_ask_allows_tv_episode_under_max_runtime(monkeypatch):
+    # TmdbMetadata.runtime_minutes for TV is episode runtime, not series length.
+    episode = make_meta("Half Hour Show", tmdb_id=3, content_type="tv")
+    episode.runtime_minutes = 45
+
+    titles = _run_ask_capturing_enriched(
+        monkeypatch, [episode], _runtime_intent("tv", 60))
+
+    assert "Half Hour Show" in titles
+
+
+def test_ask_handles_unknown_runtime_conservatively(monkeypatch):
+    # Unknown runtime cannot be safely filtered; keep the candidate.
+    unknown = make_meta("Unknown Runtime", tmdb_id=4, content_type="movie")
+    unknown.runtime_minutes = None
+
+    titles = _run_ask_capturing_enriched(
+        monkeypatch, [unknown], _runtime_intent("movie", 90))
+
+    assert "Unknown Runtime" in titles
+
+
+def test_ask_relaxes_runtime_when_all_candidates_exceed_max(monkeypatch):
+    # "movie under an hour" would otherwise drop every feature film. Rather than
+    # return nothing, keep the pool so the user still sees the closest matches.
+    long_one = make_meta("Long One", tmdb_id=1, content_type="movie")
+    long_one.runtime_minutes = 130
+    long_two = make_meta("Long Two", tmdb_id=2, content_type="movie")
+    long_two.runtime_minutes = 140
+
+    titles = _run_ask_capturing_enriched(
+        monkeypatch, [long_one, long_two], _runtime_intent("movie", 60))
+
+    assert set(titles) == {"Long One", "Long Two"}
+
+
+def test_ask_runtime_fallback_adds_ranker_hint(monkeypatch):
+    import recommender.query_engine as qe
+
+    def _no_parse(*a, **k):
+        raise AssertionError("parse_intent must not run with intent_override")
+    monkeypatch.setattr(qe, "parse_intent", _no_parse)
+
+    captured = {}
+    monkeypatch.setattr(qe, "enrich_batch", lambda *a, **k: {})
+
+    def fake_rank(*args, **kwargs):
+        captured["context_note"] = kwargs.get("context_note")
+        return []
+    monkeypatch.setattr(qe, "rank_candidates", fake_rank)
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    long_movie = make_meta("Long Only", tmdb_id=1, content_type="movie")
+    long_movie.runtime_minutes = 130
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return [long_movie]
+        def get_metadata(self, title, ct):
+            return None
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return "[]"
+
+    ctx = qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    qe.ask("q", ctx, intent_override=_runtime_intent("movie", 60),
+           context_note="low energy")
+
+    note = (captured["context_note"] or "").lower()
+    assert "runtime" in note
+    assert "low energy" in note   # original context preserved

@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Streamline is a personal Flask and CLI media recommendation app. Core Python code lives in `recommender/`. Query logic is in `recommender/query_engine.py`, TMDB access in `recommender/tmdb_client.py`, enrichment/profile generation in `recommender/enricher.py` and `recommender/taste_profile_builder.py`, and web routes in `recommender/web.py`.
+Streamline is a personal Flask and CLI media recommendation app. Core Python code lives in `recommender/`. Query logic is in `recommender/query_engine.py`, TMDB access in `recommender/tmdb_client.py`, enrichment/profile generation in `recommender/enricher.py` and `recommender/taste_profile_builder.py`, the Mood Match guided wizard in `recommender/wizard.py` and `recommender/wizard_flow.py`, and web routes in `recommender/web.py`.
 
 Templates live in `recommender/templates/`; generated caches and local artifacts live under `recommender/cache/`, `data/`, and `logs/`. Tests live in `tests/`, with shared test helpers such as `tests/mock_llm.py`.
 
@@ -49,7 +49,7 @@ Do not use emoji in code, documentation, templates, or test fixtures.
 
 ## Testing Guidelines
 
-Pytest is the test framework. Name tests `test_<behavior>()` and keep them close to the module behavior they verify. Use real SQLite temp files for persistence tests when possible. For web changes, update `tests/test_web.py`; for recommendation behavior, update `tests/test_query_engine.py` or `tests/test_main.py`.
+Pytest is the test framework. Name tests `test_<behavior>()` and keep them close to the module behavior they verify. Use real SQLite temp files for persistence tests when possible. For web changes, update `tests/test_web.py`; for recommendation behavior, update `tests/test_query_engine.py` or `tests/test_main.py`; for the Mood Match wizard, update `tests/test_wizard.py`, `tests/test_wizard_flow.py`, or `tests/test_web_wizard.py`.
 
 Run focused tests first, then `python3 -m pytest -q` before merging.
 

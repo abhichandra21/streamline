@@ -63,11 +63,30 @@ def test_enrich_batch_skips_failed(tmp_path):
     meta1 = make_meta("Show A", tmdb_id=1)
     meta2 = make_meta("Show B", tmdb_id=2)
     client = make_mock_llm("")
-    client.generate.side_effect = ["Good description.", Exception("fail")]
+
+    # Keyed by title (the prompt embeds it) so the result is independent of the
+    # order concurrent workers happen to run in.
+    def gen(prompt, **kwargs):
+        if "Show A" in prompt:
+            return "Good description."
+        raise Exception("fail")
+
+    client.generate.side_effect = gen
     result = enrich_batch({"Show A": meta1, "Show B": meta2}, str(tmp_path), client)
     assert "tv/1" in result
     assert "tv/2" in result
     assert result["tv/1"] == "Good description."
+
+
+def test_enrich_batch_runs_titles_concurrently(tmp_path):
+    # Many titles must all be enriched, with no dropped or duplicated keys,
+    # regardless of completion order.
+    metas = {f"Show {i}": make_meta(f"Show {i}", tmdb_id=i) for i in range(1, 13)}
+    client = make_mock_llm("")
+    client.generate.side_effect = lambda prompt, **kwargs: "desc"
+    result = enrich_batch(metas, str(tmp_path), client)
+    assert len(result) == 12
+    assert all(f"tv/{i}" in result for i in range(1, 13))
 
 
 def test_enrichment_key_for_movie():

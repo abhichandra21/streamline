@@ -120,15 +120,27 @@ def _serialize_result(r) -> dict:
     }
 
 
+# Metadata keys a caller may attach to a history entry. Explicit allowlist so
+# arbitrary keys cannot leak into the stored record.
+_ALLOWED_METADATA_KEYS = frozenset({
+    "source", "label", "summary", "intent_dict", "context_note", "refinement",
+})
+
+
 def record(
     query: str,
     results: list,
     provider: str,
     usage_summary: str,
+    *,
+    metadata: dict | None = None,
 ) -> None:
     """Append a query + results to history, capped at MAX_ENTRIES.
 
     ``results`` may be enriched dicts (from web.py) or raw Recommendation objects.
+    ``metadata`` carries optional structured fields (e.g. wizard source/label/intent)
+    merged into the entry under an explicit allowlist. ``query`` is always kept for
+    backward compatibility with old entries.
     """
     def append_entry(history_file) -> None:
         entries = _load_raw_from_file(history_file)
@@ -139,6 +151,10 @@ def record(
             "results": [_serialize_result(r) for r in results],
             "usage": usage_summary,
         }
+        if metadata:
+            for key in _ALLOWED_METADATA_KEYS:
+                if key in metadata:
+                    entry[key] = metadata[key]
         entries.append(entry)
         if len(entries) > MAX_ENTRIES:
             entries[:] = entries[-MAX_ENTRIES:]

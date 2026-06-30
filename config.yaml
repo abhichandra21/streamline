@@ -43,7 +43,8 @@ min_rating: 6.5
 min_year: 2000
 recency_half_life_days: 90
 wizard:
-  max_questions: 10
+  max_questions: 5
+  min_questions: 4
   max_tokens: 1200
 scoring:
   weight_completion: 0.5

@@ -146,10 +146,26 @@ The online pipeline:
 - `"why not X?"` — traces a title through the pipeline and explains exactly where it was filtered
 - `"abandoned"` queries — checks watch history for partial viewing and advises whether to continue
 
+### Mood Match Wizard (`recommender/wizard.py`, `recommender/wizard_flow.py`)
+
+A guided alternative to free-text search that turns the taste profile into an interactive question loop, then hands a synthesized `QueryIntent` to the same online pipeline.
+
+The flow is a hybrid of deterministic and LLM-led turns:
+
+1. **Content-type tap** (`wizard_flow`) — an instant first question (movie / TV / either) rendered with no LLM call. It counts as question 1 toward the cap.
+2. **Adaptive loop** (`wizard.next_turn`) — one `role="reason"` call per turn. The model sees the taste profile as a prior plus the answers so far and returns either the next question (chips + optional free text) or a finish signal carrying a `QueryIntent` and a free-text ranking note.
+3. **Soft floor / hard cap** — the wizard must keep asking until it has `WIZARD_MIN_QUESTIONS` answers before it may finish on its own; below the floor an early `recommend` is rejected and one more question is forced (relenting if the model still will not ask, so the loop is bounded). `WIZARD_MAX_QUESTIONS` is the hard cap, enforced here independent of what the model returns. The user can always bail early with **Show me something now**.
+4. **Review** — a recap surface before finalizing, so answers are visible and editable.
+5. **Finalize** — the recommendation runs as a background job (`job_registry`); the page polls `/wizard/jobs/<id>/poll` (via `_polling.html`) until results render. When the model finishes, its adaptive intent is merged over the deterministic seed (`merge_intent_with_seed`).
+6. **Refine / replay** — `/wizard/refine` applies deterministic directives (`shorter`, `lighter`, `more obscure`, `surprise me`, or free text) to the existing intent and re-runs while hard-excluding already-shown titles; `/wizard/replay` re-runs a stored wizard run from its structured intent (not its recap text).
+
+`WizardState` is carried in a hidden form field across turns (size- and turn-count-bounded as a malformed-payload guard, not a security boundary). Routes live in `web.py` (`/wizard`, `/wizard/next`, `/wizard/jobs/<id>/poll`, `/wizard/refine`, `/wizard/replay`); templates are `wizard.html`, `_wizard_step.html`, `_wizard_review.html`, `_wizard_results.html`, and `_polling.html`.
+
 ### Web UI (`recommender/web.py`)
 
 Flask app serving:
 - `/` — Home: search bar (HTMX-powered), taste profile clusters (expandable, markdown-rendered), archive poster wall
+- `/wizard` — Mood Match guided wizard (see the wizard section above)
 - `/history` — Watch archive with switchable views (list, poster grid, compact). Search + type filter + A-Z/Z-A sort.
 - `/title/:id` — Title detail with poster, TMDB overview, AI analysis, credits, keywords, TMDB link
 - `/recommend` — Standalone discover page
@@ -227,6 +243,7 @@ Secrets come from the environment. Shared application settings live in
 |---------|------|-------------|
 | *(top-level)* | `provider`, `models.*` | LLM provider and model assignments (fast/reason roles) |
 | `llm.*` | `timeout_*`, `tokens_*`, `profile_batch_size`, `rate_limit_wait` | Per-call-type timeouts, token limits, batch sizes |
+| `wizard.*` | `max_questions`, `min_questions`, `max_tokens` | Mood Match wizard question cap, soft floor, and per-turn output-token ceiling |
 | `scoring.*` | `weight_completion`, `weight_rewatch`, `weight_recency`, `default_*_runtime`, `rewatch_saturation` | Engagement scoring weights and fallback runtimes |
 | `manual.*` | `timestamp`, `tv_duration_minutes`, `movie_duration_minutes` | Synthetic values for manual list titles |
 | *(top-level)* | `default_top_n`, `min_vote_count`, `recency_half_life_days` | Recommendation tuning |

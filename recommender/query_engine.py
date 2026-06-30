@@ -3,6 +3,7 @@ import logging
 import math
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -141,6 +142,16 @@ def _parse_json_response(text: str) -> dict | list:
     return json.loads(text.strip())
 
 
+def _optional_positive_int(value) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _safe_query_intent(data: dict) -> QueryIntent:
     """Construct QueryIntent with validation and defaults for missing/extra fields."""
     known_fields = {f.name for f in QueryIntent.__dataclass_fields__.values()}
@@ -158,6 +169,9 @@ def _safe_query_intent(data: dict) -> QueryIntent:
             filtered[key] = default
     if isinstance(filtered.get("top_n"), str):
         filtered["top_n"] = int(filtered["top_n"])
+    filtered["max_runtime_minutes"] = _optional_positive_int(filtered.get("max_runtime_minutes"))
+    if filtered.get("content_type") not in ("tv", "movie", "both"):
+        filtered["content_type"] = "both"
     return QueryIntent(**filtered)
 
 
@@ -267,7 +281,7 @@ def rank_candidates(
     response_text = client.generate(prompt, role="reason", max_tokens=rank_tokens,
                                      timeout=config.TIMEOUT_REASON)
 
-    log.debug("Raw ranking response: %s", response_text[:500])
+    log.debug("Raw ranking response: %s", response_text)
     try:
         ranked = _parse_json_response(response_text)
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
@@ -463,6 +477,38 @@ _WHAT_ELSE_PATTERNS = re.compile(
 _MORE_LIKE_N = re.compile(r'^more like #?(\d+)', re.IGNORECASE)
 
 
+# Concurrency for candidate-generation TMDB lookups. These are independent
+# HTTP/cache reads, so fetching them in parallel collapses many serial round
+# trips. Candidates are still appended serially afterward to keep dedup
+# deterministic.
+_CANDIDATE_FETCH_CONCURRENCY = 8
+
+
+def _parallel_fetch(fn, items: list):
+    """Map ``fn`` over ``items`` in a thread pool, preserving input order.
+
+    Per-item exceptions are swallowed (return None for that slot) so one failed
+    TMDB lookup never aborts candidate generation — matching the old per-call
+    tolerance where get_metadata simply returned None.
+    """
+    items = list(items)
+    if not items:
+        return []
+
+    def _safe(item):
+        try:
+            return fn(item)
+        except Exception as exc:   # network / parse failure on one lookup
+            log.debug("Candidate fetch failed for %r: %s", item, exc)
+            return None
+
+    if len(items) == 1:
+        return [_safe(items[0])]
+    workers = min(_CANDIDATE_FETCH_CONCURRENCY, len(items))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(_safe, items))
+
+
 def _has_discover_filters(intent: "QueryIntent") -> bool:
     """Return True when TMDB Discover has user-specified narrowing filters."""
     return bool(
@@ -492,6 +538,22 @@ def _candidate_allowed(
     if config.MIN_YEAR > 0 and candidate.release_year and candidate.release_year < config.MIN_YEAR:
         return False
     return True
+
+
+def _within_runtime(candidate: TmdbMetadata, max_runtime_minutes: int | None) -> bool:
+    """True if the candidate fits the runtime ceiling.
+
+    Unknown runtime always passes — it cannot be safely filtered. For TV,
+    runtime_minutes is the episode runtime, so "under an hour" matches a
+    45-minute episode.
+    """
+    ceiling = _optional_positive_int(max_runtime_minutes)
+    if not ceiling:
+        return True
+    candidate_runtime = _optional_positive_int(candidate.runtime_minutes)
+    if not candidate_runtime:
+        return True
+    return candidate_runtime <= ceiling
 
 
 def _append_candidate(
@@ -572,15 +634,18 @@ def ask(
     if not run_discover:
         log.debug("Skipping unfiltered TMDB Discover for similar_to-only query")
 
-    for ct in (content_types if run_discover else []):
+    # Use the more restrictive of intent year_from and config MIN_YEAR
+    effective_year_from = intent.year_from
+    if config.MIN_YEAR > 0:
+        effective_year_from = max(config.MIN_YEAR, intent.year_from or 0) or config.MIN_YEAR
+
+    discover_cts = list(content_types) if run_discover else []
+
+    def _discover(ct):
         log.debug("TMDB discover: type=%s genres=%s countries=%s languages=%s years=%s-%s",
                    ct, intent.genres, intent.origin_countries, intent.languages,
                    intent.year_from, intent.year_to)
-        # Use the more restrictive of intent year_from and config MIN_YEAR
-        effective_year_from = intent.year_from
-        if config.MIN_YEAR > 0:
-            effective_year_from = max(config.MIN_YEAR, intent.year_from or 0) or config.MIN_YEAR
-        batch = ctx.tmdb_client.search_by_filters(
+        return ctx.tmdb_client.search_by_filters(
             content_type=ct,
             genres=intent.genres,
             origin_countries=intent.origin_countries,
@@ -589,6 +654,9 @@ def ask(
             year_to=intent.year_to,
             size=30,
         )
+
+    for ct, batch in zip(discover_cts, _parallel_fetch(_discover, discover_cts)):
+        batch = batch or []
         log.debug("TMDB returned %d candidates for %s", len(batch), ct)
         candidates.extend(batch)
 
@@ -602,54 +670,92 @@ def ask(
 
     if intent.similar_to:
         related_added = 0
-        for seed_title in intent.similar_to:
-            for ct in content_types:
-                seed_meta = ctx.tmdb_client.get_metadata(seed_title, ct)
-                if not seed_meta:
-                    continue
-                related = ctx.tmdb_client.get_related_titles(
-                    seed_meta.tmdb_id,
-                    seed_meta.content_type,
-                    size=30,
-                )
-                for candidate in related:
-                    if _append_candidate(candidates, seen_ids, candidate, ctx, extra_excludes):
-                        related_added += 1
+        seed_tasks = [(seed, ct) for seed in intent.similar_to for ct in content_types]
+
+        def _related(task):
+            seed_title, ct = task
+            seed_meta = ctx.tmdb_client.get_metadata(seed_title, ct)
+            if not seed_meta:
+                return []
+            return ctx.tmdb_client.get_related_titles(
+                seed_meta.tmdb_id, seed_meta.content_type, size=30)
+
+        for related in _parallel_fetch(_related, seed_tasks):
+            for candidate in (related or []):
+                if _append_candidate(candidates, seen_ids, candidate, ctx, extra_excludes):
+                    related_added += 1
         log.debug("TMDB related titles added %d new candidates", related_added)
 
     # Source 2: LLM suggestions (semantic, taste-aware — always runs)
     log.debug("Fetching LLM suggestions for semantic coverage (similar_to=%s)", intent.similar_to)
     suggestions = _generate_suggestions(query, profile_for_prompt, ctx.llm,
                                          similar_to=intent.similar_to)
-    log.debug("LLM suggested %d titles: %s", len(suggestions), suggestions[:10])
+    log.debug("LLM suggested %d titles: %s", len(suggestions), suggestions)
     suggestion_count = 0
-    for title in suggestions:
-        for ct in content_types:
-            meta = ctx.tmdb_client.get_metadata(title, ct)
-            if meta and meta.content_type == ct and _append_candidate(candidates, seen_ids, meta, ctx, extra_excludes):
-                suggestion_count += 1
+    suggestion_keys: set[tuple[str, int]] = set()   # taste-aware picks to protect from the trim
+    suggestion_tasks = [(title, ct) for title in suggestions for ct in content_types]
+
+    def _resolve(task):
+        title, ct = task
+        return ct, ctx.tmdb_client.get_metadata(title, ct)
+
+    for resolved in _parallel_fetch(_resolve, suggestion_tasks):
+        if not resolved:
+            continue
+        ct, meta = resolved
+        if meta and meta.content_type == ct and _append_candidate(
+                candidates, seen_ids, meta, ctx, extra_excludes):
+            suggestion_count += 1
+            if meta.tmdb_id is not None:
+                suggestion_keys.add((meta.content_type, meta.tmdb_id))
     log.debug("LLM suggestions added %d new candidates", suggestion_count)
+
+    # Runtime is a hard filter when known, applied once over the whole pool so a
+    # fallback is possible. If every candidate with a known runtime exceeds the
+    # ceiling (e.g. "movie under an hour" — feature films are rarely that short),
+    # a strict filter would empty the pool; instead keep it and downgrade runtime
+    # to a ranking signal so the user still sees the closest, shortest matches.
+    if intent.max_runtime_minutes and candidates:
+        within = [c for c in candidates if _within_runtime(c, intent.max_runtime_minutes)]
+        if within:
+            candidates = within
+        else:
+            log.debug("Runtime ceiling %d emptied the pool; relaxing to a ranking signal",
+                      intent.max_runtime_minutes)
+            context_note = (
+                (context_note or "")
+                + f"\nRuntime limit ({intent.max_runtime_minutes} min) was too restrictive; "
+                  "prefer the shortest strong matches and note if a pick runs longer."
+            ).strip()
 
     if log.isEnabledFor(logging.DEBUG) and candidates:
         log.debug("Final candidate pool (%d): %s",
                    len(candidates),
-                   [f"{c.title} ({c.content_type}, ★{c.vote_average:.1f})" for c in candidates[:20]])
+                   [f"{c.title} ({c.content_type}, ★{c.vote_average:.1f})" for c in candidates])
 
     if not candidates:
         log.debug("No candidates after all sources, returning empty")
         return []
 
-    # Bound enrichment/ranking cost: enrichment is one serial LLM call per
-    # uncached title, so a broad query can otherwise enrich 100+ titles. Keep the
-    # strongest candidates by rating weighted by vote volume.
+    # Bound enrichment/ranking cost, but never let the popularity sort discard the
+    # taste-aware LLM suggestions: reserve their slots first, then fill the rest
+    # with the strongest remaining candidates by rating weighted by vote volume.
     if len(candidates) > config.MAX_ENRICH_CANDIDATES:
-        candidates.sort(
-            key=lambda c: (c.vote_average or 0) * math.log10((c.vote_count or 0) + 10),
-            reverse=True,
-        )
-        log.debug("Trimming candidate pool %d -> %d before enrichment",
-                  len(candidates), config.MAX_ENRICH_CANDIDATES)
-        candidates = candidates[:config.MAX_ENRICH_CANDIDATES]
+        def _weight(c):
+            return (c.vote_average or 0) * math.log10((c.vote_count or 0) + 10)
+
+        suggested = [c for c in candidates
+                     if (c.content_type, c.tmdb_id) in suggestion_keys]
+        others = [c for c in candidates
+                  if (c.content_type, c.tmdb_id) not in suggestion_keys]
+        suggested.sort(key=_weight, reverse=True)
+        others.sort(key=_weight, reverse=True)
+        kept = (suggested + others)[:config.MAX_ENRICH_CANDIDATES]
+        log.debug("Trimming candidate pool %d -> %d before enrichment "
+                  "(%d/%d protected LLM suggestions kept)",
+                  len(candidates), config.MAX_ENRICH_CANDIDATES,
+                  min(len(suggested), config.MAX_ENRICH_CANDIDATES), len(suggested))
+        candidates = kept
 
     log.debug("Enriching %d candidates", len(candidates))
     meta_dict = {c.title: c for c in candidates}

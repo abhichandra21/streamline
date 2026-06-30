@@ -71,7 +71,7 @@
   </div>
   <div style="display:flex; flex-wrap:wrap; gap:0.4rem;">
     {% for q in recent_queries %}
-    <a href="/searches#q-{{ loop.index }}" class="btn-ghost" style="padding:4px 12px; font-size:0.7rem; text-decoration:none;">{{ q.query }}</a>
+    <a href="/searches#q-{{ loop.index }}" class="btn-ghost" style="padding:4px 12px; font-size:0.7rem; text-decoration:none;"{% if q.summary %} title="{{ q.summary }}"{% endif %}>{{ q.label or q.query }}</a>
     {% endfor %}
   </div>
 </section>
