@@ -447,13 +447,15 @@ def history() -> str:
     _ensure_user_store_once()
     manual = user_store.list_manual_archive(config.EVENT_DB_PATH)
 
-    existing_norm = {
-        (_norm_title(e.get("title", "")), e.get("content_type", "tv"))
-        for e in entries
-    }
+    existing_idx = {}
+    for i, e in enumerate(entries):
+        existing_idx.setdefault(
+            (_norm_title(e.get("title", "")), e.get("content_type", "tv")), i)
+
     for m in manual:
         key = (_norm_title(m["title"]), m["content_type"])
-        if key not in existing_norm:
+        watched_at = m.get("watched_at", "")
+        if key not in existing_idx:
             entries.append({
                 "title": m["title"],
                 "content_type": m["content_type"],
@@ -461,8 +463,20 @@ def history() -> str:
                 "source": m["source"],
                 # Manual additions are their own provider category (issue #37).
                 "platforms": ["manual"],
-                "last_watched": m.get("watched_at", ""),
+                "last_watched": watched_at,
             })
+            existing_idx[key] = len(entries) - 1
+        else:
+            # The title is already in the watch index: fold the manual watch in
+            # rather than dropping it, so the 'manual' source filter and recency
+            # sort both see it. Copy first — the entry dict is shared with the
+            # cached watch index and must not be mutated in place.
+            i = existing_idx[key]
+            merged = dict(entries[i])
+            merged["platforms"] = sorted(set(merged.get("platforms") or []) | {"manual"})
+            if watched_at > (merged.get("last_watched") or ""):
+                merged["last_watched"] = watched_at
+            entries[i] = merged
 
     # Source-provider options for the filter dropdown, computed over the full
     # set before filtering so every provider stays selectable.

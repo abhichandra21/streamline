@@ -927,6 +927,33 @@ def test_history_provider_filter_and_recent_sort(client, tmp_path, monkeypatch):
         assert html.index("Prime Pick") < html.index("Netflix Pick")
 
 
+def test_history_merges_manual_provenance_into_existing_entry(client, tmp_path, monkeypatch):
+    """Issue #37 review: a manual watch of an already-indexed title folds its
+    'manual' source into the existing row instead of being dropped."""
+    from unittest.mock import MagicMock, patch
+    from recommender.user_store import init_db, add_to_archive
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    add_to_archive(db, "Imported Show", "tv", source="web")
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = [
+        {"title": "Imported Show", "content_type": "tv", "tmdb_id": None,
+         "platforms": ["netflix"], "last_watched": "2026-01-01T00:00:00"},
+    ]
+    with patch("recommender.web._get_context", return_value=mock_ctx):
+        # The manual source filter now finds the already-indexed title.
+        assert b"Imported Show" in client.get("/history?platform=manual").data
+        # The original source is still present (no in-place mutation of the cache).
+        resp = client.get("/history?platform=netflix")
+        assert b"Imported Show" in resp.data
+        # Still a single row, not a duplicate.
+        assert resp.data.count(b"hist-2") == 0
+
+
 def test_consolidate_providers_groups_variants():
     """Issue #36: granular TMDB provider names collapse to one entry per brand."""
     from recommender.web import _consolidate_providers

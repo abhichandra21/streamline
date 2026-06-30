@@ -29,8 +29,9 @@ class UserStateIndex:
     _watchlist_tmdb_ids: set[int] = field(default_factory=set)
     _watchlist_titles: set[tuple[str, str]] = field(default_factory=set)
 
-    # ratings: keyed by tmdb_id or (normalized_title, content_type)
-    _ratings_by_tmdb: dict[int, str] = field(default_factory=dict)
+    # ratings: keyed by (content_type, tmdb_id) or (normalized_title, content_type).
+    # The TMDB key is typed so a movie and TV show sharing a numeric id don't collide.
+    _ratings_by_typed: dict[tuple[str, int], str] = field(default_factory=dict)
     _ratings_by_title: dict[tuple[str, str], str] = field(default_factory=dict)
 
     @classmethod
@@ -74,7 +75,7 @@ class UserStateIndex:
             ).fetchall():
                 tmdb_id, norm, ct, rating = row
                 if tmdb_id is not None:
-                    idx._ratings_by_tmdb[tmdb_id] = rating
+                    idx._ratings_by_typed[(ct, tmdb_id)] = rating
                 idx._ratings_by_title[(norm, ct)] = rating
 
         finally:
@@ -101,6 +102,6 @@ class UserStateIndex:
 
     def get_rating(self, meta) -> str | None:
         if meta.tmdb_id is not None:
-            return self._ratings_by_tmdb.get(meta.tmdb_id)
+            return self._ratings_by_typed.get((meta.content_type, meta.tmdb_id))
         key = (_normalize(meta.title), meta.content_type)
         return self._ratings_by_title.get(key)

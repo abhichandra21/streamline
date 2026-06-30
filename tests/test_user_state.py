@@ -107,6 +107,21 @@ def test_get_rating_does_not_fallthrough_on_wrong_tmdb_id(tmp_path):
     assert idx.get_rating(FakeMeta("Breaking Bad", "tv", tmdb_id=9999)) is None
 
 
+def test_get_rating_is_content_type_aware_for_shared_tmdb_id(tmp_path):
+    """A movie and a TV show that share a numeric TMDB id must not collide."""
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    rate_title(db, "Breathe", "movie", "liked", tmdb_id=407445)
+
+    from recommender.user_state import UserStateIndex
+    idx = UserStateIndex.load(db)
+
+    # The movie is liked; the TV show with the same id is still unrated.
+    assert idx.get_rating(FakeMeta("Breathe", "movie", tmdb_id=407445)) == "liked"
+    assert idx.get_rating(FakeMeta("Breathe", "tv", tmdb_id=407445)) is None
+    assert not idx.has_rating(FakeMeta("Breathe", "tv", tmdb_id=407445))
+
+
 def test_is_in_watchlist(tmp_path):
     db = str(tmp_path / "test.db")
     init_db(db)
