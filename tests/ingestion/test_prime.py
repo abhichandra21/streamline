@@ -96,6 +96,23 @@ def test_parse_zip_sets_language_hint_for_non_latin_titles(tmp_path):
     assert by_title["Dune"].language_hint is None
 
 
+def test_parse_zip_tv_language_hint_derived_from_series_name_not_episode_title(tmp_path):
+    """A Latin-script show with a non-Latin episode title must not bias the
+    series-level TMDB search toward a foreign original_language -- the hint
+    has to come from the series name, since that's the lookup key used."""
+    export_path = _write_export_zip(
+        tmp_path,
+        [_row(Title="डॉन - Breaking Bad, Season 1", **{"Seconds Viewed": "2700"})],
+    )
+
+    events = parse(export_path)
+
+    assert len(events) == 1
+    assert events[0].content_type == "tv"
+    assert events[0].series_name == "Breaking Bad"
+    assert events[0].language_hint is None
+
+
 def test_parse_zip_classifies_tv_and_movies(tmp_path):
     export_path = _write_export_zip(
         tmp_path,

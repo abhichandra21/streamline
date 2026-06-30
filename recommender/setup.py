@@ -214,9 +214,13 @@ def _titles_are_compatible(index_title: str, cache_title: str) -> bool:
         return False
     if index_norm == cache_norm:
         return True
+    # Only accept the cache title being a substring of the (typically more
+    # specific) source title -- e.g. TMDB trimming a subtitle we kept. The
+    # reverse direction (treating a longer cache title as compatible because
+    # it merely starts with the shorter source title) would also accept
+    # "Avatar" -> "Avatar: The Way of Water" or "Dune" -> "Dune: Part Two",
+    # which are distinct works with different tmdb_ids.
     if len(cache_norm) >= 4 and cache_norm in index_norm:
-        return True
-    if len(index_norm) >= 4 and index_norm in cache_norm:
         return True
     return False
 

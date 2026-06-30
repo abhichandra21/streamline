@@ -38,7 +38,11 @@ def _parse_csv(filepath: str) -> list[WatchEvent]:
                 watched_duration=duration,
                 total_duration=None,
                 timestamp=timestamp,
-                language_hint=detect_language_hint(title),
+                # Use series_name, not the full title -- for TV episodes the
+                # title includes the episode/season text, and a Latin-script
+                # show with a non-Latin episode title must not bias the
+                # series-level TMDB search toward a foreign original_language.
+                language_hint=detect_language_hint(series_name),
                 profile=row["Profile Name"].strip(),
             ))
     return events

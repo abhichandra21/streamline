@@ -1346,12 +1346,20 @@ def test_titles_are_compatible_normalizes_ampersand():
     assert setup._titles_are_compatible("Spy & Spy", "Spy and Spy")
 
 
-def test_titles_are_compatible_bidirectional_substring():
+def test_titles_are_compatible_cache_title_substring_of_source():
     import recommender.setup as setup
-    # Longer index title containing a short cache title (existing direction).
+    # A shorter cache title contained in the (more specific) source title is
+    # still accepted -- e.g. TMDB trimming a subtitle we kept.
     assert setup._titles_are_compatible("Avatar: The Way of Water", "Avatar")
-    # Shorter index title contained in a longer cache title (new direction).
-    assert setup._titles_are_compatible("Avatar", "Avatar: The Way of Water")
+
+
+def test_titles_are_compatible_rejects_distinct_sequels():
+    """A short source title must not be accepted just because a longer
+    cache title happens to start with it -- these are different works with
+    different tmdb_ids, not the same title with a trimmed subtitle."""
+    import recommender.setup as setup
+    assert not setup._titles_are_compatible("Avatar", "Avatar: The Way of Water")
+    assert not setup._titles_are_compatible("Dune", "Dune: Part Two")
 
 
 def test_titles_are_compatible_still_rejects_unrelated():
