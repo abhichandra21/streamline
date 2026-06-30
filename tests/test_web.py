@@ -795,6 +795,40 @@ class TestRenderedState:
         assert b"Mark as watched" in resp.data  # action button present
         assert b"Won&#39;t watch" in resp.data or b"Won't watch" in resp.data
 
+    def test_watchlist_page_renders_cached_metadata(self, client, tmp_path, monkeypatch):
+        """A saved title with cached TMDB metadata shows its poster, rating, genres,
+        and streaming availability rather than a bare text row."""
+        from recommender import web
+        from recommender.user_store import init_db, save_title
+        from recommender.tmdb_client import TmdbMetadata
+        from unittest.mock import MagicMock
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "Calibre", "movie", tmdb_id=474051)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+        monkeypatch.setattr("config.TMDB_API_KEY", "tmdb")
+
+        meta = TmdbMetadata(tmdb_id=474051, content_type="movie", title="Calibre",
+                            genres=["Thriller", "Drama"], vote_average=6.9)
+        tmdb_client = MagicMock()
+        tmdb_client.get_cached_by_id.return_value = meta
+        tmdb_client._load_cache.return_value = {"imdb_id": "tt6230738"}
+        tmdb_client.get_watch_providers.return_value = ["Netflix"]
+        monkeypatch.setattr(web, "_get_context", lambda: MagicMock(tmdb_client=tmdb_client))
+        monkeypatch.setattr(web, "_get_poster_url",
+                            lambda tid, ct, size="w300": "https://image.tmdb.org/t/p/w300/x.jpg")
+
+        resp = client.get("/watchlist")
+        html = resp.data.decode()
+        assert resp.status_code == 200
+        assert "image.tmdb.org" in html              # poster rendered
+        assert "6.9" in html                          # rating shown
+        assert "Thriller" in html                     # genres shown
+        assert "Netflix" in html                      # streaming availability shown
+        assert "tt6230738" in html                    # direct IMDB link from cached id
+
     def test_archive_rate_shows_thumbs_state(self, client, tmp_path, monkeypatch):
         from recommender.user_store import init_db, rate_title
 

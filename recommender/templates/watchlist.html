@@ -27,7 +27,7 @@
 </div>
 
 {% if items %}
-<div id="wl-list" style="display:flex; flex-direction:column; gap:6px;">
+<div id="wl-list" style="display:flex; flex-direction:column; gap:10px;">
   {% for item in items %}
   <div id="wl-item-{{ loop.index }}"
     class="wl-item"
@@ -35,33 +35,76 @@
     data-title="{{ item.title | lower }}"
     data-saved="{{ item.saved_at or '' }}"
     data-rating="{{ item.vote_average }}"
-    style="display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:0.75rem 1rem; border-radius:6px; background:var(--surface); border:1px solid var(--border);">
-    <div style="display:flex; align-items:baseline; gap:0.5rem; min-width:0;">
-      <span style="font-family:'DM Serif Display',serif; font-size:1.05rem; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ item.title }}</span>
-      <span class="badge {{ 'badge-tv' if item.content_type == 'tv' else 'badge-movie' }}" style="flex-shrink:0;">{{ item.content_type }}</span>
+    style="display:flex; gap:1rem; padding:1.25rem; border-radius:6px; background:var(--surface); border:1px solid var(--border); transition:border-color 0.2s;"
+    onmouseover="this.style.borderColor='var(--accent)'"
+    onmouseout="this.style.borderColor='var(--border)'">
+
+    {% if item.poster %}
+    <div style="width:68px; flex-shrink:0; aspect-ratio:2/3; overflow:hidden; border-radius:4px;">
+      <img src="{{ item.poster }}" alt="{{ item.title }}" style="width:100%; height:100%; object-fit:cover;">
     </div>
-    <div style="display:flex; align-items:center; gap:0.4rem; flex-shrink:0;">
-      <form hx-post="/watchlist/watched" hx-target="#wl-item-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="title" value="{{ item.title }}">
-        <input type="hidden" name="content_type" value="{{ item.content_type }}">
-        {% if item.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ item.tmdb_id }}">{% endif %}
-        <button type="submit" class="wl-btn wl-btn--watched">Mark as watched</button>
-      </form>
-      <form hx-post="/watchlist/dismiss" hx-target="#wl-item-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="title" value="{{ item.title }}">
-        <input type="hidden" name="content_type" value="{{ item.content_type }}">
-        {% if item.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ item.tmdb_id }}">{% endif %}
-        <button type="submit" class="wl-btn wl-btn--dismiss">Won't watch</button>
-      </form>
-      <form hx-post="/watchlist/remove" hx-target="#wl-item-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="title" value="{{ item.title }}">
-        <input type="hidden" name="content_type" value="{{ item.content_type }}">
-        {% if item.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ item.tmdb_id }}">{% endif %}
-        <button type="submit" class="wl-btn wl-btn--remove" title="Remove">&times;</button>
-      </form>
+    {% else %}
+    <div style="width:68px; flex-shrink:0; aspect-ratio:2/3; background:var(--surface2); border-radius:4px; display:flex; align-items:center; justify-content:center;">
+      <span style="font-family:'DM Serif Display',serif; font-size:1.5rem; color:var(--border);">{{ item.title[:1] }}</span>
+    </div>
+    {% endif %}
+
+    <div style="flex:1; min-width:0;">
+      <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:0.5rem; margin-bottom:0.35rem;">
+        {% if item.tmdb_url %}
+        <a href="{{ item.tmdb_url }}" target="_blank" rel="noopener" style="text-decoration:none;">
+          <h3 style="font-family:'DM Serif Display',serif; font-size:1.2rem; color:var(--text); line-height:1.25; margin:0; transition:color 0.15s;"
+            onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">{{ item.title }}</h3>
+        </a>
+        {% else %}
+        <h3 style="font-family:'DM Serif Display',serif; font-size:1.2rem; color:var(--text); line-height:1.25; margin:0;">{{ item.title }}</h3>
+        {% endif %}
+        <span class="badge {{ 'badge-tv' if item.content_type == 'tv' else 'badge-movie' }}" style="flex-shrink:0;">{{ item.content_type }}</span>
+      </div>
+
+      <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+        {% if item.vote_average %}
+        <span class="mono" style="font-size:0.65rem; color:var(--accent2);">★ {{ "%.1f"|format(item.vote_average) }}</span>
+        {% endif %}
+        {% if item.genres %}
+        {% if item.vote_average %}<span style="color:var(--border);">·</span>{% endif %}
+        <span class="mono" style="font-size:0.62rem; color:var(--muted);">{{ item.genres | join("  ·  ") }}</span>
+        {% endif %}
+      </div>
+
+      <div style="display:flex; align-items:center; gap:0.8rem; flex-wrap:wrap; margin-bottom:0.75rem;">
+        {% if item.streaming_providers %}
+        <span class="mono" style="font-size:0.58rem; color:var(--muted);">{{ item.streaming_providers | join("  ·  ") }}</span>
+        {% else %}
+        <span class="mono" style="font-size:0.58rem; color:var(--muted); opacity:0.6;">Not on your services</span>
+        {% endif %}
+        {% if item.tmdb_url %}<a href="{{ item.tmdb_url }}" target="_blank" rel="noopener" class="mono result-link">TMDB</a>{% endif %}
+        {% if item.imdb_url %}<a href="{{ item.imdb_url }}" target="_blank" rel="noopener" class="mono result-link">IMDB</a>{% endif %}
+      </div>
+
+      <div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
+        <form hx-post="/watchlist/watched" hx-target="#wl-item-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="title" value="{{ item.title }}">
+          <input type="hidden" name="content_type" value="{{ item.content_type }}">
+          {% if item.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ item.tmdb_id }}">{% endif %}
+          <button type="submit" class="wl-btn wl-btn--watched">Mark as watched</button>
+        </form>
+        <form hx-post="/watchlist/dismiss" hx-target="#wl-item-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="title" value="{{ item.title }}">
+          <input type="hidden" name="content_type" value="{{ item.content_type }}">
+          {% if item.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ item.tmdb_id }}">{% endif %}
+          <button type="submit" class="wl-btn wl-btn--dismiss">Won't watch</button>
+        </form>
+        <form hx-post="/watchlist/remove" hx-target="#wl-item-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="title" value="{{ item.title }}">
+          <input type="hidden" name="content_type" value="{{ item.content_type }}">
+          {% if item.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ item.tmdb_id }}">{% endif %}
+          <button type="submit" class="wl-btn wl-btn--remove" title="Remove">&times;</button>
+        </form>
+      </div>
     </div>
   </div>
   {% endfor %}
