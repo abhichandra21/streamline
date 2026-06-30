@@ -1,5 +1,7 @@
 from datetime import timedelta
-from recommender.ingestion.base import classify_title, is_bonus_content, parse_duration
+from recommender.ingestion.base import (
+    classify_title, detect_language_hint, is_bonus_content, parse_duration,
+)
 
 
 def test_classify_tv_season():
@@ -92,4 +94,35 @@ def test_is_bonus_content_false_for_real_titles():
     assert not is_bonus_content("Cars 3", "")
     assert not is_bonus_content("Inside")
     assert not is_bonus_content("Promoter")
+
+
+def test_detect_language_hint_devanagari():
+    assert detect_language_hint("Don") is None  # transliterated, no script
+    assert detect_language_hint("डॉन") == "hi"
+
+
+def test_detect_language_hint_hebrew():
+    assert detect_language_hint("טריילר") == "he"
+
+
+def test_detect_language_hint_arabic():
+    assert detect_language_hint("الفيلم") == "ar"
+
+
+def test_detect_language_hint_japanese_kana_takes_precedence_over_kanji():
+    assert detect_language_hint("おはよう") == "ja"
+    assert detect_language_hint("ひらがな漢字") == "ja"
+
+
+def test_detect_language_hint_korean_hangul():
+    assert detect_language_hint("기생충") == "ko"
+
+
+def test_detect_language_hint_chinese_without_kana():
+    assert detect_language_hint("流浪地球") == "zh"
+
+
+def test_detect_language_hint_none_for_latin_titles():
+    assert detect_language_hint("Inception") is None
+    assert detect_language_hint("") is None
 

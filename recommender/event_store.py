@@ -28,12 +28,22 @@ CREATE TABLE IF NOT EXISTS watch_events (
     series_name              TEXT NOT NULL,
     watched_duration_seconds INTEGER NOT NULL,
     total_duration_seconds   INTEGER,
+    release_year_hint        INTEGER,
+    language_hint            TEXT,
     timestamp_iso            TEXT NOT NULL,
     profile                  TEXT NOT NULL,
     import_id                INTEGER NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
     source_hash              TEXT NOT NULL UNIQUE
 );
 """
+
+# Columns added after the initial release. CREATE TABLE IF NOT EXISTS is a
+# no-op against an existing table, so older databases need these backfilled
+# via ALTER TABLE (see _ensure_watch_event_columns).
+_WATCH_EVENT_HINT_COLUMNS = (
+    ("release_year_hint", "INTEGER"),
+    ("language_hint", "TEXT"),
+)
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
@@ -80,6 +90,17 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _ensure_watch_event_columns(conn: sqlite3.Connection) -> None:
+    """Backfill release_year_hint/language_hint onto a pre-existing watch_events table."""
+    cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(watch_events)").fetchall()
+    }
+    for name, sql_type in _WATCH_EVENT_HINT_COLUMNS:
+        if name not in cols:
+            conn.execute(f"ALTER TABLE watch_events ADD COLUMN {name} {sql_type}")
+
+
 def init_db(db_path: str) -> None:
     """Create tables if not present. Create parent directories if needed.
 
@@ -104,6 +125,9 @@ def init_db(db_path: str) -> None:
             conn.executescript(_SCHEMA)
         else:
             conn.executescript(_SCHEMA)
+        if "watch_events" in tables:
+            _ensure_watch_event_columns(conn)
+            conn.commit()
     finally:
         conn.close()
 
@@ -192,11 +216,12 @@ def replace_provider_events(
                     "INSERT OR IGNORE INTO watch_events "
                     "(provider, title, content_type, series_name, "
                     "watched_duration_seconds, total_duration_seconds, "
+                    "release_year_hint, language_hint, "
                     "timestamp_iso, profile, import_id, source_hash) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (provider, event.title, event.content_type, event.series_name,
-                     duration_secs, total_secs, ts_iso, event.profile,
-                     import_id, source_hash),
+                     duration_secs, total_secs, event.release_year_hint, event.language_hint,
+                     ts_iso, event.profile, import_id, source_hash),
                 )
 
             persisted = conn.execute(
@@ -221,6 +246,7 @@ def load_events(db_path: str, provider: str | None = None) -> list[WatchEvent]:
         query = (
             "SELECT provider, title, content_type, series_name, "
             "watched_duration_seconds, total_duration_seconds, "
+            "release_year_hint, language_hint, "
             "timestamp_iso, profile FROM watch_events"
         )
         params: tuple = ()
@@ -232,7 +258,8 @@ def load_events(db_path: str, provider: str | None = None) -> list[WatchEvent]:
         rows = conn.execute(query, params).fetchall()
         events = []
         for row in rows:
-            (prov, title, ct, series, dur_secs, total_secs, ts_iso, profile) = row
+            (prov, title, ct, series, dur_secs, total_secs,
+             release_year_hint, language_hint, ts_iso, profile) = row
             events.append(WatchEvent(
                 platform=prov,
                 title=title,
@@ -242,6 +269,8 @@ def load_events(db_path: str, provider: str | None = None) -> list[WatchEvent]:
                 total_duration=timedelta(seconds=total_secs) if total_secs is not None else None,
                 timestamp=datetime.fromisoformat(ts_iso),
                 profile=profile,
+                release_year_hint=release_year_hint,
+                language_hint=language_hint,
             ))
         return events
     finally:

@@ -138,3 +138,33 @@ def test_tv_titles_no_year_hint():
         assert events[0].release_year_hint is None
     finally:
         os.unlink(tv); os.unlink(movies)
+
+
+def test_language_hint_detected_for_movies():
+    tv = write_tmp("")
+    movies = write_tmp("डॉन 2006\n")
+    try:
+        events = parse(tv, movies)
+        assert events[0].language_hint == "hi"
+    finally:
+        os.unlink(tv); os.unlink(movies)
+
+
+def test_language_hint_detected_for_tv():
+    tv = write_tmp("डॉन\n")
+    movies = write_tmp("")
+    try:
+        events = parse(tv, movies)
+        assert events[0].language_hint == "hi"
+    finally:
+        os.unlink(tv); os.unlink(movies)
+
+
+def test_language_hint_none_for_latin_titles():
+    tv = write_tmp("Broadchurch\n")
+    movies = write_tmp("Inception 2010\n")
+    try:
+        events = parse(tv, movies)
+        assert all(e.language_hint is None for e in events)
+    finally:
+        os.unlink(tv); os.unlink(movies)

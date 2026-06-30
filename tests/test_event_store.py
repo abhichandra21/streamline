@@ -20,7 +20,7 @@ _SNAP_SHA = "snapshot_sha256_value"
 
 def _make_event(platform="netflix", title="Succession S1E1", content_type="tv",
                 series_name="Succession", duration_secs=3600, timestamp=None,
-                profile="user1"):
+                profile="user1", release_year_hint=None, language_hint=None):
     return WatchEvent(
         platform=platform,
         title=title,
@@ -30,6 +30,8 @@ def _make_event(platform="netflix", title="Succession S1E1", content_type="tv",
         total_duration=None,
         timestamp=timestamp or datetime(2026, 1, 15, 20, 0, 0),
         profile=profile,
+        release_year_hint=release_year_hint,
+        language_hint=language_hint,
     )
 
 
@@ -173,6 +175,67 @@ def test_init_db_migrates_legacy_schema(tmp_path):
     assert rows == [("Preserved Title",)]
 
     conn.close()
+
+
+def test_init_db_watch_events_has_hint_columns(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+
+    conn = sqlite3.connect(db_path)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(watch_events)").fetchall()}
+    conn.close()
+
+    assert "release_year_hint" in cols
+    assert "language_hint" in cols
+
+
+def test_init_db_backfills_hint_columns_onto_existing_table(tmp_path):
+    """A watch_events table created before these columns existed must be
+    backfilled in place, preserving existing rows."""
+    db_path = str(tmp_path / "test.db")
+
+    conn = sqlite3.connect(db_path)
+    conn.executescript("""
+        CREATE TABLE imports (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider             TEXT NOT NULL UNIQUE,
+            source_manifest_json TEXT NOT NULL,
+            snapshot_sha256      TEXT NOT NULL,
+            imported_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );
+        CREATE TABLE watch_events (
+            id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider                 TEXT NOT NULL,
+            title                    TEXT NOT NULL,
+            content_type             TEXT NOT NULL,
+            series_name              TEXT NOT NULL,
+            watched_duration_seconds INTEGER NOT NULL,
+            total_duration_seconds   INTEGER,
+            timestamp_iso            TEXT NOT NULL,
+            profile                  TEXT NOT NULL,
+            import_id                INTEGER NOT NULL,
+            source_hash              TEXT NOT NULL UNIQUE
+        );
+        INSERT INTO imports (provider, source_manifest_json, snapshot_sha256)
+            VALUES ('netflix', '{}', 'sha');
+        INSERT INTO watch_events
+            (provider, title, content_type, series_name,
+             watched_duration_seconds, timestamp_iso, profile, import_id, source_hash)
+            VALUES ('netflix', 'Old Show', 'movie', '', 7200, '2026-01-01T00:00:00',
+                    'user', 1, 'oldhash');
+    """)
+    conn.close()
+
+    init_db(db_path)
+
+    conn = sqlite3.connect(db_path)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(watch_events)").fetchall()}
+    rows = conn.execute("SELECT title, release_year_hint, language_hint FROM watch_events").fetchall()
+    conn.close()
+
+    assert "release_year_hint" in cols
+    assert "language_hint" in cols
+    assert rows == [("Old Show", None, None)]
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +444,33 @@ def test_load_events_empty_db_returns_empty(tmp_path):
     init_db(db_path)
     loaded = load_events(db_path)
     assert loaded == []
+
+
+def test_load_events_round_trips_release_year_and_language_hints(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+
+    original = _make_event(
+        title="Don", timestamp=datetime(2026, 1, 1),
+        release_year_hint=2006, language_hint="hi",
+    )
+    replace_provider_events(db_path, "netflix", [original], _MANIFEST, _SNAP_SHA)
+
+    loaded = load_events(db_path)
+    assert len(loaded) == 1
+    assert loaded[0].release_year_hint == 2006
+    assert loaded[0].language_hint == "hi"
+
+
+def test_load_events_hints_default_to_none(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+
+    replace_provider_events(db_path, "netflix", [_make_event()], _MANIFEST, _SNAP_SHA)
+
+    loaded = load_events(db_path)
+    assert loaded[0].release_year_hint is None
+    assert loaded[0].language_hint is None
 
 
 def test_load_events_reconstructs_watch_event_fields(tmp_path):

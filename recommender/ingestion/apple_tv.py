@@ -16,7 +16,7 @@ import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .base import WatchEvent, is_bonus_content
+from .base import WatchEvent, detect_language_hint, is_bonus_content
 
 log = logging.getLogger("recommender.ingestion.apple_tv")
 
@@ -192,6 +192,7 @@ def _parse_csv(csv_path: str) -> list[WatchEvent]:
             total_duration=timedelta(milliseconds=total_ms) if total_ms else None,
             timestamp=timestamp,
             profile="",
+            language_hint=detect_language_hint(series_name),
         ))
 
     return events

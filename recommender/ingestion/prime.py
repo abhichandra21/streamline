@@ -6,7 +6,7 @@ import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .base import WatchEvent, is_bonus_content
+from .base import WatchEvent, detect_language_hint, is_bonus_content
 
 log = logging.getLogger("recommender.ingestion.prime")
 
@@ -79,6 +79,7 @@ def _parse_csv(filepath: str) -> list[WatchEvent]:
                 total_duration=None,
                 timestamp=timestamp,
                 profile=_clean(row['Profile Type']),
+                language_hint=detect_language_hint(title),
             ))
     return events
 

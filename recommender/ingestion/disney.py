@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import config
-from .base import WatchEvent, is_bonus_content
+from .base import WatchEvent, detect_language_hint, is_bonus_content
 
 log = logging.getLogger("recommender.ingestion.disney")
 
@@ -144,6 +144,7 @@ def parse(path: str) -> list[WatchEvent]:
             total_duration=duration,
             timestamp=timestamp,
             profile=profile,
+            language_hint=detect_language_hint(series_name),
         ))
 
     return events

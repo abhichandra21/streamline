@@ -261,6 +261,7 @@ def _build_hints_map(events: list) -> dict[tuple[str, str], MatchHints]:
             continue
 
         release_year = getattr(e, 'release_year_hint', None)
+        language = getattr(e, 'language_hint', None)
 
         runtime_minutes = None
         runtime_is_exact = False
@@ -274,11 +275,12 @@ def _build_hints_map(events: list) -> dict[tuple[str, str], MatchHints]:
                 runtime_is_exact = False
         # Do not use manual default durations as runtime hints (they are synthetic)
 
-        if release_year or runtime_minutes:
+        if release_year or runtime_minutes or language:
             hints_map[map_key] = MatchHints(
                 release_year=release_year,
                 runtime_minutes=runtime_minutes,
                 runtime_is_exact=runtime_is_exact,
+                language=language,
             )
 
     return hints_map

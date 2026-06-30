@@ -83,6 +83,19 @@ def test_parse_zip_skips_bonus_content_titles(tmp_path):
     assert [event.title for event in events] == ["Dune"]
 
 
+def test_parse_zip_sets_language_hint_for_non_latin_titles(tmp_path):
+    export_path = _write_export_zip(
+        tmp_path,
+        [_row(Title="डॉन"), _row(Title="Dune")],
+    )
+
+    events = parse(export_path)
+
+    by_title = {e.title: e for e in events}
+    assert by_title["डॉन"].language_hint == "hi"
+    assert by_title["Dune"].language_hint is None
+
+
 def test_parse_zip_classifies_tv_and_movies(tmp_path):
     export_path = _write_export_zip(
         tmp_path,

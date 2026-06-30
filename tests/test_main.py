@@ -1160,6 +1160,21 @@ def test_build_hints_map_apple_tv_runtime():
     assert hints.runtime_is_exact is True
 
 
+def test_build_hints_map_language_hint():
+    from datetime import datetime, timedelta
+    import recommender.setup as setup
+    from recommender.ingestion.base import WatchEvent
+
+    event = WatchEvent(
+        platform='netflix', title='डॉन', content_type='movie',
+        series_name='डॉन', watched_duration=timedelta(minutes=120),
+        total_duration=None, timestamp=datetime.now(),
+        profile='', language_hint='hi',
+    )
+    hints_map = setup._build_hints_map([event])
+    assert hints_map[('डॉन', 'movie')].language == 'hi'
+
+
 def test_build_hints_map_manual_duration_not_used():
     """Manual default durations should not be passed as runtime hints."""
     from datetime import datetime, timedelta

@@ -53,6 +53,7 @@ class MatchHints:
     release_year: int | None = None
     runtime_minutes: int | None = None
     runtime_is_exact: bool = False
+    language: str | None = None  # TMDB original_language code, e.g. "hi"
 
 
 def _normalize_for_match(s: str) -> str:

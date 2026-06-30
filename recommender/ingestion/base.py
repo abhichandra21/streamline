@@ -57,6 +57,37 @@ class WatchEvent:
     timestamp: datetime
     profile: str
     release_year_hint: int | None = None  # source year for TMDB matching
+    language_hint: str | None = None      # TMDB original_language code (e.g. "hi"), if detected
+
+
+# Non-Latin scripts whose presence in a title is a strong language signal
+# for TMDB's `with_original_language` search bias. Checked in this order so
+# Japanese (which mixes kanji with kana) is detected before the broader CJK
+# ideograph range is attributed to Chinese.
+_SCRIPT_RANGES: list[tuple[str, tuple[tuple[int, int], ...]]] = [
+    ("ja", ((0x3040, 0x309F), (0x30A0, 0x30FF))),  # Hiragana, Katakana
+    ("ko", ((0xAC00, 0xD7A3), (0x1100, 0x11FF))),  # Hangul
+    ("zh", ((0x4E00, 0x9FFF),)),                    # CJK Unified Ideographs
+    ("hi", ((0x0900, 0x097F),)),                    # Devanagari
+    ("he", ((0x0590, 0x05FF),)),                    # Hebrew
+    ("ar", ((0x0600, 0x06FF),)),                    # Arabic
+]
+
+
+def detect_language_hint(title: str) -> str | None:
+    """Detect a non-Latin script in the title and return a TMDB
+    `with_original_language` code, or None if the title looks Latin-script.
+
+    TMDB's default search ranking is English-popularity-weighted, so a
+    Hindi/Hebrew/CJK/Arabic title without this hint tends to lose to an
+    unrelated, more popular English title containing the same word.
+    """
+    for lang, ranges in _SCRIPT_RANGES:
+        for ch in title:
+            code = ord(ch)
+            if any(lo <= code <= hi for lo, hi in ranges):
+                return lang
+    return None
 
 
 def classify_title(title: str) -> tuple[str, str]:
