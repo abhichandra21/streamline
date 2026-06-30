@@ -954,6 +954,29 @@ def test_history_merges_manual_provenance_into_existing_entry(client, tmp_path, 
         assert resp.data.count(b"hist-2") == 0
 
 
+def test_history_keeps_distinct_manual_entries_with_different_tmdb_ids(client, tmp_path, monkeypatch):
+    """Review fix: two manual rows sharing a title/type but with different TMDB
+    ids (e.g. remakes) must stay distinct, not collapse via a title-only key."""
+    from unittest.mock import MagicMock, patch
+    from recommender.user_store import init_db, add_to_archive
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    add_to_archive(db, "The Office", "tv", tmdb_id=2316)   # US
+    add_to_archive(db, "The Office", "tv", tmdb_id=2996)   # UK remake
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = []
+    with patch("recommender.web._get_context", return_value=mock_ctx):
+        resp = client.get("/history?platform=manual&per_page=120")
+        # Two separate list rows (hist-2 only appears with a second item)...
+        assert b"hist-2" in resp.data
+        # ...and not a spurious third.
+        assert b"hist-3" not in resp.data
+
+
 def test_consolidate_providers_groups_variants():
     """Issue #36: granular TMDB provider names collapse to one entry per brand."""
     from recommender.web import _consolidate_providers

@@ -447,36 +447,57 @@ def history() -> str:
     _ensure_user_store_once()
     manual = user_store.list_manual_archive(config.EVENT_DB_PATH)
 
-    existing_idx = {}
+    # Match a manual row to an existing entry by typed TMDB identity when it has
+    # one (the schema's unique key), so same-title remakes/editions with distinct
+    # ids stay distinct; fall back to (title, type) only for rows without an id.
+    by_tmdb: dict[tuple[str, int], int] = {}
+    by_title: dict[tuple[str, str], int] = {}
     for i, e in enumerate(entries):
-        existing_idx.setdefault(
-            (_norm_title(e.get("title", "")), e.get("content_type", "tv")), i)
+        ct = e.get("content_type", "tv")
+        tid = e.get("tmdb_id")
+        if tid:
+            by_tmdb.setdefault((ct, tid), i)
+        by_title.setdefault((_norm_title(e.get("title", "")), ct), i)
 
     for m in manual:
-        key = (_norm_title(m["title"]), m["content_type"])
+        ct = m["content_type"]
+        tid = m.get("tmdb_id")
+        title_key = (_norm_title(m["title"]), ct)
         watched_at = m.get("watched_at", "")
-        if key not in existing_idx:
+
+        if tid and (ct, tid) in by_tmdb:
+            target = by_tmdb[(ct, tid)]
+        elif tid:
+            target = None              # distinct id not present yet → new row
+        elif title_key in by_title:
+            target = by_title[title_key]
+        else:
+            target = None
+
+        if target is None:
             entries.append({
                 "title": m["title"],
-                "content_type": m["content_type"],
-                "tmdb_id": m.get("tmdb_id"),
+                "content_type": ct,
+                "tmdb_id": tid,
                 "source": m["source"],
                 # Manual additions are their own provider category (issue #37).
                 "platforms": ["manual"],
                 "last_watched": watched_at,
             })
-            existing_idx[key] = len(entries) - 1
+            new_i = len(entries) - 1
+            if tid:
+                by_tmdb.setdefault((ct, tid), new_i)
+            by_title.setdefault(title_key, new_i)
         else:
-            # The title is already in the watch index: fold the manual watch in
-            # rather than dropping it, so the 'manual' source filter and recency
-            # sort both see it. Copy first — the entry dict is shared with the
-            # cached watch index and must not be mutated in place.
-            i = existing_idx[key]
-            merged = dict(entries[i])
+            # Fold the manual watch into the existing row rather than dropping it,
+            # so the 'manual' source filter and recency sort both see it. Copy
+            # first — the entry dict is shared with the cached watch index and
+            # must not be mutated in place.
+            merged = dict(entries[target])
             merged["platforms"] = sorted(set(merged.get("platforms") or []) | {"manual"})
             if watched_at > (merged.get("last_watched") or ""):
                 merged["last_watched"] = watched_at
-            entries[i] = merged
+            entries[target] = merged
 
     # Source-provider options for the filter dropdown, computed over the full
     # set before filtering so every provider stays selectable.
