@@ -60,6 +60,8 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 
 **Online (query_engine.py):** Parse intent (role=reason, supports conversational context) -> hybrid candidate generation (TMDB Discover + LLM suggestions, always both) -> content-type-aware watch filter -> streaming availability annotation -> rank (role=reason, query relevance primary, taste profile secondary).
 
+**Mood Match wizard (wizard.py, web routes):** Alternative entry point to the same online pipeline. Instant content-type tap (no LLM) -> adaptive role=reason question loop grounded in the taste profile (soft floor `min_questions`, hard cap `max_questions`, user can bail via "Show me something now") -> review -> background finalize job with `/wizard/jobs/<id>/poll` polling, merging the adaptive intent over the deterministic seed. `/wizard/refine` and `/wizard/replay` re-run from structured intent.
+
 ### Key Modules
 - `recommender/llm.py` — LLM provider abstraction. ABC-based `LLMClient` with `AnthropicClient` and `GeminiClient`. Role-based model dispatch, token usage tracking, rate limit retry.
 - `recommender/ingestion/` — Platform parsers. Manual titles use `datetime.now()` for competitive scoring.
@@ -69,6 +71,8 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `recommender/taste_profile_builder.py` — Batched profile builder (200 titles/batch, rate limit retry, merge pass). No top-N limit.
 - `recommender/signals.py` — Scoring: completion (50%) + rewatch (30%) + true half-life recency decay (20%).
 - `recommender/query_engine.py` — Full online pipeline. "Why not X?" trace mode, conversational context, platform filtering.
+- `recommender/wizard.py` — Mood Match adaptive loop. One role=reason call per turn returns the next question or a finish signal carrying a synthesized `QueryIntent`. Soft floor (`WIZARD_MIN_QUESTIONS`) rejects an early recommend; hard cap (`WIZARD_MAX_QUESTIONS`) forces finalize. `WizardState` is carried in a hidden form field, size/turn-bounded.
+- `recommender/wizard_flow.py` — Deterministic side of the wizard: the instant content-type tap (counts as question 1, no LLM), recommendation seed builder, review surface, and merge of the adaptive intent over the seed.
 - `recommender/overrides.py` — Title override system (data/overrides.json). Auto-detects changes and triggers rebuild.
 - `recommender/feedback.py` — (Deprecated) Original JSON-based feedback storage. Migrated to `user_store.py` SQLite tables.
 - `recommender/user_store.py` — SQLite storage for watchlist (`saved_titles`), ratings (`title_ratings`), and manual archive additions (`manual_archive_entries`). Migration from `feedback.json`.
@@ -92,6 +96,7 @@ All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ identity-keyed index.
 - **`config.yaml`** — all settings in sections:
   - `provider`, `models.*` — LLM provider and model assignments
   - `llm.*` — timeouts, token limits, batch sizes, rate limit wait
+  - `wizard.*` — `max_questions` (hard cap), `min_questions` (soft floor, bounded by max), `max_tokens` (per-turn output ceiling)
   - `scoring.*` — engagement weights (completion/rewatch/recency), fallback runtimes
   - `manual.*` — synthetic timestamp and durations for manual list titles
   - Top-level: `default_top_n`, `min_vote_count`, `recency_half_life_days`, `watch_region`, `streaming_platforms`

@@ -19,7 +19,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10+-blue?logo=python&logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/LLM-Claude%20%7C%20Gemini%20%7C%20OpenAI-blueviolet" alt="LLM Support">
-  <img src="https://img.shields.io/badge/tests-86%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-473%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
 </p>
 
@@ -34,6 +34,7 @@ Streamline ingests your real watch history from Netflix, Prime Video, Apple TV, 
 ## Features
 
 - **Natural language search** — "paranoid spy thriller like The Night Manager", "feel-good Bollywood comedy", "why not Slow Horses?"
+- **Mood Match wizard** — a guided alternative to free-text search: an instant content-type tap, then a short adaptive question loop grounded in your taste profile that narrows tone, pace, and intensity before recommending. Refine results in place ("shorter", "lighter", "surprise me") without restarting.
 - **Taste profile** — built from your entire watch history (2000+ titles), organized into 15+ genre clusters with deep analysis
 - **Hybrid candidate generation** — TMDB Discover (structured filters) + LLM semantic suggestions (creative matches)
 - **Multi-provider LLM** — Anthropic (Claude), Google (Gemini), and OpenAI with role-based model dispatch (fast/reason)
@@ -138,6 +139,7 @@ Each query prints token usage and estimated cost at the end.
 
 The web UI includes:
 - **Home** — natural language search with HTMX, suggestion pills, recent searches
+- **Mood Match** — guided wizard (`/wizard`): content-type tap, adaptive taste-grounded questions, review step, and in-place result refinement
 - **Searches** — expandable history of past queries with cached results and watchlist actions
 - **Archive** — full watch history with poster grid, list, and compact views; sortable A-Z/Z-A
 - **Watchlist** — save/unsave titles from any page, CSV export
@@ -219,6 +221,13 @@ All shared settings in `config.yaml`:
 | `llm.profile_batch_size` | 200 | Titles per taste profile batch |
 | `llm.rate_limit_wait` | 65 | Seconds to wait on rate limit |
 
+**Mood Match wizard:**
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `wizard.max_questions` | 5 | Hard cap on questions before the wizard must recommend |
+| `wizard.min_questions` | 4 | Soft floor (incl. the content-type tap) before it may finish on its own; bounded by `max_questions` |
+| `wizard.max_tokens` | 1200 | Output-token ceiling per wizard turn (the finalize turn emits a full intent) |
+
 **Scoring:**
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -267,6 +276,7 @@ Two-phase LLM pipeline with role-based model dispatch:
 |--------|---------|
 | `recommender/llm.py` | Provider abstraction (Anthropic/Gemini), token tracking, rate limit retry |
 | `recommender/query_engine.py` | Online pipeline: intent parsing, hybrid candidates, ranking |
+| `recommender/wizard.py` / `wizard_flow.py` | Mood Match: deterministic content-type tap + LLM-led adaptive question loop, synthesizes a `QueryIntent` |
 | `recommender/taste_profile_builder.py` | Batched profile build with cache, truncation detection |
 | `recommender/tmdb_client.py` | TMDB metadata, discover endpoint, streaming providers |
 | `recommender/enricher.py` | LLM enrichment with caching |
