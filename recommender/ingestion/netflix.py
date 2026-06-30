@@ -5,7 +5,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from .base import WatchEvent, classify_title, parse_duration
+from .base import WatchEvent, classify_title, is_bonus_content, parse_duration
 
 log = logging.getLogger("recommender.ingestion.netflix")
 
@@ -21,6 +21,8 @@ def _parse_csv(filepath: str) -> list[WatchEvent]:
         reader = csv.DictReader(f)
         for row in reader:
             if row["Supplemental Video Type"].strip():
+                continue
+            if is_bonus_content(row["Title"]):
                 continue
             duration = parse_duration(row["Duration"])
             if duration.total_seconds() < MIN_WATCH_SECONDS:

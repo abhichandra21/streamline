@@ -4,12 +4,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import config
-from .base import WatchEvent
+from .base import WatchEvent, is_bonus_content
 
 log = logging.getLogger("recommender.ingestion.disney")
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_TRAILER_RE = re.compile(r"\btrailer\b|\|\s*trailer", re.IGNORECASE)
 
 
 def _allowed_profiles() -> set[str]:
@@ -61,7 +60,8 @@ def parse(path: str) -> list[WatchEvent]:
 
     Transforms:
       * Restrict to profiles in config.DISNEY_PROFILES (empty list = keep all).
-      * Drop trailers (Program or Season contains 'Trailer').
+      * Drop bonus content: trailers, clips, featurettes, sing-alongs, etc.
+        (see recommender.ingestion.base.is_bonus_content).
       * Treat non-blank Season as the TV series; blank Season => movie.
       * Collapse same-day duplicates per (profile, content_type, series).
         Disney logs each restart/episode as a separate row, which would
@@ -108,7 +108,7 @@ def parse(path: str) -> list[WatchEvent]:
         season = row["season"]
         if not program and not season:
             continue
-        if _TRAILER_RE.search(program) or _TRAILER_RE.search(season):
+        if is_bonus_content(program, season):
             continue
 
         if season:

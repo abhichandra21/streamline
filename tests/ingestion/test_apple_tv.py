@@ -261,6 +261,19 @@ def test_skips_preview_subtype(tmp_path):
     assert parse(_simple_zip(tmp_path, rows)) == []
 
 
+def test_skips_bonus_content_by_title_text(tmp_path):
+    rows = [
+        _stop_row(**{"Content Title": "Aladdin's Video Journal: A New Fantastic Point of View"}),
+        _stop_row(**{
+            "Content Episode Name": "Ted Lasso",
+            "Content Title": "Behind the Scenes",
+        }),
+        _stop_row(**{"Content Title": "The Movie"}),
+    ]
+    events = parse(_simple_zip(tmp_path, rows))
+    assert [e.title for e in events] == ["The Movie"]
+
+
 def test_skips_watch_under_five_minutes(tmp_path):
     rows = [_stop_row(**{"Feature Play Duration": "240000"})]  # 4 minutes
     assert parse(_simple_zip(tmp_path, rows)) == []

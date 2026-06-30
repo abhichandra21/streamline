@@ -6,7 +6,7 @@ import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .base import WatchEvent
+from .base import WatchEvent, is_bonus_content
 
 log = logging.getLogger("recommender.ingestion.prime")
 
@@ -59,6 +59,8 @@ def _parse_csv(filepath: str) -> list[WatchEvent]:
             except (ValueError, TypeError):
                 continue
             if secs < MIN_WATCH_SECONDS:
+                continue
+            if is_bonus_content(row['Title']):
                 continue
             try:
                 timestamp = datetime.strptime(

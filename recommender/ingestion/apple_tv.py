@@ -16,7 +16,7 @@ import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .base import WatchEvent
+from .base import WatchEvent, is_bonus_content
 
 log = logging.getLogger("recommender.ingestion.apple_tv")
 
@@ -135,6 +135,11 @@ def _parse_csv(csv_path: str) -> list[WatchEvent]:
 
             sub_type = row.get("Content Sub-Type", "").strip()
             if sub_type in _SKIP_SUBTYPES:
+                continue
+
+            if is_bonus_content(
+                row.get("Content Episode Name", ""), row.get("Content Title", "")
+            ):
                 continue
 
             try:

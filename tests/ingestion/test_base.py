@@ -1,5 +1,5 @@
 from datetime import timedelta
-from recommender.ingestion.base import classify_title, parse_duration
+from recommender.ingestion.base import classify_title, is_bonus_content, parse_duration
 
 
 def test_classify_tv_season():
@@ -53,4 +53,43 @@ def test_parse_duration():
 def test_parse_duration_zero():
     assert parse_duration("00:00:00") == timedelta(0)
 
+
+def test_is_bonus_content_detects_known_keywords():
+    assert is_bonus_content("Ferdinand Clip")
+    assert is_bonus_content("The Santa Clause Clip")
+    assert is_bonus_content("Cars 3 Trailer")
+    assert is_bonus_content("Aladdin Featurette")
+    assert is_bonus_content("Behind the Scenes: Encanto")
+    assert is_bonus_content("BTS: Moana 2")
+    assert is_bonus_content("Descendants: The Rise of Red Sing-Along")
+    assert is_bonus_content("Descendants: The Rise of Red Sing Along")
+    assert is_bonus_content("Deleted Scene: Frozen")
+    assert is_bonus_content("Deleted Song: 'Desert Moon'")
+    assert is_bonus_content("Aladdin's Video Journal: A New Fantastic Point of View")
+    assert is_bonus_content("Song Breakdowns: 'Under the Sea'")
+    assert is_bonus_content("Promo: Loki Season 2")
+    assert is_bonus_content("Promotional content for Loki")
+
+
+def test_is_bonus_content_detects_non_latin_trailer_words():
+    assert is_bonus_content("Raya and the Last Dragon טריילר")
+    assert is_bonus_content("Laapataa Ladies ट्रेलर")
+
+
+def test_is_bonus_content_detects_pipe_separated_featurette_markers():
+    assert is_bonus_content("Stunts | More from Pandora's Box | Avatar: The Way of Water")
+    assert is_bonus_content("Trailer | Wonder Man | Season 1")
+
+
+def test_is_bonus_content_checks_across_multiple_parts():
+    # Pipe markers split across separate fields (e.g. program/season) still
+    # count toward the combined featurette-marker threshold.
+    assert is_bonus_content("Inside | Pandora's Box", "| Avatar: The Way of Water")
+
+
+def test_is_bonus_content_false_for_real_titles():
+    assert not is_bonus_content("Inception")
+    assert not is_bonus_content("Cars 3", "")
+    assert not is_bonus_content("Inside")
+    assert not is_bonus_content("Promoter")
 

@@ -78,6 +78,21 @@ def test_parse_zip_skips_trailers_and_short_watches(tmp_path):
     assert [event.title for event in events] == ["Inception"]
 
 
+def test_parse_zip_skips_bonus_content_titles(tmp_path):
+    export_path = _write_export_zip(
+        tmp_path,
+        [
+            _row(Title="Inception"),
+            _row(Title="Featurette: The Making of Inception"),
+            _row(Title="Inception Behind the Scenes"),
+        ],
+    )
+
+    events = parse(export_path)
+
+    assert [event.title for event in events] == ["Inception"]
+
+
 def test_parse_zip_classifies_tv_and_movies(tmp_path):
     export_path = _write_export_zip(
         tmp_path,

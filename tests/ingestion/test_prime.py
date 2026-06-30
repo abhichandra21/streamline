@@ -68,6 +68,21 @@ def test_parse_zip_skips_non_feature_material_and_short_watches(tmp_path):
     assert [event.title for event in events] == ["Dune"]
 
 
+def test_parse_zip_skips_bonus_content_titles(tmp_path):
+    export_path = _write_export_zip(
+        tmp_path,
+        [
+            _row(Title="Dune"),
+            _row(Title="Dune Featurette"),
+            _row(Title="Behind the Scenes: Dune"),
+        ],
+    )
+
+    events = parse(export_path)
+
+    assert [event.title for event in events] == ["Dune"]
+
+
 def test_parse_zip_classifies_tv_and_movies(tmp_path):
     export_path = _write_export_zip(
         tmp_path,
