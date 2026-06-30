@@ -72,6 +72,11 @@ def test_is_bonus_content_detects_known_keywords():
     assert is_bonus_content("Promotional: Loki")
 
 
+def test_is_bonus_content_detects_quoted_deleted_scene_or_song():
+    assert is_bonus_content('Deleted Song "Desert Moon"')
+    assert is_bonus_content('Deleted Scene "Outtake"')
+
+
 def test_is_bonus_content_detects_non_latin_trailer_words():
     assert is_bonus_content("Raya and the Last Dragon טריילר")
     assert is_bonus_content("Laapataa Ladies ट्रेलर")
@@ -131,4 +136,3 @@ def test_detect_language_hint_chinese_without_kana():
 def test_detect_language_hint_none_for_latin_titles():
     assert detect_language_hint("Inception") is None
     assert detect_language_hint("") is None
-
