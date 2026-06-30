@@ -8,16 +8,28 @@ TV_PATTERN = re.compile(
 
 # Bonus content (clips, trailers, featurettes, etc.) that should never reach
 # TMDB lookup — these aren't real watch events and produce nonsense matches.
+#
+# Each keyword must sit at a tag-like position -- the end of the title, or
+# immediately before a ":"/"|" separator -- not just anywhere a bare word
+# happens to match. Plain \b-word matching would flag real titles like
+# "Trailer Park Boys" (starts with "trailer") or a "BTS" concert special
+# (the abbreviation collides with "behind the scenes"), so the trailing
+# lookahead anchors every alternative to how these tags actually appear in
+# real exports ("Cars 3 Trailer", "Trailer | Wonder Man | Season 1",
+# "Behind the Scenes: Encanto"). The "bts" alias is dropped entirely since
+# it's too ambiguous with the band name to anchor safely.
 _BONUS_CONTENT_RE = re.compile(
+    r"(?:"
     r"\bclip\b"
     r"|\btrailer\b"
     r"|\bfeaturette\b"
-    r"|\b(?:behind the scenes|bts)\b"
+    r"|\bbehind the scenes\b"
     r"|\bsing[-\s]?along\b"
     r"|\bdeleted\s+(?:scene|song)\b"
     r"|\bvideo journal\b"
     r"|\bsong breakdowns?\b"
-    r"|\bpromo(?:tional)?\b",
+    r"|\bpromo(?:tional)?\b"
+    r")(?=\s*[:|]|\s*$)",
     re.IGNORECASE,
 )
 

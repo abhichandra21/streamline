@@ -221,7 +221,9 @@ def _titles_are_compatible(index_title: str, cache_title: str) -> bool:
     return False
 
 
-def _resolve_tmdb_id_override(tmdb: TmdbClient, title: str, ct: str, tmdb_id: int) -> object | None:
+def _resolve_tmdb_id_override(
+    tmdb: TmdbClient, title: str, ct: str, tmdb_id: int, search_title: str | None = None,
+) -> object | None:
     """Resolve a `{"tmdb_id": X}` override, rejecting it if the resolved
     TMDB entry doesn't plausibly match the source title.
 
@@ -229,6 +231,12 @@ def _resolve_tmdb_id_override(tmdb: TmdbClient, title: str, ct: str, tmdb_id: in
     override (e.g. an LLM parroting a wrong ID back from an audit report)
     permanently pin a title to the wrong work. This validates the override
     the same way the audit validates indexed entries, before persisting it.
+
+    Direct IDs exist specifically to route around failed/noisy searches
+    (raw non-Latin titles, a corrected title supplied via the override's own
+    "title" field), so the check accepts a match against any of: the raw
+    source title, the override's corrected search_title, the cache's
+    localized title/name, or the cache's original_title/original_name.
 
     Returns parsed TmdbMetadata if the override is plausible, or None if it
     was rejected (caller should fall back to a fresh search) or the fetch
@@ -248,12 +256,22 @@ def _resolve_tmdb_id_override(tmdb: TmdbClient, title: str, ct: str, tmdb_id: in
         tmdb._save_cache(ct, tmdb_id, raw)
 
     cache_title = raw.get("name") or raw.get("title") or ""
-    if not _titles_are_compatible(title, cache_title):
+    cache_original_title = raw.get("original_name") or raw.get("original_title") or ""
+
+    source_titles = {title}
+    if search_title:
+        source_titles.add(search_title)
+    cache_titles = {t for t in (cache_title, cache_original_title) if t}
+
+    is_plausible = any(
+        _titles_are_compatible(source, cache) for source in source_titles for cache in cache_titles
+    )
+    if not is_plausible:
         msg = (
             f"Rejecting override for {title!r}: tmdb_id {tmdb_id} resolves to "
-            f"{cache_title!r}, which does not plausibly match the source title. "
-            f"Falling back to a fresh search — fix or remove this entry in the "
-            f"overrides file."
+            f"{cache_title!r} (original: {cache_original_title!r}), which does not "
+            f"plausibly match the source title. Falling back to a fresh search — "
+            f"fix or remove this entry in the overrides file."
         )
         log.warning(msg)
         console.print(f"  [yellow]{msg}[/yellow]")
@@ -746,7 +764,9 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                         ct = override["content_type"]
                     search_title = override.get("title", title)
                     if override.get("tmdb_id"):
-                        meta = _resolve_tmdb_id_override(tmdb, title, ct, override["tmdb_id"])
+                        meta = _resolve_tmdb_id_override(
+                            tmdb, title, ct, override["tmdb_id"], search_title=search_title,
+                        )
                         if meta:
                             metadata[(title, ct)] = meta
                         else:

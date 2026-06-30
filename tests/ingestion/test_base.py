@@ -62,7 +62,6 @@ def test_is_bonus_content_detects_known_keywords():
     assert is_bonus_content("Cars 3 Trailer")
     assert is_bonus_content("Aladdin Featurette")
     assert is_bonus_content("Behind the Scenes: Encanto")
-    assert is_bonus_content("BTS: Moana 2")
     assert is_bonus_content("Descendants: The Rise of Red Sing-Along")
     assert is_bonus_content("Descendants: The Rise of Red Sing Along")
     assert is_bonus_content("Deleted Scene: Frozen")
@@ -70,7 +69,7 @@ def test_is_bonus_content_detects_known_keywords():
     assert is_bonus_content("Aladdin's Video Journal: A New Fantastic Point of View")
     assert is_bonus_content("Song Breakdowns: 'Under the Sea'")
     assert is_bonus_content("Promo: Loki Season 2")
-    assert is_bonus_content("Promotional content for Loki")
+    assert is_bonus_content("Promotional: Loki")
 
 
 def test_is_bonus_content_detects_non_latin_trailer_words():
@@ -94,6 +93,13 @@ def test_is_bonus_content_false_for_real_titles():
     assert not is_bonus_content("Cars 3", "")
     assert not is_bonus_content("Inside")
     assert not is_bonus_content("Promoter")
+    # Regression: a bare \b-word match on these would false-positive on real
+    # titles where the bonus keyword is just the first word of a longer,
+    # unrelated phrase rather than a tag.
+    assert not is_bonus_content("Trailer Park Boys")
+    assert not is_bonus_content("BTS: Permission to Dance on Stage")
+    assert not is_bonus_content("Clipped")
+    assert not is_bonus_content("Promotional content for Loki")
 
 
 def test_detect_language_hint_devanagari():

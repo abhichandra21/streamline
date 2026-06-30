@@ -238,6 +238,54 @@ def test_init_db_backfills_hint_columns_onto_existing_table(tmp_path):
     assert rows == [("Old Show", None, None)]
 
 
+def test_load_events_self_heals_pre_migration_db_without_init_db(tmp_path):
+    """Callers like the CLI/web event loaders read an existing on-disk DB
+    without ever calling init_db() in that process. load_events() must not
+    raise 'no such column' against a database created before
+    release_year_hint/language_hint existed."""
+    db_path = str(tmp_path / "test.db")
+
+    conn = sqlite3.connect(db_path)
+    conn.executescript("""
+        CREATE TABLE imports (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider             TEXT NOT NULL UNIQUE,
+            source_manifest_json TEXT NOT NULL,
+            snapshot_sha256      TEXT NOT NULL,
+            imported_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );
+        CREATE TABLE watch_events (
+            id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider                 TEXT NOT NULL,
+            title                    TEXT NOT NULL,
+            content_type             TEXT NOT NULL,
+            series_name              TEXT NOT NULL,
+            watched_duration_seconds INTEGER NOT NULL,
+            total_duration_seconds   INTEGER,
+            timestamp_iso            TEXT NOT NULL,
+            profile                  TEXT NOT NULL,
+            import_id                INTEGER NOT NULL,
+            source_hash              TEXT NOT NULL UNIQUE
+        );
+        INSERT INTO imports (provider, source_manifest_json, snapshot_sha256)
+            VALUES ('netflix', '{}', 'sha');
+        INSERT INTO watch_events
+            (provider, title, content_type, series_name,
+             watched_duration_seconds, timestamp_iso, profile, import_id, source_hash)
+            VALUES ('netflix', 'Old Show', 'movie', '', 7200, '2026-01-01T00:00:00',
+                    'user', 1, 'oldhash');
+    """)
+    conn.close()
+
+    # No init_db() call here -- this is the gap the CLI/web loaders hit.
+    loaded = load_events(db_path)
+
+    assert len(loaded) == 1
+    assert loaded[0].title == "Old Show"
+    assert loaded[0].release_year_hint is None
+    assert loaded[0].language_hint is None
+
+
 # ---------------------------------------------------------------------------
 # _compute_source_hash
 # ---------------------------------------------------------------------------

@@ -1082,6 +1082,48 @@ def test_resolve_tmdb_id_override_rejects_bogus_cached_match(tmp_path, capsys):
     assert "Rejecting override" in capsys.readouterr().err
 
 
+def test_resolve_tmdb_id_override_accepts_match_via_original_title(tmp_path):
+    """A Devanagari source title pinned to a tmdb_id whose localized title is
+    English but whose original_title matches must not be rejected."""
+    import json
+    import recommender.setup as setup
+    from recommender.tmdb_client import TmdbClient
+
+    cache_path = tmp_path / "movie" / "12345.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({
+        "id": 12345, "title": "Don", "original_title": "डॉन",
+        "release_date": "2006-10-20",
+    }))
+
+    tmdb = TmdbClient(api_key="unused", cache_dir=str(tmp_path))
+    meta = setup._resolve_tmdb_id_override(tmdb, "डॉन", "movie", 12345)
+
+    assert meta is not None
+    assert meta.title == "Don"
+
+
+def test_resolve_tmdb_id_override_accepts_match_via_corrected_search_title(tmp_path):
+    """An override that supplies both a corrected "title" and a "tmdb_id"
+    must validate against the corrected title too, not just the raw,
+    noisy source title that the override exists to route around."""
+    import json
+    import recommender.setup as setup
+    from recommender.tmdb_client import TmdbClient
+
+    cache_path = tmp_path / "movie" / "21.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps({"id": 21, "title": "21", "release_date": "2008-03-28"}))
+
+    tmdb = TmdbClient(api_key="unused", cache_dir=str(tmp_path))
+    meta = setup._resolve_tmdb_id_override(
+        tmdb, "21 REPACK", "movie", 21, search_title="21",
+    )
+
+    assert meta is not None
+    assert meta.title == "21"
+
+
 def test_resolve_tmdb_id_override_fetches_and_caches_when_uncached(tmp_path):
     import recommender.setup as setup
     from recommender.tmdb_client import TmdbClient

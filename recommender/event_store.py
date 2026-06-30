@@ -243,6 +243,16 @@ def load_events(db_path: str, provider: str | None = None) -> list[WatchEvent]:
 
     conn = _connect(db_path)
     try:
+        # Callers (CLI, web, tools) may read an existing on-disk database
+        # without ever calling init_db() in that process. Backfill
+        # release_year_hint/language_hint here too, so a pre-migration DB
+        # doesn't raise "no such column" on a plain read.
+        if conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='watch_events'"
+        ).fetchone():
+            _ensure_watch_event_columns(conn)
+            conn.commit()
+
         query = (
             "SELECT provider, title, content_type, series_name, "
             "watched_duration_seconds, total_duration_seconds, "
