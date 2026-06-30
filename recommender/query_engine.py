@@ -281,7 +281,7 @@ def rank_candidates(
     response_text = client.generate(prompt, role="reason", max_tokens=rank_tokens,
                                      timeout=config.TIMEOUT_REASON)
 
-    log.debug("Raw ranking response: %s", response_text[:500])
+    log.debug("Raw ranking response: %s", response_text)
     try:
         ranked = _parse_json_response(response_text)
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
@@ -690,8 +690,9 @@ def ask(
     log.debug("Fetching LLM suggestions for semantic coverage (similar_to=%s)", intent.similar_to)
     suggestions = _generate_suggestions(query, profile_for_prompt, ctx.llm,
                                          similar_to=intent.similar_to)
-    log.debug("LLM suggested %d titles: %s", len(suggestions), suggestions[:10])
+    log.debug("LLM suggested %d titles: %s", len(suggestions), suggestions)
     suggestion_count = 0
+    suggestion_keys: set[tuple[str, int]] = set()   # taste-aware picks to protect from the trim
     suggestion_tasks = [(title, ct) for title in suggestions for ct in content_types]
 
     def _resolve(task):
@@ -705,6 +706,8 @@ def ask(
         if meta and meta.content_type == ct and _append_candidate(
                 candidates, seen_ids, meta, ctx, extra_excludes):
             suggestion_count += 1
+            if meta.tmdb_id is not None:
+                suggestion_keys.add((meta.content_type, meta.tmdb_id))
     log.debug("LLM suggestions added %d new candidates", suggestion_count)
 
     # Runtime is a hard filter when known, applied once over the whole pool so a
@@ -728,23 +731,31 @@ def ask(
     if log.isEnabledFor(logging.DEBUG) and candidates:
         log.debug("Final candidate pool (%d): %s",
                    len(candidates),
-                   [f"{c.title} ({c.content_type}, ★{c.vote_average:.1f})" for c in candidates[:20]])
+                   [f"{c.title} ({c.content_type}, ★{c.vote_average:.1f})" for c in candidates])
 
     if not candidates:
         log.debug("No candidates after all sources, returning empty")
         return []
 
-    # Bound enrichment/ranking cost: enrichment is one serial LLM call per
-    # uncached title, so a broad query can otherwise enrich 100+ titles. Keep the
-    # strongest candidates by rating weighted by vote volume.
+    # Bound enrichment/ranking cost, but never let the popularity sort discard the
+    # taste-aware LLM suggestions: reserve their slots first, then fill the rest
+    # with the strongest remaining candidates by rating weighted by vote volume.
     if len(candidates) > config.MAX_ENRICH_CANDIDATES:
-        candidates.sort(
-            key=lambda c: (c.vote_average or 0) * math.log10((c.vote_count or 0) + 10),
-            reverse=True,
-        )
-        log.debug("Trimming candidate pool %d -> %d before enrichment",
-                  len(candidates), config.MAX_ENRICH_CANDIDATES)
-        candidates = candidates[:config.MAX_ENRICH_CANDIDATES]
+        def _weight(c):
+            return (c.vote_average or 0) * math.log10((c.vote_count or 0) + 10)
+
+        suggested = [c for c in candidates
+                     if (c.content_type, c.tmdb_id) in suggestion_keys]
+        others = [c for c in candidates
+                  if (c.content_type, c.tmdb_id) not in suggestion_keys]
+        suggested.sort(key=_weight, reverse=True)
+        others.sort(key=_weight, reverse=True)
+        kept = (suggested + others)[:config.MAX_ENRICH_CANDIDATES]
+        log.debug("Trimming candidate pool %d -> %d before enrichment "
+                  "(%d/%d protected LLM suggestions kept)",
+                  len(candidates), config.MAX_ENRICH_CANDIDATES,
+                  min(len(suggested), config.MAX_ENRICH_CANDIDATES), len(suggested))
+        candidates = kept
 
     log.debug("Enriching %d candidates", len(candidates))
     meta_dict = {c.title: c for c in candidates}

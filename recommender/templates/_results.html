@@ -108,7 +108,10 @@
         </span>
         {% endif %}
         <span id="seen-{{ loop.index }}">
-          <form hx-post="/archive/add" hx-target="#seen-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+          {# Saved titles go through /watchlist/watched so they also leave the
+             watchlist; unsaved ones just add a manual archive entry. #}
+          <form hx-post="{{ '/watchlist/watched' if r.user_state.in_watchlist else '/archive/add' }}"
+                hx-target="#seen-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="title" value="{{ r.title }}">
             <input type="hidden" name="content_type" value="{{ r.content_type }}">

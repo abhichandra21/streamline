@@ -181,6 +181,64 @@ def test_ask_caps_candidate_pool_before_enrichment(monkeypatch):
     assert captured["n"] == 5
 
 
+def test_ask_trim_reserves_llm_suggestions(monkeypatch):
+    """A low-popularity LLM suggestion must survive the trim that otherwise keeps
+    only the highest-rated/most-voted candidates."""
+    import recommender.query_engine as qe
+
+    monkeypatch.setattr(qe.config, "MAX_ENRICH_CANDIDATES", 5)
+    monkeypatch.setattr(qe, "parse_intent",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no parse")))
+
+    # 20 wildly popular Discover candidates that would normally crowd out a niche pick.
+    cands = [make_meta(f"M{i}", tmdb_id=i, content_type="movie", vote_avg=9.5)
+             for i in range(1, 21)]
+    for c in cands:
+        c.vote_count = 9000
+    # Passes the rating gate, but its tiny vote count makes the popularity-weighted
+    # sort rank it far below the crowd-pleasers — exactly the case the reserve guards.
+    niche = make_meta("Niche Pick", tmdb_id=999, content_type="movie", vote_avg=7.5)
+    niche.vote_count = 3
+    niche.release_year = 2015
+
+    captured = {}
+
+    def fake_enrich(meta_dict, cache_dir, client):
+        captured["titles"] = set(meta_dict.keys())
+        return {}
+    monkeypatch.setattr(qe, "enrich_batch", fake_enrich)
+    monkeypatch.setattr(qe, "rank_candidates", lambda *a, **k: [])
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return list(cands)
+        def get_metadata(self, title, ct):
+            return niche if title == "Niche Pick" else None
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return '["Niche Pick"]'   # the taste-aware suggestion
+
+    ctx = qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    intent = qe.QueryIntent(
+        genres=["drama"], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=[], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent=None, content_type="movie",
+        top_n=5, platforms=[],
+    )
+    qe.ask("q", ctx, intent_override=intent)
+    assert len(captured["titles"]) == 5
+    assert "Niche Pick" in captured["titles"]   # reserved despite low popularity
+
+
 def test_rank_candidates_returns_recommendations():
     candidates = [make_meta("Broadchurch", tmdb_id=1), make_meta("Hinterland", tmdb_id=2)]
     enrichments = {"tv/1": "Dark coastal crime.", "tv/2": "Welsh noir."}

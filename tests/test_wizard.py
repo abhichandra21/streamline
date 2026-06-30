@@ -51,6 +51,33 @@ def test_cap_forces_finalize(monkeypatch):
     assert out["context_note"] == "30 minutes, low energy"
 
 
+def test_wizard_floor_rejects_early_recommend(monkeypatch):
+    monkeypatch.setattr("config.WIZARD_MIN_QUESTIONS", 4)
+    monkeypatch.setattr("config.WIZARD_MAX_QUESTIONS", 5)
+    recommend = json.dumps({"action": "recommend", "summary": "x",
+                            "intent": {"content_type": "both"}, "context_note": ""})
+    ask = json.dumps({"action": "ask", "prompt": "What tone?", "subtext": "",
+                      "chips": [{"label": "Dark", "value": "dark"}],
+                      "multi": False, "allow_free_text": True})
+    # Below the floor the model first tries to finish; the retry asks instead.
+    llm = FakeLLM([recommend, ask])
+    out = wizard.next_turn(WizardState(turns=[], turn_count=1), _ctx(llm))
+    assert out["action"] == "ask"
+    assert out["prompt"] == "What tone?"
+    assert len(llm.calls) == 2
+
+
+def test_wizard_floor_allows_recommend_once_met(monkeypatch):
+    monkeypatch.setattr("config.WIZARD_MIN_QUESTIONS", 4)
+    monkeypatch.setattr("config.WIZARD_MAX_QUESTIONS", 5)
+    recommend = json.dumps({"action": "recommend", "summary": "x",
+                            "intent": {"content_type": "both"}, "context_note": ""})
+    llm = FakeLLM([recommend])
+    out = wizard.next_turn(WizardState(turns=[{}, {}, {}, {}], turn_count=4), _ctx(llm))
+    assert out["action"] == "recommend"
+    assert len(llm.calls) == 1   # no retry once the floor is satisfied
+
+
 def test_malformed_turn_falls_back_to_finalize():
     recommend_json = json.dumps({
         "action": "recommend", "summary": "x",

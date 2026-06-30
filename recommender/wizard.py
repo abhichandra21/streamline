@@ -191,12 +191,26 @@ def _taste_tags(ctx, top_genres: int = 6, top_keywords: int = 10) -> str:
 
 def _prompt(state: WizardState, profile: str, force_finish: bool, tags: str = "") -> str:
     cap = config.WIZARD_MAX_QUESTIONS
-    finish_clause = (
-        "You MUST finish now: return the recommend action. Do not ask another question.\n"
-        if force_finish else
-        f"You may ask at most {cap} questions total ({state.turn_count} asked so far). "
-        "Ask another only if it would materially change the recommendation; otherwise finish.\n"
-    )
+    floor = config.WIZARD_MIN_QUESTIONS
+    asked = state.turn_count
+    if force_finish:
+        finish_clause = (
+            "You MUST finish now: return the recommend action. Do not ask another question.\n"
+        )
+    elif asked < floor:
+        # Below the soft floor: the whole point of this flow is nuance, so keep
+        # narrowing. One genre word is not enough — they could use IMDb for that.
+        finish_clause = (
+            f"Only {asked} of at least {floor} questions asked. You MUST ask another "
+            "question now — do NOT recommend yet. Probe a genuinely new dimension "
+            "(tone, intensity, era, pace, comfort vs new, alone or with others) that "
+            "would change which titles fit.\n"
+        )
+    else:
+        finish_clause = (
+            f"You may ask at most {cap} questions total ({asked} asked so far). "
+            "Ask another only if it would materially change the recommendation; otherwise finish.\n"
+        )
     return (
         "You help the user pick something to watch tonight, and you know their whole viewing "
         "history (the taste profile below). Be warm and engaging — talk like a friend who "
@@ -259,35 +273,20 @@ def _finalize(state: WizardState, profile: str, llm, tags: str = "") -> dict:
     }
 
 
-def next_turn(state: WizardState, ctx, force_finish: bool = False) -> dict:
-    """Produce the next wizard turn: a question, or a finish signal with intent."""
-    profile = ctx.taste_profile or ""
-    tags = _taste_tags(ctx)
-    cap_hit = state.turn_count >= config.WIZARD_MAX_QUESTIONS
-    if force_finish or cap_hit:
-        return _finalize(state, profile, ctx.llm, tags)
-
-    raw = ctx.llm.generate(_prompt(state, profile, force_finish=False, tags=tags),
-                           role="reason", max_tokens=config.WIZARD_MAX_TOKENS,
-                           timeout=config.TIMEOUT_REASON)
+def _request_turn(state: WizardState, profile: str, llm, tags: str) -> dict | None:
+    """One LLM turn request; returns the parsed dict, or None if malformed."""
+    raw = llm.generate(_prompt(state, profile, force_finish=False, tags=tags),
+                       role="reason", max_tokens=config.WIZARD_MAX_TOKENS,
+                       timeout=config.TIMEOUT_REASON)
     try:
         data = _parse_json_response(raw)
     except (json.JSONDecodeError, ValueError, TypeError) as exc:
-        log.warning("Malformed wizard turn, finalizing instead: %s", exc)
-        return _finalize(state, profile, ctx.llm, tags)
+        log.warning("Malformed wizard turn: %s", exc)
+        return None
+    return data if isinstance(data, dict) else None
 
-    if not isinstance(data, dict):
-        log.warning("Wizard turn returned non-object JSON, finalizing instead")
-        return _finalize(state, profile, ctx.llm, tags)
 
-    if data.get("action") == "recommend":
-        return {
-            "action": "recommend",
-            "summary": data.get("summary", "based on what you told me"),
-            "intent": _safe_query_intent(data.get("intent", {})),
-            "context_note": data.get("context_note", ""),
-        }
-
+def _as_ask(data: dict) -> dict:
     return {
         "action": "ask",
         "prompt": _plain(data.get("prompt", "What are you in the mood for?")),
@@ -296,6 +295,43 @@ def next_turn(state: WizardState, ctx, force_finish: bool = False) -> dict:
         "multi": bool(data.get("multi", False)),
         "allow_free_text": bool(data.get("allow_free_text", True)),
     }
+
+
+def _as_recommend(data: dict) -> dict:
+    return {
+        "action": "recommend",
+        "summary": data.get("summary", "based on what you told me"),
+        "intent": _safe_query_intent(data.get("intent", {})),
+        "context_note": data.get("context_note", ""),
+    }
+
+
+def next_turn(state: WizardState, ctx, force_finish: bool = False) -> dict:
+    """Produce the next wizard turn: a question, or a finish signal with intent."""
+    profile = ctx.taste_profile or ""
+    tags = _taste_tags(ctx)
+    cap_hit = state.turn_count >= config.WIZARD_MAX_QUESTIONS
+    if force_finish or cap_hit:
+        return _finalize(state, profile, ctx.llm, tags)
+
+    data = _request_turn(state, profile, ctx.llm, tags)
+    if data is None:
+        return _finalize(state, profile, ctx.llm, tags)
+
+    # Soft floor: the model may try to finish after one genre word, but the value
+    # of this flow is the nuance. Below the floor, reject an early recommend and
+    # insist on one more question (the prompt already demands it); relent if the
+    # model still won't ask, so we never loop.
+    if data.get("action") == "recommend" and state.turn_count < config.WIZARD_MIN_QUESTIONS:
+        log.debug("Wizard tried to finish at %d < floor %d; re-asking",
+                  state.turn_count, config.WIZARD_MIN_QUESTIONS)
+        retry = _request_turn(state, profile, ctx.llm, tags)
+        if retry and retry.get("action") == "ask":
+            return _as_ask(retry)
+
+    if data.get("action") == "recommend":
+        return _as_recommend(data)
+    return _as_ask(data)
 
 
 _MARKDOWN_CHARS = re.compile(r"[*_`#]+")

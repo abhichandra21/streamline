@@ -110,6 +110,48 @@ def test_finish_after_content_type_only_submits_seed(client):
     assert args[1]["content_type"] == "movie"
 
 
+def test_content_type_tap_counts_toward_cap(client):
+    fake_turn = {"action": "ask", "prompt": "Q", "subtext": "",
+                 "chips": [{"label": "A", "value": "a"}], "multi": False,
+                 "allow_free_text": True}
+    with patch.object(web.wizard, "next_turn", return_value=fake_turn), \
+         patch.object(web, "_get_job_context"):
+        resp = client.post("/wizard/next", data=_csrf_form(
+            state=json.dumps({"turns": [], "turn_count": 0, "step": "content_type"}),
+            step="content_type", selected=["movie"]),
+            headers={"HX-Request": "true"})
+    parser = _HiddenInputParser()
+    parser.feed(resp.data.decode())
+    new_state = json.loads(parser.hidden_inputs["state"])
+    # Content type is question 1, so the cap budget is already partly spent.
+    assert new_state["turn_count"] == 1
+
+
+def test_finish_records_current_answer_before_finalizing(client):
+    # On the first adaptive question, answering + "Show me something now" must
+    # finalize from the conversation (answer preserved), not the seed alone.
+    intent = QueryIntent(
+        genres=[], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=[], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent=None, content_type="movie",
+        top_n=5, platforms=[])
+    fake_turn = {"action": "recommend", "summary": "x", "intent": intent,
+                 "context_note": ""}
+    with patch.object(web.wizard, "next_turn", return_value=fake_turn) as nt, \
+         patch.object(web, "_get_job_context"), \
+         patch.object(web.job_registry, "submit", return_value="job-f"):
+        resp = client.post("/wizard/next", data=_csrf_form(
+            state=json.dumps({"turns": [], "turn_count": 1, "step": "adaptive",
+                              "answers": {"content_type": "movie"}}),
+            prompt="Antihero or hero?", selected=["antihero"], finish="1"),
+            headers={"HX-Request": "true"})
+    assert resp.status_code == 200
+    nt.assert_called_once()
+    assert nt.call_args.kwargs.get("force_finish") is True
+    state_arg = nt.call_args.args[0]
+    assert any(t.get("selected") == ["antihero"] for t in state_arg.turns)
+
+
 def test_post_next_recommend_branch_starts_job(client):
     intent = QueryIntent(
         genres=[], origin_countries=[], languages=[], mood_descriptors=[],

@@ -127,6 +127,10 @@ RECENCY_HALF_LIFE_DAYS = _cfg.get("recency_half_life_days", 90)
 # ── Mood Match wizard ──
 _wizard = _cfg.get("wizard", {})
 WIZARD_MAX_QUESTIONS = int(_wizard.get("max_questions", 4))
+# Soft floor (incl. the content-type tap): the wizard must keep asking until it
+# has this many answers before it may finish on its own. The user can still
+# bail early with "Show me something now". Bounded by the max above.
+WIZARD_MIN_QUESTIONS = min(int(_wizard.get("min_questions", 4)), WIZARD_MAX_QUESTIONS)
 # Output-token ceiling for each wizard turn. The finalize turn emits a full
 # QueryIntent JSON (summary + intent + context_note), which overflows the
 # smaller intent-parsing budget and gets truncated, so it needs its own limit.

@@ -629,8 +629,10 @@ def _wizard_question_number(state: wizard.WizardState) -> int:
     """
     if state.step == "content_type":
         return 1
+    # Content type already counted in turn_count, so the next adaptive question
+    # is turn_count + 1 (e.g. after content type, turn_count=1 → question 2).
     if state.step == "adaptive":
-        return state.turn_count + 2
+        return state.turn_count + 1
     return state.turn_count + 1
 
 
@@ -709,9 +711,11 @@ def wizard_next() -> str:
 
     try:
         # 1. Instant deterministic first step: content type (never an LLM call).
+        #    It counts as question 1 toward the cap.
         if posted_step == "content_type":
             wizard_flow.apply_answer(state, "content_type", form.getlist("selected"), "")
             state.step = "adaptive"
+            state.turn_count += 1
             if finish:
                 return _start_wizard_seed_job(state)
             return _wizard_adaptive_turn(state, answering=False)
@@ -721,13 +725,7 @@ def wizard_next() -> str:
             state.step = "content_type"
             return _render_wizard_state(state)
 
-        # 3. Early exit → finalize from the conversation, or from content type alone.
-        if finish:
-            if state.turns:
-                return _wizard_adaptive_turn(state, answering=True)
-            return _start_wizard_seed_job(state)
-
-        # 4. Record the adaptive answer and continue the LLM-led loop.
+        # 3. Record the current adaptive answer FIRST, so finishing never drops it.
         prompt = (form.get("prompt") or "").strip()
         if prompt:
             state.turns.append({
@@ -736,6 +734,14 @@ def wizard_next() -> str:
                 "free_text": (form.get("free_text") or "").strip(),
             })
             state.turn_count += 1
+
+        # 4. Early exit → finalize from the conversation, or from content type alone.
+        if finish:
+            if state.turns:
+                return _wizard_adaptive_turn(state, answering=True)
+            return _start_wizard_seed_job(state)
+
+        # 5. Continue the LLM-led loop.
         return _wizard_adaptive_turn(state, answering=False)
     except Exception as exc:   # network / provider failure
         log.exception("Wizard turn failed")
