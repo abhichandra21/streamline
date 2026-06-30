@@ -77,6 +77,25 @@ def _title_similarity(query: str, candidate: str) -> float:
     return ratio
 
 
+# Below this similarity, a candidate is not a plausible match for the source
+# title at all -- distinct from resolve_title_confident's much stricter 0.9
+# "is this THE title" bar. Used to catch cases like "Don" -> "America's
+# Sweethearts", where the top-ranked candidate isn't related to the query.
+_PLAUSIBLE_TITLE_THRESHOLD = 0.5
+
+
+def _is_plausible_title_match(source_title: str, candidate: dict) -> bool:
+    """Return True if candidate's title or original title plausibly matches
+    the source title (checked separately, since the localized title and the
+    original-language title can differ completely)."""
+    cand_title = candidate.get("name") or candidate.get("title") or ""
+    cand_original = candidate.get("original_name") or candidate.get("original_title") or ""
+    for cand in (cand_title, cand_original):
+        if cand and _title_similarity(source_title, cand) >= _PLAUSIBLE_TITLE_THRESHOLD:
+            return True
+    return False
+
+
 class TmdbClient:
     def __init__(self, api_key: str, cache_dir: str = "recommender/cache/tmdb"):
         self.api_key = api_key
@@ -169,6 +188,13 @@ class TmdbClient:
                     score += 5.0
                 # >3 years off: no bonus
 
+        # Original-language match (0-10 points). TMDB's /search endpoint has
+        # no with_original_language filter (that's discover-only and
+        # discover has no free-text query), so this is applied as a
+        # candidate-ranking bonus instead of a search-time filter.
+        if hints and hints.language and candidate.get("original_language") == hints.language:
+            score += 10.0
+
         # Runtime match (0-15 points) - needs details
         if hints and hints.runtime_minutes and details:
             if content_type == "tv":
@@ -239,6 +265,23 @@ class TmdbClient:
 
         scored.sort(key=lambda x: x[0], reverse=True)
         best_score, best_id, best_title = scored[0]
+
+        # Post-search validator: the highest-scoring candidate can still be
+        # unrelated to the source title (e.g. a generic query like "Don"
+        # ranking a popular unrelated film first on votes/popularity alone).
+        # If the winner doesn't plausibly match by title at all, but a
+        # lower-ranked candidate does, prefer that one instead.
+        by_id = {cand["id"]: cand for cand in candidates}
+        if len(scored) > 1 and not _is_plausible_title_match(title, by_id[best_id]):
+            for alt_score, alt_id, alt_title in scored[1:]:
+                if _is_plausible_title_match(title, by_id[alt_id]):
+                    log.warning(
+                        "Rejecting implausible top TMDB match for %r: %r (id=%d, "
+                        "score=%.1f) -> using %r (id=%d, score=%.1f) instead",
+                        title, best_title, best_id, best_score, alt_title, alt_id, alt_score,
+                    )
+                    best_id, best_title, best_score = alt_id, alt_title, alt_score
+                    break
 
         # Log low-confidence selections
         if best_score < 30.0:

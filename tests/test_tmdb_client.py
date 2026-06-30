@@ -2,7 +2,9 @@ import json
 import os
 import tempfile
 from unittest.mock import patch, MagicMock
-from recommender.tmdb_client import TmdbClient, TmdbMetadata, MatchHints, _title_similarity
+from recommender.tmdb_client import (
+    TmdbClient, TmdbMetadata, MatchHints, _is_plausible_title_match, _title_similarity,
+)
 
 
 def make_client(tmp_dir):
@@ -399,6 +401,104 @@ def test_title_mismatch_deprioritized():
 
         assert meta is not None
         assert meta.tmdb_id == 701
+
+
+def test_is_plausible_title_match_checks_localized_and_original_title():
+    cand = {"title": "America's Sweethearts", "original_title": "America's Sweethearts"}
+    assert not _is_plausible_title_match("Don", cand)
+
+    cand_alias = {"title": "Don 2", "original_title": "डॉन"}
+    assert _is_plausible_title_match("Don", cand_alias)
+
+
+def test_post_search_validator_overrides_implausible_top_match():
+    """'Don' must not resolve to an unrelated, more popular candidate just
+    because it wins on votes/popularity -- the exact #51 failure mode."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+
+        cand_unrelated = _make_search_result(
+            11467, "America's Sweethearts", "2001-07-20", "/poster.jpg",
+            vote_count=2000, popularity=40,
+        )
+        cand_don = _make_search_result(
+            555, "Don", "2006-10-20", "/poster.jpg", vote_count=50, popularity=5,
+        )
+
+        details_unrelated = _make_details(11467, "America's Sweethearts", runtime=103, release_date="2001-07-20")
+        details_don = _make_details(555, "Don", runtime=171, release_date="2006-10-20")
+
+        def fake_get(endpoint, params=None):
+            if "search" in endpoint:
+                return {"results": [cand_unrelated, cand_don]}
+            if "11467" in endpoint:
+                return details_unrelated
+            if "555" in endpoint:
+                return details_don
+            return {}
+
+        with patch.object(client, "_get", side_effect=fake_get):
+            meta = client.get_metadata("Don", "movie")
+
+        assert meta is not None
+        assert meta.tmdb_id == 555
+
+
+def test_post_search_validator_keeps_winner_when_no_alternative_is_plausible():
+    """If nothing among the candidates plausibly matches, don't change the pick."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+
+        cand_a = _make_search_result(1, "Totally Unrelated", "2001-01-01", vote_count=2000)
+        cand_b = _make_search_result(2, "Also Unrelated", "2002-01-01", vote_count=10)
+
+        details_a = _make_details(1, "Totally Unrelated", runtime=100, release_date="2001-01-01")
+        details_b = _make_details(2, "Also Unrelated", runtime=110, release_date="2002-01-01")
+
+        def fake_get(endpoint, params=None):
+            if "search" in endpoint:
+                return {"results": [cand_a, cand_b]}
+            if endpoint.endswith("/1"):
+                return details_a
+            if endpoint.endswith("/2"):
+                return details_b
+            return {}
+
+        with patch.object(client, "_get", side_effect=fake_get):
+            meta = client.get_metadata("Something Else Entirely", "movie")
+
+        assert meta is not None
+        assert meta.tmdb_id == 1
+
+
+def test_language_hint_boosts_matching_original_language_candidate():
+    """Two same-named candidates: the one matching the language hint should win."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        hints = MatchHints(language="hi")
+
+        cand_en = _make_search_result(900, "Goodbye", "2003-01-01", "/poster.jpg", vote_count=500, popularity=10)
+        cand_en["original_language"] = "en"
+        cand_hi = _make_search_result(901, "Goodbye", "2022-10-07", "/poster.jpg", vote_count=50, popularity=5)
+        cand_hi["original_language"] = "hi"
+
+        details_en = _make_details(900, "Goodbye", runtime=120, release_date="2003-01-01")
+        details_hi = _make_details(901, "Goodbye", runtime=135, release_date="2022-10-07")
+
+        def fake_get(endpoint, params=None):
+            if "search" in endpoint:
+                return {"results": [cand_en, cand_hi]}
+            if "900" in endpoint:
+                return details_en
+            if "901" in endpoint:
+                return details_hi
+            return {}
+
+        with patch.object(client, "_get", side_effect=fake_get):
+            meta = client.get_metadata("Goodbye", "movie", hints=hints)
+
+        assert meta is not None
+        assert meta.tmdb_id == 901
 
 
 def test_no_hints_still_works():
