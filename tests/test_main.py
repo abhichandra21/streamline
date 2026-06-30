@@ -1048,6 +1048,70 @@ def test_cache_audit_allows_exact_short_title_match(tmp_path, capsys):
     assert "title mismatch" not in err
 
 
+def test_resolve_tmdb_id_override_accepts_plausible_cached_match(tmp_path):
+    import json
+    import recommender.setup as setup
+    from recommender.tmdb_client import TmdbClient
+
+    cache_path = tmp_path / "movie" / "11.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({"id": 11, "title": "Up", "release_date": "2009-05-28"}))
+
+    tmdb = TmdbClient(api_key="unused", cache_dir=str(tmp_path))
+    meta = setup._resolve_tmdb_id_override(tmdb, "Up", "movie", 11)
+
+    assert meta is not None
+    assert meta.title == "Up"
+
+
+def test_resolve_tmdb_id_override_rejects_bogus_cached_match(tmp_path, capsys):
+    import json
+    import recommender.setup as setup
+    from recommender.tmdb_client import TmdbClient
+
+    # "Don" pinned to "America's Sweethearts" — the exact LLM-poisoning
+    # failure mode documented in #51.
+    cache_path = tmp_path / "movie" / "11467.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({"id": 11467, "title": "America's Sweethearts"}))
+
+    tmdb = TmdbClient(api_key="unused", cache_dir=str(tmp_path))
+    meta = setup._resolve_tmdb_id_override(tmdb, "Don", "movie", 11467)
+
+    assert meta is None
+    assert "Rejecting override" in capsys.readouterr().err
+
+
+def test_resolve_tmdb_id_override_fetches_and_caches_when_uncached(tmp_path):
+    import recommender.setup as setup
+    from recommender.tmdb_client import TmdbClient
+
+    tmdb = TmdbClient(api_key="unused", cache_dir=str(tmp_path))
+    tmdb._fetch_details = lambda tmdb_id, ct: {"id": tmdb_id, "title": "Up", "release_date": "2009-05-28"}
+
+    meta = setup._resolve_tmdb_id_override(tmdb, "Up", "movie", 11)
+
+    assert meta is not None
+    assert meta.title == "Up"
+    assert (tmp_path / "movie" / "11.json").exists()
+
+
+def test_resolve_tmdb_id_override_returns_none_on_fetch_failure(tmp_path, capsys):
+    import recommender.setup as setup
+    from recommender.tmdb_client import TmdbClient
+
+    def _boom(tmdb_id, ct):
+        raise RuntimeError("network down")
+
+    tmdb = TmdbClient(api_key="unused", cache_dir=str(tmp_path))
+    tmdb._fetch_details = _boom
+
+    meta = setup._resolve_tmdb_id_override(tmdb, "Up", "movie", 11)
+
+    assert meta is None
+    assert "fetch failed" in capsys.readouterr().err.lower()
+
+
 def test_build_hints_map_manual_year():
     from datetime import datetime, timedelta
     import recommender.setup as setup

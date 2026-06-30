@@ -214,6 +214,43 @@ def _titles_are_compatible(index_title: str, cache_title: str) -> bool:
     return cache_norm in index_norm
 
 
+def _resolve_tmdb_id_override(tmdb: TmdbClient, title: str, ct: str, tmdb_id: int) -> object | None:
+    """Resolve a `{"tmdb_id": X}` override, rejecting it if the resolved
+    TMDB entry doesn't plausibly match the source title.
+
+    A bare tmdb_id override is trusted blindly today, which lets a bogus
+    override (e.g. an LLM parroting a wrong ID back from an audit report)
+    permanently pin a title to the wrong work. This validates the override
+    the same way the audit validates indexed entries, before persisting it.
+
+    Returns parsed TmdbMetadata if the override is plausible, or None if it
+    was rejected (caller should fall back to a fresh search) or the fetch
+    failed.
+    """
+    cached = tmdb._load_cache(ct, tmdb_id)
+    if cached is not None:
+        raw = cached
+    else:
+        try:
+            raw = tmdb._fetch_details(tmdb_id, ct)
+        except Exception as exc:
+            log.warning("Override TMDB fetch failed for %s (ID %d): %s", title, tmdb_id, exc)
+            return None
+        tmdb._save_cache(ct, tmdb_id, raw)
+
+    cache_title = raw.get("name") or raw.get("title") or ""
+    if not _titles_are_compatible(title, cache_title):
+        log.warning(
+            "Rejecting override for %r: tmdb_id %d resolves to %r, which does not "
+            "plausibly match the source title. Falling back to a fresh search — "
+            "fix or remove this entry in the overrides file.",
+            title, tmdb_id, cache_title,
+        )
+        return None
+
+    return tmdb._parse_metadata(raw, ct)
+
+
 def _build_hints_map(events: list) -> dict[tuple[str, str], MatchHints]:
     """Build per-title MatchHints from source event data."""
     hints_map: dict[tuple[str, str], MatchHints] = {}
@@ -664,6 +701,7 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
 
         metadata = {}
         skipped = len(skip_titles)
+        rejected_overrides = 0
         with _progress_bar("Fetching TMDB metadata") as progress:
             task_id = progress.add_task("tmdb", total=len(title_type))
             for i, ((title, _), ct) in enumerate(title_type.items()):
@@ -677,17 +715,15 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                         ct = override["content_type"]
                     search_title = override.get("title", title)
                     if override.get("tmdb_id"):
-                        cached = tmdb._load_cache(ct, override["tmdb_id"])
-                        if cached:
-                            metadata[(title, ct)] = tmdb._parse_metadata(cached, ct)
+                        meta = _resolve_tmdb_id_override(tmdb, title, ct, override["tmdb_id"])
+                        if meta:
+                            metadata[(title, ct)] = meta
                         else:
-                            try:
-                                data = tmdb._fetch_details(override["tmdb_id"], ct)
-                                tmdb._save_cache(ct, override["tmdb_id"], data)
-                                metadata[(title, ct)] = tmdb._parse_metadata(data, ct)
-                            except Exception as exc:
-                                log.warning("Override TMDB fetch failed for %s (ID %d): %s",
-                                            title, override["tmdb_id"], exc)
+                            rejected_overrides += 1
+                            hints = hints_map.get((title, ct))
+                            meta = tmdb.get_metadata(search_title, ct, hints=hints)
+                            if meta:
+                                metadata[(title, ct)] = meta
                     else:
                         hints = hints_map.get((title, ct))
                         meta = tmdb.get_metadata(search_title, ct, hints=hints)
@@ -701,6 +737,11 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         console.print(f"  {len(metadata)} titles with TMDB metadata")
         if skipped:
             console.print(f"  {skipped} titles skipped via overrides")
+        if rejected_overrides:
+            console.print(
+                f"  [yellow]{rejected_overrides} tmdb_id overrides did not resolve directly "
+                f"(implausible match or fetch failure — see log) — fell back to fresh search[/yellow]"
+            )
 
         console.print("\nBuilding watch index...")
         index = wi.build(events, metadata)
