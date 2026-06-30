@@ -987,25 +987,65 @@ def _watchlist_save_fragment(title: str, ct: str, tmdb_id: int | None, target_id
 
 # ── Watchlist routes ──────────────────────────────────────────────────────────
 
+def _decorate_saved_item(item: dict, ctx) -> None:
+    """Attach cached poster, rating, genres, providers, and links to a saved title.
+
+    Cache-first so the page stays instant. A title saved on another machine may
+    have no cached metadata yet; when it has a tmdb_id we fetch and cache its
+    detail JSON once so the card fills in. All network work is best-effort and
+    never breaks the page render.
+    """
+    item.setdefault("vote_average", 0.0)
+    item.setdefault("genres", [])
+    item.setdefault("streaming_providers", [])
+    item.setdefault("poster", None)
+    item.setdefault("tmdb_url", "")
+    item.setdefault("imdb_url", "")
+    tmdb_id = item.get("tmdb_id")
+    ct = item.get("content_type")
+    if not (ctx and tmdb_id and ct):
+        return
+    tmdb = ctx.tmdb_client
+    meta = tmdb.get_cached_by_id(tmdb_id, ct)
+    if meta is None and config.TMDB_API_KEY:
+        # One-time backfill for titles saved elsewhere with no cached metadata.
+        try:
+            data = tmdb._fetch_details(tmdb_id, ct)
+            tmdb._save_cache(ct, tmdb_id, data)
+            meta = tmdb.get_cached_by_id(tmdb_id, ct)
+        except Exception:
+            meta = None
+    if meta is None:
+        return
+    item["vote_average"] = meta.vote_average or 0.0
+    item["genres"] = meta.genres[:3]
+    item["poster"] = _get_poster_url(tmdb_id, ct)
+    tmdb_type = "tv" if ct == "tv" else "movie"
+    item["tmdb_url"] = f"https://www.themoviedb.org/{tmdb_type}/{tmdb_id}"
+    raw = tmdb._load_cache(ct, tmdb_id) or {}
+    imdb_id = raw.get("imdb_id")
+    if imdb_id:
+        item["imdb_url"] = f"https://www.imdb.com/title/{imdb_id}/"
+    else:
+        from urllib.parse import quote
+        item["imdb_url"] = f"https://www.imdb.com/find/?q={quote(item['title'])}"
+    try:
+        item["streaming_providers"] = tmdb.get_watch_providers(
+            tmdb_id, ct, config.WATCH_REGION, config.PROVIDERS_CACHE_DIR)[:4]
+    except Exception:
+        item["streaming_providers"] = []
+
+
 @app.route("/watchlist")
 def watchlist_page() -> str:
     _ensure_user_store_once()
     items = user_store.list_saved_titles(config.EVENT_DB_PATH, status="watchlist")
     try:
         ctx = _get_context()
-        for item in items:
-            vote_average = 0.0
-            if item.get("tmdb_id"):
-                try:
-                    meta = ctx.tmdb_client.get_cached_by_id(item["tmdb_id"], item["content_type"])
-                    if meta:
-                        vote_average = meta.vote_average or 0.0
-                except Exception:
-                    pass
-            item["vote_average"] = vote_average
     except Exception:
-        for item in items:
-            item.setdefault("vote_average", 0.0)
+        ctx = None
+    for item in items:
+        _decorate_saved_item(item, ctx)
     return render_template("watchlist.html", items=items)
 
 
