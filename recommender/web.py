@@ -210,7 +210,7 @@ def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
             "vote_average": r.vote_average,
             "genres": r.genres[:3],
             "explanation": r.explanation,
-            "streaming_providers": r.streaming_providers[:4],
+            "streaming_providers": _consolidate_providers(r.streaming_providers)[:4],
             "poster": poster,
             "tmdb_url": tmdb_url,
             "imdb_url": imdb_url,
@@ -438,6 +438,8 @@ def history() -> str:
     q = request.args.get("q", "").lower()
     ct_filter = request.args.get("type", "")
     sort = request.args.get("sort", "az")
+    platform_filter = request.args.get("platform", "")
+    rating_filter = request.args.get("rating", "")
 
     entries = list(ctx.watch_index.entries)
 
@@ -445,26 +447,73 @@ def history() -> str:
     _ensure_user_store_once()
     manual = user_store.list_manual_archive(config.EVENT_DB_PATH)
 
-    existing_norm = {
-        (_norm_title(e.get("title", "")), e.get("content_type", "tv"))
-        for e in entries
-    }
+    # Match a manual row to an existing entry by typed TMDB identity when it has
+    # one (the schema's unique key), so same-title remakes/editions with distinct
+    # ids stay distinct; fall back to (title, type) only for rows without an id.
+    by_tmdb: dict[tuple[str, int], int] = {}
+    by_title: dict[tuple[str, str], int] = {}
+    for i, e in enumerate(entries):
+        ct = e.get("content_type", "tv")
+        tid = e.get("tmdb_id")
+        if tid:
+            by_tmdb.setdefault((ct, tid), i)
+        by_title.setdefault((_norm_title(e.get("title", "")), ct), i)
+
     for m in manual:
-        key = (_norm_title(m["title"]), m["content_type"])
-        if key not in existing_norm:
+        ct = m["content_type"]
+        tid = m.get("tmdb_id")
+        title_key = (_norm_title(m["title"]), ct)
+        watched_at = m.get("watched_at", "")
+
+        if tid and (ct, tid) in by_tmdb:
+            target = by_tmdb[(ct, tid)]
+        elif tid:
+            target = None              # distinct id not present yet → new row
+        elif title_key in by_title:
+            target = by_title[title_key]
+        else:
+            target = None
+
+        if target is None:
             entries.append({
                 "title": m["title"],
-                "content_type": m["content_type"],
-                "tmdb_id": m.get("tmdb_id"),
+                "content_type": ct,
+                "tmdb_id": tid,
                 "source": m["source"],
+                # Manual additions are their own provider category (issue #37).
+                "platforms": ["manual"],
+                "last_watched": watched_at,
             })
+            new_i = len(entries) - 1
+            if tid:
+                by_tmdb.setdefault((ct, tid), new_i)
+            by_title.setdefault(title_key, new_i)
+        else:
+            # Fold the manual watch into the existing row rather than dropping it,
+            # so the 'manual' source filter and recency sort both see it. Copy
+            # first — the entry dict is shared with the cached watch index and
+            # must not be mutated in place.
+            merged = dict(entries[target])
+            merged["platforms"] = sorted(set(merged.get("platforms") or []) | {"manual"})
+            if watched_at > (merged.get("last_watched") or ""):
+                merged["last_watched"] = watched_at
+            entries[target] = merged
+
+    # Source-provider options for the filter dropdown, computed over the full
+    # set before filtering so every provider stays selectable.
+    providers = sorted({p for e in entries for p in (e.get("platforms") or [])})
 
     if q:
         entries = [e for e in entries if q in e["title"].lower()]
     if ct_filter in ("tv", "movie"):
         entries = [e for e in entries if e.get("content_type") == ct_filter]
+    if platform_filter:
+        entries = [e for e in entries if platform_filter in (e.get("platforms") or [])]
 
-    if sort == "za":
+    if sort == "recent":
+        # Most recently watched first; titles with no timestamp sort last.
+        entries.sort(key=lambda e: e.get("last_watched") or "", reverse=True)
+    elif sort == "za":
         entries.sort(key=lambda e: e["title"].lower(), reverse=True)
     else:
         entries.sort(key=lambda e: e["title"].lower())
@@ -495,7 +544,17 @@ def history() -> str:
             "poster": _get_poster_url(e.get("tmdb_id", 0), e.get("content_type", "movie"), "w185")
                       if e.get("tmdb_id") else None,
             "rating": us.get_rating(m),
+            "platforms": e.get("platforms") or [],
+            "last_watched": e.get("last_watched") or "",
         })
+
+    if rating_filter == "liked":
+        items = [it for it in items if it["rating"] == "liked"]
+    elif rating_filter == "disliked":
+        items = [it for it in items if it["rating"] == "disliked"]
+    elif rating_filter == "unrated":
+        items = [it for it in items if not it["rating"]]
+
     total = len(items)
     ALLOWED_PAGE_SIZES = (30, 60, 120)
     try:
@@ -518,6 +577,10 @@ def history() -> str:
         q=q,
         ct_filter=ct_filter,
         sort=sort,
+        platform_filter=platform_filter,
+        rating_filter=rating_filter,
+        providers=providers,
+        platform_labels=PLATFORM_LABELS,
         total=total,
         page=page,
         total_pages=total_pages,
@@ -987,6 +1050,60 @@ def _watchlist_save_fragment(title: str, ct: str, tmdb_id: int | None, target_id
 
 # ── Watchlist routes ──────────────────────────────────────────────────────────
 
+# Display names for internal ingestion source codes (archive "source" filter).
+# Plain title-casing mangles these (Hbo, Apple Tv), so map them explicitly.
+PLATFORM_LABELS = {
+    "netflix": "Netflix",
+    "prime": "Prime Video",
+    "apple_tv": "Apple TV",
+    "disney": "Disney+",
+    "hbo": "HBO Max",
+    "manual": "Manual",
+}
+
+
+# Brand grouping for granular TMDB streaming-provider names (consolidates
+# ad-supported tiers, channel resells, and aliases). Mirrors the client-side
+# canonicalProvider() on the Searches page.
+_PROVIDER_SUFFIXES = (" with ads", " amazon channel", " apple tv channel",
+                      " roku premium channel")
+_PROVIDER_BRANDS = (
+    ("netflix", "Netflix"),
+    ("amazon prime", "Amazon Prime Video"),
+    ("prime video", "Amazon Prime Video"),
+    ("disney", "Disney+"),
+    ("paramount", "Paramount+"),
+    ("britbox", "BritBox"),
+    ("acorn", "Acorn TV"),
+    ("apple tv", "Apple TV+"),
+    ("hulu", "Hulu"),
+    ("peacock", "Peacock"),
+)
+
+
+def _canonical_provider(raw: str) -> str:
+    low = (raw or "").strip().lower()
+    for suffix in _PROVIDER_SUFFIXES:
+        if low.endswith(suffix):
+            low = low[: -len(suffix)].strip()
+    for keyword, label in _PROVIDER_BRANDS:
+        if keyword in low:
+            return label
+    return low.title()
+
+
+def _consolidate_providers(names: list[str]) -> list[str]:
+    """Collapse TMDB provider variants to one entry per brand, preserving order."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for name in names or []:
+        label = _canonical_provider(name)
+        if label and label not in seen:
+            seen.add(label)
+            out.append(label)
+    return out
+
+
 def _decorate_saved_item(item: dict, ctx) -> None:
     """Attach cached poster, rating, genres, providers, and links to a saved title.
 
@@ -1030,8 +1147,9 @@ def _decorate_saved_item(item: dict, ctx) -> None:
         from urllib.parse import quote
         item["imdb_url"] = f"https://www.imdb.com/find/?q={quote(item['title'])}"
     try:
-        item["streaming_providers"] = tmdb.get_watch_providers(
-            tmdb_id, ct, config.WATCH_REGION, config.PROVIDERS_CACHE_DIR)[:4]
+        item["streaming_providers"] = _consolidate_providers(
+            tmdb.get_watch_providers(
+                tmdb_id, ct, config.WATCH_REGION, config.PROVIDERS_CACHE_DIR))[:4]
     except Exception:
         item["streaming_providers"] = []
 

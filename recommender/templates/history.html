@@ -19,12 +19,27 @@
       <option value="tv" {% if ct_filter == 'tv' %}selected{% endif %}>TV</option>
       <option value="movie" {% if ct_filter == 'movie' %}selected{% endif %}>Film</option>
     </select>
+    {% if providers %}
+    <select name="platform" class="input-field mono" style="padding:0.6rem 0.75rem; font-size:0.72rem;">
+      <option value="" {% if not platform_filter %}selected{% endif %}>All sources</option>
+      {% for p in providers %}
+      <option value="{{ p }}" {% if platform_filter == p %}selected{% endif %}>{{ platform_labels.get(p, p | replace('_', ' ') | title) }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <select name="rating" class="input-field mono" style="padding:0.6rem 0.75rem; font-size:0.72rem;">
+      <option value="" {% if not rating_filter %}selected{% endif %}>Any rating</option>
+      <option value="liked" {% if rating_filter == 'liked' %}selected{% endif %}>Liked</option>
+      <option value="disliked" {% if rating_filter == 'disliked' %}selected{% endif %}>Disliked</option>
+      <option value="unrated" {% if rating_filter == 'unrated' %}selected{% endif %}>Unrated</option>
+    </select>
     <select name="sort" class="input-field mono" style="padding:0.6rem 0.75rem; font-size:0.72rem;">
       <option value="az" {% if sort == 'az' %}selected{% endif %}>A → Z</option>
       <option value="za" {% if sort == 'za' %}selected{% endif %}>Z → A</option>
+      <option value="recent" {% if sort == 'recent' %}selected{% endif %}>Recently watched</option>
     </select>
     <button type="submit" class="btn-primary" style="padding:0.6rem 1.1rem;">Filter</button>
-    {% if q or ct_filter %}
+    {% if q or ct_filter or platform_filter or rating_filter or sort != 'az' %}
     <a href="/history" class="btn-ghost" style="padding:0.6rem 0.9rem;">Clear</a>
     {% endif %}
     <!-- Add watched toggle — inline at end of filter row -->
@@ -115,6 +130,13 @@
       {% if item.description %}
       <p style="font-size:0.78rem; color:var(--muted); line-height:1.45; overflow:hidden; display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; margin-top:0.1rem;">{{ item.description }}</p>
       {% endif %}
+      {% if item.platforms or item.last_watched %}
+      <div class="mono" style="font-size:0.55rem; color:var(--muted); margin-top:0.15rem; letter-spacing:0.04em;">
+        {% if item.platforms %}{% for p in item.platforms %}{{ platform_labels.get(p, p | replace('_', ' ') | title) }}{% if not loop.last %} · {% endif %}{% endfor %}{% endif %}
+        {% if item.platforms and item.last_watched %}<span style="color:var(--border);"> · </span>{% endif %}
+        {% if item.last_watched %}{{ item.last_watched[:10] }}{% endif %}
+      </div>
+      {% endif %}
       {% set uid = "hist-" ~ loop.index %}
       {% with title=item.title, content_type=item.content_type, tmdb_id=item.tmdb_id, current_rating=item.rating, uid=uid %}
       {% include "_rating_state.html" %}
@@ -191,19 +213,19 @@
 {% if total_pages > 1 %}
 <div class="archive-pager">
   {% if page > 1 %}
-  <a href="{{ url_for('history', page=page - 1, sort=sort, per_page=per_page, q=q or None, type=ct_filter or None) }}" class="btn-ghost pager-btn">Prev</a>
+  <a href="{{ url_for('history', page=page - 1, sort=sort, per_page=per_page, q=q or None, type=ct_filter or None, platform=platform_filter or None, rating=rating_filter or None) }}" class="btn-ghost pager-btn">Prev</a>
   {% endif %}
   {% for p in range(1, total_pages + 1) %}
     {% if p == page %}
     <span class="mono pager-current">{{ p }}</span>
     {% elif p == 1 or p == total_pages or (p >= page - 2 and p <= page + 2) %}
-    <a href="{{ url_for('history', page=p, sort=sort, per_page=per_page, q=q or None, type=ct_filter or None) }}" class="btn-ghost pager-btn">{{ p }}</a>
+    <a href="{{ url_for('history', page=p, sort=sort, per_page=per_page, q=q or None, type=ct_filter or None, platform=platform_filter or None, rating=rating_filter or None) }}" class="btn-ghost pager-btn">{{ p }}</a>
     {% elif p == page - 3 or p == page + 3 %}
     <span class="mono pager-ellipsis">...</span>
     {% endif %}
   {% endfor %}
   {% if page < total_pages %}
-  <a href="{{ url_for('history', page=page + 1, sort=sort, per_page=per_page, q=q or None, type=ct_filter or None) }}" class="btn-ghost pager-btn">Next</a>
+  <a href="{{ url_for('history', page=page + 1, sort=sort, per_page=per_page, q=q or None, type=ct_filter or None, platform=platform_filter or None, rating=rating_filter or None) }}" class="btn-ghost pager-btn">Next</a>
   {% endif %}
 </div>
 {% endif %}

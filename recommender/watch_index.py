@@ -32,18 +32,37 @@ class WatchIndex:
         return (_normalize(candidate.title), candidate.content_type) in self.normalized_titles
 
 
+def _merge_provenance(dst: dict, src: dict) -> None:
+    """Union platform provenance and keep the most recent watch timestamp.
+
+    Used when two entries are merged during deduplication so neither the
+    source-provider set nor the latest-watched timestamp is lost.
+    """
+    merged = set(dst.get("platforms") or []) | set(src.get("platforms") or [])
+    dst["platforms"] = sorted(merged)
+    if (src.get("last_watched") or "") > (dst.get("last_watched") or ""):
+        dst["last_watched"] = src.get("last_watched") or ""
+
+
 def build(events: list[WatchEvent], metadata: dict) -> WatchIndex:
     """Build exclusion index from watch events. metadata provides TMDB IDs.
 
     metadata may be keyed by title string or by (title, content_type) tuple.
     Typed keys are checked first to support dual-existence titles (e.g. "Breathe"
     existing as both TV and movie).
+
+    Each entry also carries provenance aggregated across every event for the
+    title (not just the first): ``platforms`` (sorted source-provider list) and
+    ``last_watched`` (latest event timestamp, ISO string).
     """
     tmdb_ids: set[int] = set()
     tmdb_keys: set[tuple[str, int]] = set()
     normalized_titles: set[tuple[str, str]] = set()
     entries: list[dict] = []
     seen_keys: set[tuple[str, str]] = set()
+    entry_by_key: dict[tuple[str, str], dict] = {}
+    platforms_by_key: dict[tuple[str, str], set[str]] = {}
+    latest_by_key: dict[tuple[str, str], str] = {}
 
     for e in events:
         key = e.series_name if e.content_type == 'tv' else e.title
@@ -59,11 +78,25 @@ def build(events: list[WatchEvent], metadata: dict) -> WatchIndex:
             if tmdb_id:
                 tmdb_ids.add(tmdb_id)
                 tmdb_keys.add((ct, tmdb_id))
-            entries.append({
+            entry = {
                 "tmdb_id": tmdb_id,
                 "title": key,
                 "content_type": ct,
-            })
+            }
+            entries.append(entry)
+            entry_by_key[dedup_key] = entry
+            platforms_by_key[dedup_key] = set()
+            latest_by_key[dedup_key] = ""
+        # Aggregate provenance across every event for this title.
+        if e.platform:
+            platforms_by_key[dedup_key].add(e.platform)
+        ts = e.timestamp.isoformat() if e.timestamp else ""
+        if ts > latest_by_key[dedup_key]:
+            latest_by_key[dedup_key] = ts
+
+    for dk, entry in entry_by_key.items():
+        entry["platforms"] = sorted(platforms_by_key[dk])
+        entry["last_watched"] = latest_by_key[dk]
 
     index = WatchIndex(tmdb_ids=tmdb_ids, tmdb_keys=tmdb_keys,
                        normalized_titles=normalized_titles, entries=entries)
@@ -87,8 +120,10 @@ def deduplicate(index: WatchIndex) -> WatchIndex:
         if tmdb_id:
             typed_key = (ct, tmdb_id)
             if typed_key in seen_keys:
+                kept = deduped[seen_keys[typed_key]]
                 log.debug("Dedup by typed TMDB ID: %r merged with %r (%s/%d)",
-                           e["title"], deduped[seen_keys[typed_key]]["title"], ct, tmdb_id)
+                           e["title"], kept["title"], ct, tmdb_id)
+                _merge_provenance(kept, e)
                 continue
             seen_keys[typed_key] = len(deduped)
         deduped.append(e)
@@ -105,6 +140,7 @@ def deduplicate(index: WatchIndex) -> WatchIndex:
                     and fuzz.ratio(e["title"].lower(), existing["title"].lower()) >= 90):
                 log.debug("Dedup by fuzzy match: %r ~ %r (score >= 90)",
                            e["title"], existing["title"])
+                _merge_provenance(existing, e)
                 is_dup = True
                 break
         if not is_dup:
