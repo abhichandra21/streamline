@@ -895,6 +895,78 @@ def test_history_includes_manual_archive_entries(client, tmp_path, monkeypatch):
     assert b"Manual Show" in resp.data
 
 
+def test_history_provider_filter_and_recent_sort(client, tmp_path, monkeypatch):
+    """Issue #37: filter the archive by source provider and sort by recency."""
+    from unittest.mock import MagicMock, patch
+    from recommender.user_store import init_db
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = [
+        {"title": "Netflix Pick", "content_type": "movie", "tmdb_id": None,
+         "platforms": ["netflix"], "last_watched": "2026-01-01T00:00:00"},
+        {"title": "Prime Pick", "content_type": "movie", "tmdb_id": None,
+         "platforms": ["prime"], "last_watched": "2026-05-01T00:00:00"},
+    ]
+    with patch("recommender.web._get_context", return_value=mock_ctx):
+        # Dropdown offers a source filter.
+        resp = client.get("/history")
+        assert b"All sources" in resp.data
+
+        # Filtering by provider keeps only that source.
+        resp = client.get("/history?platform=netflix")
+        assert b"Netflix Pick" in resp.data
+        assert b"Prime Pick" not in resp.data
+
+        # Recent sort puts the most recently watched first.
+        html = client.get("/history?sort=recent").data.decode()
+        assert html.index("Prime Pick") < html.index("Netflix Pick")
+
+
+def test_consolidate_providers_groups_variants():
+    """Issue #36: granular TMDB provider names collapse to one entry per brand."""
+    from recommender.web import _consolidate_providers
+
+    out = _consolidate_providers([
+        "Netflix", "Netflix Standard with Ads",
+        "Amazon Prime Video", "Amazon Prime Video with Ads", "Freevee Amazon Channel",
+        "Paramount+ Amazon Channel", "Apple TV+",
+    ])
+    assert out == ["Netflix", "Amazon Prime Video", "Freevee", "Paramount+", "Apple TV+"]
+
+
+def test_history_rating_filter(client, tmp_path, monkeypatch):
+    """Issue #36: filter the archive by rating status."""
+    from unittest.mock import MagicMock, patch
+    from recommender.user_store import init_db, rate_title
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    rate_title(db, "Liked Movie", "movie", "liked")
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = [
+        {"title": "Liked Movie", "content_type": "movie", "tmdb_id": None,
+         "platforms": [], "last_watched": ""},
+        {"title": "Unrated Movie", "content_type": "movie", "tmdb_id": None,
+         "platforms": [], "last_watched": ""},
+    ]
+    with patch("recommender.web._get_context", return_value=mock_ctx):
+        resp = client.get("/history?rating=liked")
+        assert b"Liked Movie" in resp.data
+        assert b"Unrated Movie" not in resp.data
+
+        resp = client.get("/history?rating=unrated")
+        assert b"Unrated Movie" in resp.data
+        assert b"Liked Movie" not in resp.data
+
+
 def test_history_pagination_url_encodes_query(client):
     from unittest.mock import MagicMock, patch
 

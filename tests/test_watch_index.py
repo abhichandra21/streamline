@@ -179,3 +179,41 @@ def test_save_and_load_roundtrip(tmp_path):
     assert 67452 in loaded.tmdb_ids
     assert ("tv", 67452) in loaded.tmdb_keys
     assert ("fleabag", "tv") in loaded.normalized_titles
+
+
+def _event(title, platform, ts, content_type="movie", series_name=None):
+    return WatchEvent(
+        platform=platform, title=title, content_type=content_type,
+        series_name=series_name or title,
+        watched_duration=timedelta(hours=1), total_duration=None,
+        timestamp=ts, profile="ADULT",
+    )
+
+
+def test_build_aggregates_platforms_and_latest_timestamp():
+    t1 = datetime(2026, 1, 1, 12, 0, 0)
+    t2 = datetime(2026, 3, 5, 9, 0, 0)
+    events = [
+        _event("The Bear", "netflix", t1, "tv", "The Bear"),
+        _event("The Bear", "prime", t2, "tv", "The Bear"),
+    ]
+    index = wi.build(events, {})
+    entry = [e for e in index.entries if e["title"] == "The Bear"][0]
+    assert entry["platforms"] == ["netflix", "prime"]   # union across episodes
+    assert entry["last_watched"] == t2.isoformat()       # most recent kept
+
+
+def test_deduplicate_merges_provenance_across_typed_identity():
+    entries = [
+        {"tmdb_id": 5, "title": "A", "content_type": "movie",
+         "platforms": ["netflix"], "last_watched": "2026-01-01T00:00:00"},
+        {"tmdb_id": 5, "title": "A (4K)", "content_type": "movie",
+         "platforms": ["prime"], "last_watched": "2026-02-01T00:00:00"},
+    ]
+    index = WatchIndex(tmdb_ids={5}, tmdb_keys={("movie", 5)},
+                       normalized_titles=set(), entries=entries)
+    deduped = wi.deduplicate(index)
+    assert len(deduped.entries) == 1
+    merged = deduped.entries[0]
+    assert merged["platforms"] == ["netflix", "prime"]
+    assert merged["last_watched"] == "2026-02-01T00:00:00"

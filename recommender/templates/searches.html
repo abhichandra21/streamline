@@ -232,8 +232,38 @@ function setMinRating(val) {
   _shApply();
 }
 
+// Collapse granular TMDB provider names into one entry per brand: strip
+// ad-supported tiers and channel-reseller suffixes, then group known aliases.
+function canonicalProvider(raw) {
+  let low = (raw || '').trim().toLowerCase();
+  if (!low) return null;
+  low = low
+    .replace(/\s+with ads$/, '')
+    .replace(/\s+amazon channel$/, '')
+    .replace(/\s+apple tv channel$/, '')
+    .replace(/\s+roku premium channel$/, '')
+    .trim();
+  const brands = [
+    ['netflix', 'Netflix'],
+    ['amazon prime', 'Amazon Prime Video'],
+    ['prime video', 'Amazon Prime Video'],
+    ['disney', 'Disney+'],
+    ['paramount', 'Paramount+'],
+    ['britbox', 'BritBox'],
+    ['acorn', 'Acorn TV'],
+    ['apple tv', 'Apple TV+'],
+    ['hulu', 'Hulu'],
+    ['peacock', 'Peacock'],
+  ];
+  for (const [kw, label] of brands) {
+    if (low.includes(kw)) return { key: label.toLowerCase(), label };
+  }
+  const label = low.replace(/\b\w/g, c => c.toUpperCase());
+  return { key: low, label };
+}
+
 function setProvider(val) {
-  _shProvider = val.toLowerCase();
+  _shProvider = (val || '').toLowerCase();
   _shApply();
 }
 
@@ -245,7 +275,10 @@ function _shApply() {
     rows.forEach(row => {
       const typeOk = _shType === 'all' || row.dataset.type === _shType;
       const ratingOk = parseFloat(row.dataset.rating || 0) >= _shMinRating;
-      const providerOk = !_shProvider || (row.dataset.providers || '').includes(_shProvider);
+      const providerOk = !_shProvider || (row.dataset.providers || '').split(',').some(p => {
+        const c = canonicalProvider(p);
+        return c && c.key === _shProvider;
+      });
       const show = typeOk && ratingOk && providerOk;
       row.style.display = show ? '' : 'none';
       if (show) visibleRows++;
@@ -263,21 +296,21 @@ function _shApply() {
   }
 }
 
-// Populate provider dropdown from rendered data
+// Populate provider dropdown from rendered data, consolidated by brand.
 (function buildProviderDropdown() {
-  const providers = new Set();
+  const groups = new Map();   // canonical key -> display label
   document.querySelectorAll('.sh-result').forEach(row => {
     (row.dataset.providers || '').split(',').forEach(p => {
-      const t = p.trim();
-      if (t) providers.add(t);
+      const c = canonicalProvider(p);
+      if (c) groups.set(c.key, c.label);
     });
   });
-  if (providers.size === 0) return;
+  if (groups.size === 0) return;
   const sel = document.getElementById('sh-provider');
-  [...providers].sort().forEach(p => {
+  [...groups.entries()].sort((a, b) => a[1].localeCompare(b[1])).forEach(([key, label]) => {
     const opt = document.createElement('option');
-    opt.value = p;
-    opt.textContent = p.charAt(0).toUpperCase() + p.slice(1);
+    opt.value = key;
+    opt.textContent = label;
     sel.appendChild(opt);
   });
   sel.style.display = '';
