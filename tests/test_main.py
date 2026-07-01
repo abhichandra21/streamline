@@ -1483,6 +1483,16 @@ def test_titles_are_compatible_strips_general_punctuation():
     assert setup._titles_are_compatible("Shank's", "Shank")
 
 
+def test_titles_are_compatible_preserves_acronym_dots():
+    """Blanket punctuation-stripping would collapse "I.T." (the 2016 film)
+    and "It" (Stephen King's) to the same "it" -- distinct works, not a
+    punctuation variant of one title. The dots in an acronym-style title
+    are load-bearing and must survive normalization."""
+    import recommender.setup as setup
+    assert not setup._titles_are_compatible("It", "I.T.")
+    assert setup._titles_are_compatible("I.T.", "I.T.")
+
+
 def test_titles_are_compatible_still_rejects_unrelated():
     import recommender.setup as setup
     assert not setup._titles_are_compatible("Don", "America's Sweethearts")

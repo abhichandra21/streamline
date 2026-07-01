@@ -189,6 +189,13 @@ def _title_keyed_enrichments(
     return title_keyed
 
 
+# A title that's entirely single letters separated by periods, e.g. "I.T."
+# or "U.S.A." -- an acronym-style title where the periods are load-bearing.
+# Stripping them would collapse "I.T." (the 2016 film) to the same string as
+# "It" (Stephen King's), making two distinct works compare as equal.
+_ACRONYM_RE = re.compile(r'^(?:[a-z]\.){2,}$|^(?:[a-z]\.){1,}[a-z]$')
+
+
 def _normalize_audit_title(title: str) -> str:
     title = unicodedata.normalize("NFKD", title)
     title = "".join(c for c in title if not unicodedata.combining(c))
@@ -196,6 +203,9 @@ def _normalize_audit_title(title: str) -> str:
     title = re.sub(r'\s*\([^)]*\)', '', title)
     title = title.replace('&', 'and')
     title = re.sub(r'^(the|a|an)\s+', '', title.strip())
+    title = title.strip()
+    if _ACRONYM_RE.match(title):
+        return title
     # Drop punctuation entirely rather than leaving it to the fuzzy-ratio
     # fallback -- "WALL-E" vs "WALL·E", "'83" vs "83" are the same
     # title with different punctuation glyphs, not a cosmetic near-miss.
