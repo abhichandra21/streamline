@@ -9,17 +9,22 @@ TV_PATTERN = re.compile(
 # Bonus content (clips, trailers, featurettes, etc.) that should never reach
 # TMDB lookup — these aren't real watch events and produce nonsense matches.
 #
-# Most keywords must sit at a tag-like position -- the end of the title, or
-# immediately before a ":"/"|" separator -- not just anywhere a bare word
-# happens to match. Deleted scene/song tags also allow a directly quoted
-# payload, e.g. 'Deleted Song "Desert Moon"'. Plain \b-word matching would
-# flag real titles like
-# "Trailer Park Boys" (starts with "trailer") or a "BTS" concert special
-# (the abbreviation collides with "behind the scenes"), so the trailing
-# lookahead anchors every alternative to how these tags actually appear in
-# real exports ("Cars 3 Trailer", "Trailer | Wonder Man | Season 1",
-# "Behind the Scenes: Encanto"). The "bts" alias is dropped entirely since
-# it's too ambiguous with the band name to anchor safely.
+# Most keywords must sit at a tag-like position -- the end of the title
+# (optionally followed by a short version/numbering suffix like "2", "#3",
+# or "Version"), or immediately before a ":"/"|" separator -- not just
+# anywhere a bare word happens to match. Deleted scene/song tags also allow
+# a directly quoted payload, e.g. 'Deleted Song "Desert Moon"'. Plain
+# \b-word matching would flag real titles like "Trailer Park Boys" (starts
+# with "trailer") or a "BTS" concert special (the abbreviation collides
+# with "behind the scenes"), so the anchoring is deliberately tight: it
+# still needs to catch "Cars 3 Trailer 2", "Official Trailer #3", and
+# "Moana Sing-Along Version" without also catching "Trailer Park Boys". The
+# "bts" alias is dropped entirely since it's too ambiguous with the band
+# name to anchor safely.
+_TAG_SUFFIX = (
+    r"(?:\s*(?:#\s*\d+|\d+|version|cut|edition|extended|unrated|remastered"
+    r"|part\s*\d+|vol\.?\s*\d+))?"
+)
 _BONUS_CONTENT_RE = re.compile(
     r"(?:"
     r"(?:"
@@ -31,8 +36,15 @@ _BONUS_CONTENT_RE = re.compile(
     r"|\bvideo journal\b"
     r"|\bsong breakdowns?\b"
     r"|\bpromo(?:tional)?\b"
-    r")(?=\s*[:|]|\s*$)"
+    r")(?=\s*[:|]|" + _TAG_SUFFIX + r"\s*$)"
     r"|\bdeleted\s+(?:scene|song)\b(?=\s*(?:[:|]|[\"']|$))"
+    # "Stunts | More from Pandora's Box | Avatar: The Way of Water" --
+    # a featurette breadcrumb segment that doesn't contain any of the
+    # keywords above. A plain ">=2 pipes" count would also flag real
+    # pipe-styled titles ("Love | Death | Robots"), so this only fires on
+    # the specific "more from" breadcrumb phrase, anchored to a segment
+    # start (string start or right after a separator).
+    r"|(?:^|[:|])\s*more from\b"
     r")",
     re.IGNORECASE,
 )
@@ -48,8 +60,8 @@ def is_bonus_content(*parts: str) -> bool:
     content rather than a real watch event.
 
     Checks each part for known bonus-content keywords (clip, trailer,
-    featurette, etc.) and for pipe-separated featurette markers spanning the
-    combined parts (e.g. "Stunts | More from X | Movie Title").
+    featurette, etc.), including the "more from ..." featurette-breadcrumb
+    phrase.
     """
     non_empty = [p for p in parts if p]
     for part in non_empty:
@@ -57,8 +69,6 @@ def is_bonus_content(*parts: str) -> bool:
             return True
         if any(word in part for word in _NON_LATIN_TRAILER_WORDS):
             return True
-    if sum(p.count("|") for p in non_empty) >= 2:
-        return True
     return False
 
 
@@ -77,32 +87,47 @@ class WatchEvent:
 
 
 # Non-Latin scripts whose presence in a title is a strong language signal
-# for TMDB's `with_original_language` search bias. Checked in this order so
-# Japanese (which mixes kanji with kana) is detected before the broader CJK
-# ideograph range is attributed to Chinese.
+# for TMDB's `with_original_language` search bias. Deliberately excludes
+# bare CJK Unified Ideographs (Han characters): they're shared by Chinese
+# and Japanese kanji, so without kana or hangul present there is no
+# script-only way to tell a Chinese title from a kanji-only Japanese one
+# ("怪物" is Japanese, not Chinese, despite being pure Han). Guessing "zh"
+# for a Japanese title would apply the wrong language bias, which is worse
+# than applying none -- so this only auto-detects scripts that are
+# themselves unambiguous.
 _SCRIPT_RANGES: list[tuple[str, tuple[tuple[int, int], ...]]] = [
     ("ja", ((0x3040, 0x309F), (0x30A0, 0x30FF))),  # Hiragana, Katakana
     ("ko", ((0xAC00, 0xD7A3), (0x1100, 0x11FF))),  # Hangul
-    ("zh", ((0x4E00, 0x9FFF),)),                    # CJK Unified Ideographs
     ("hi", ((0x0900, 0x097F),)),                    # Devanagari
     ("he", ((0x0590, 0x05FF),)),                    # Hebrew
     ("ar", ((0x0600, 0x06FF),)),                    # Arabic
 ]
 
+# A matched script must account for at least this share of the title's
+# letters before it's trusted as a language hint. Without this, a single
+# incidental non-Latin character in an otherwise Latin-script title (e.g. a
+# place name like "Lost in Translation 東京") would bias the search toward
+# a language the title isn't actually in.
+_MIN_SCRIPT_SHARE = 0.5
+
 
 def detect_language_hint(title: str) -> str | None:
     """Detect a non-Latin script in the title and return a TMDB
-    `with_original_language` code, or None if the title looks Latin-script.
+    `with_original_language` code, or None if the title looks Latin-script
+    or the script signal is too ambiguous/incidental to trust.
 
     TMDB's default search ranking is English-popularity-weighted, so a
-    Hindi/Hebrew/CJK/Arabic title without this hint tends to lose to an
-    unrelated, more popular English title containing the same word.
+    Hindi/Hebrew/Japanese/Korean/Arabic title without this hint tends to
+    lose to an unrelated, more popular English title containing the same
+    word.
     """
+    letters = [ch for ch in title if ch.isalpha()]
+    if not letters:
+        return None
     for lang, ranges in _SCRIPT_RANGES:
-        for ch in title:
-            code = ord(ch)
-            if any(lo <= code <= hi for lo, hi in ranges):
-                return lang
+        matched = sum(1 for ch in letters if any(lo <= ord(ch) <= hi for lo, hi in ranges))
+        if matched and matched / len(letters) >= _MIN_SCRIPT_SHARE:
+            return lang
     return None
 
 

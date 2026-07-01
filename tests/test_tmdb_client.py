@@ -444,8 +444,9 @@ def test_post_search_validator_overrides_implausible_top_match():
         assert meta.tmdb_id == 555
 
 
-def test_post_search_validator_keeps_winner_when_no_alternative_is_plausible():
-    """If nothing among the candidates plausibly matches, don't change the pick."""
+def test_post_search_validator_rejects_when_no_candidate_is_plausible():
+    """If nothing among the candidates plausibly matches, return no match
+    at all rather than silently keeping the best-scoring wrong one."""
     with tempfile.TemporaryDirectory() as tmp:
         client = make_client(tmp)
 
@@ -467,8 +468,54 @@ def test_post_search_validator_keeps_winner_when_no_alternative_is_plausible():
         with patch.object(client, "_get", side_effect=fake_get):
             meta = client.get_metadata("Something Else Entirely", "movie")
 
+        assert meta is None
+
+
+def test_post_search_validator_rejects_single_implausible_candidate():
+    """The single-candidate shortcut must not bypass plausibility -- a lone
+    search result that doesn't match the title at all is still a miss."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+
+        cand = _make_search_result(11467, "America's Sweethearts", "2001-07-20", vote_count=2000)
+
+        def fake_get(endpoint, params=None):
+            if "search" in endpoint:
+                return {"results": [cand]}
+            return {}
+
+        with patch.object(client, "_get", side_effect=fake_get):
+            meta = client.get_metadata("Don", "movie")
+
+        assert meta is None
+
+
+def test_up_is_not_plausible_for_up_in_the_air():
+    """A short title must not be treated as plausible just because it's a
+    substring of an unrelated longer title."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+
+        cand_wrong = _make_search_result(49, "Up in the Air", "2009-09-04", vote_count=2000)
+        cand_right = _make_search_result(14160, "Up", "2009-05-13", vote_count=50)
+
+        details_wrong = _make_details(49, "Up in the Air", runtime=109, release_date="2009-09-04")
+        details_right = _make_details(14160, "Up", runtime=96, release_date="2009-05-13")
+
+        def fake_get(endpoint, params=None):
+            if "search" in endpoint:
+                return {"results": [cand_wrong, cand_right]}
+            if "49" in endpoint:
+                return details_wrong
+            if "14160" in endpoint:
+                return details_right
+            return {}
+
+        with patch.object(client, "_get", side_effect=fake_get):
+            meta = client.get_metadata("Up", "movie")
+
         assert meta is not None
-        assert meta.tmdb_id == 1
+        assert meta.tmdb_id == 14160
 
 
 def test_language_hint_boosts_matching_original_language_candidate():
@@ -543,3 +590,17 @@ def test_resolve_title_confident_keeps_same_title_close_results_ambiguous():
 
         assert tmdb_id is None
         assert resolved_type == "tv"
+
+
+def test_load_cache_treats_corrupt_json_as_cache_miss(tmp_path):
+    """A corrupt cache file must not crash the caller (e.g. override
+    validation) -- it should be treated like a cache miss so the caller
+    falls back to a fresh fetch."""
+    client = make_client(str(tmp_path))
+    cache_path = tmp_path / "movie" / "42.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text("{not valid json")
+
+    result = client._load_cache("movie", 42)
+
+    assert result is None

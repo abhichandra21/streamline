@@ -1124,6 +1124,34 @@ def test_resolve_tmdb_id_override_accepts_match_via_corrected_search_title(tmp_p
     assert meta.title == "21"
 
 
+def test_resolve_tmdb_id_override_trust_bypasses_validation_for_abbreviations(tmp_path):
+    """The old "force this ID" escape hatch: a deliberately abbreviated
+    source title ("LOTR: Fellowship") that looks nothing like the real
+    title by any string-similarity measure must still be accepted when the
+    override explicitly opts out of validation via "trust": true."""
+    import json
+    import recommender.setup as setup
+    from recommender.tmdb_client import TmdbClient
+
+    cache_path = tmp_path / "movie" / "120.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({
+        "id": 120, "title": "The Lord of the Rings: The Fellowship of the Ring",
+        "release_date": "2001-12-19",
+    }))
+
+    tmdb = TmdbClient(api_key="unused", cache_dir=str(tmp_path))
+
+    # Without trust, this is correctly rejected -- confirms the escape
+    # hatch is actually needed here, not a no-op.
+    untrusted = setup._resolve_tmdb_id_override(tmdb, "LOTR: Fellowship", "movie", 120)
+    assert untrusted is None
+
+    trusted = setup._resolve_tmdb_id_override(tmdb, "LOTR: Fellowship", "movie", 120, trust=True)
+    assert trusted is not None
+    assert trusted.title == "The Lord of the Rings: The Fellowship of the Ring"
+
+
 def test_resolve_tmdb_id_override_fetches_and_caches_when_uncached(tmp_path):
     import recommender.setup as setup
     from recommender.tmdb_client import TmdbClient
@@ -1252,6 +1280,58 @@ def test_build_hints_map_disney_synthesized_duration_not_used():
     assert ('Bluey: Shorts Season 1', 'tv') not in hints_map
 
 
+def test_build_hints_map_merges_complementary_hints_across_events():
+    """A Netflix watch (inexact runtime only) and a later manual entry for
+    the same title (release year only) must both contribute -- taking only
+    the first event seen would lose whichever hint the other carried."""
+    from datetime import datetime, timedelta
+    import recommender.setup as setup
+    from recommender.ingestion.base import WatchEvent
+
+    netflix_event = WatchEvent(
+        platform='netflix', title='Honeyland', content_type='movie',
+        series_name='Honeyland', watched_duration=timedelta(minutes=61),
+        total_duration=None, timestamp=datetime.now(), profile='',
+    )
+    manual_event = WatchEvent(
+        platform='manual', title='Honeyland', content_type='movie',
+        series_name='Honeyland', watched_duration=timedelta(minutes=120),
+        total_duration=timedelta(minutes=120), timestamp=datetime.now(),
+        profile='', release_year_hint=2019,
+    )
+
+    hints_map = setup._build_hints_map([netflix_event, manual_event])
+    hints = hints_map[('Honeyland', 'movie')]
+    assert hints.release_year == 2019
+    assert hints.runtime_minutes == 61
+    assert hints.runtime_is_exact is False
+
+
+def test_build_hints_map_prefers_exact_runtime_over_inexact():
+    """An apple_tv event's exact runtime must win over a netflix/prime
+    event's rough watched-duration-derived runtime for the same title,
+    regardless of which one is seen first."""
+    from datetime import datetime, timedelta
+    import recommender.setup as setup
+    from recommender.ingestion.base import WatchEvent
+
+    netflix_event = WatchEvent(
+        platform='netflix', title='Dune', content_type='movie',
+        series_name='Dune', watched_duration=timedelta(minutes=65),
+        total_duration=None, timestamp=datetime.now(), profile='',
+    )
+    apple_tv_event = WatchEvent(
+        platform='apple_tv', title='Dune', content_type='movie',
+        series_name='Dune', watched_duration=timedelta(minutes=150),
+        total_duration=timedelta(minutes=155), timestamp=datetime.now(), profile='',
+    )
+
+    hints_map = setup._build_hints_map([netflix_event, apple_tv_event])
+    hints = hints_map[('Dune', 'movie')]
+    assert hints.runtime_minutes == 155
+    assert hints.runtime_is_exact is True
+
+
 def test_audit_reports_year_mismatch(tmp_path, capsys):
     import json
     import recommender.setup as setup
@@ -1304,6 +1384,35 @@ def test_audit_reports_runtime_mismatch(tmp_path, capsys):
     assert "runtime" in err.lower() or "source 140min" in err
 
 
+def test_audit_ignores_inexact_runtime_hint_from_partial_watch(tmp_path, capsys):
+    """A 61-minute Netflix watch of a real 120-minute movie is a correct
+    match stopped partway through, not a runtime mismatch -- the inexact
+    watched-duration heuristic must not be compared against real runtime."""
+    import json
+    import recommender.setup as setup
+    from recommender.watch_index import WatchIndex
+    from recommender.tmdb_client import MatchHints
+
+    cache_path = tmp_path / "movie" / "42.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({
+        "id": 42, "title": "Some Movie", "release_date": "2019-01-01",
+        "runtime": 120, "vote_count": 100, "popularity": 10, "poster_path": "/p.jpg",
+    }))
+    index = WatchIndex(
+        tmdb_ids={42},
+        tmdb_keys={("movie", 42)},
+        normalized_titles={("some movie", "movie")},
+        entries=[{"tmdb_id": 42, "title": "Some Movie", "content_type": "movie"}],
+    )
+    hints_map = {("Some Movie", "movie"): MatchHints(runtime_minutes=61, runtime_is_exact=False)}
+
+    setup._audit_cache_mismatches(index, str(tmp_path), hints_map, audit_output_path=str(tmp_path / "audit.txt"))
+
+    err = capsys.readouterr().err
+    assert "runtime" not in err.lower()
+
+
 def test_audit_existing_title_mismatch_still_works(tmp_path, capsys):
     """Existing title mismatch audit continues to work."""
     import json
@@ -1346,20 +1455,32 @@ def test_titles_are_compatible_normalizes_ampersand():
     assert setup._titles_are_compatible("Spy & Spy", "Spy and Spy")
 
 
-def test_titles_are_compatible_cache_title_substring_of_source():
-    import recommender.setup as setup
-    # A shorter cache title contained in the (more specific) source title is
-    # still accepted -- e.g. TMDB trimming a subtitle we kept.
-    assert setup._titles_are_compatible("Avatar: The Way of Water", "Avatar")
-
-
 def test_titles_are_compatible_rejects_distinct_sequels():
-    """A short source title must not be accepted just because a longer
-    cache title happens to start with it -- these are different works with
-    different tmdb_ids, not the same title with a trimmed subtitle."""
+    """Neither direction of substring containment should pass -- these are
+    different works with different tmdb_ids, not the same title with a
+    trimmed subtitle. A prior version of this check accepted the shorter
+    title being contained in the longer one in either direction."""
     import recommender.setup as setup
     assert not setup._titles_are_compatible("Avatar", "Avatar: The Way of Water")
+    assert not setup._titles_are_compatible("Avatar: The Way of Water", "Avatar")
     assert not setup._titles_are_compatible("Dune", "Dune: Part Two")
+    assert not setup._titles_are_compatible("Apollo 11", "Man on the Moon: The Epic Journey of Apollo 11")
+
+
+def test_titles_are_compatible_high_similarity_cosmetic_variant():
+    """A near-identical title (minor punctuation/spelling difference) that
+    isn't an exact match after normalization should still be accepted."""
+    import recommender.setup as setup
+    assert setup._titles_are_compatible("Spider-Man: No Way Home", "Spider Man: No Way Home")
+
+
+def test_titles_are_compatible_strips_general_punctuation():
+    """Punctuation-glyph-only differences are the same title, not a
+    cosmetic near-miss that should depend on the fuzzy-ratio threshold."""
+    import recommender.setup as setup
+    assert setup._titles_are_compatible("WALL-E", "WALL·E")  # hyphen vs middle dot
+    assert setup._titles_are_compatible("'83", "83")
+    assert setup._titles_are_compatible("Shank's", "Shank")
 
 
 def test_titles_are_compatible_still_rejects_unrelated():
@@ -1420,3 +1541,65 @@ def test_audit_title_only_mismatch_not_flagged_as_high_confidence(tmp_path, caps
 
     err = capsys.readouterr().err
     assert "likely real bugs" not in err.lower()
+
+
+def test_audit_flags_same_title_severe_year_collision(tmp_path, capsys):
+    """"Doctor Who" (2005) cached as the unrelated 1963 "Doctor Who" has an
+    identical normalized title -- it never lands in title_mismatches, so it
+    was previously invisible to the high-confidence section even though a
+    42-year gap is an obvious wrong match, not a metadata quirk."""
+    import json
+    import recommender.setup as setup
+    from recommender.watch_index import WatchIndex
+    from recommender.tmdb_client import MatchHints
+
+    cache_path = tmp_path / "tv" / "57.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({
+        "id": 57, "name": "Doctor Who", "first_air_date": "1963-11-23",
+        "vote_count": 100, "popularity": 10, "poster_path": "/p.jpg",
+    }))
+    index = WatchIndex(
+        tmdb_ids={57},
+        tmdb_keys={("tv", 57)},
+        normalized_titles={("doctor who", "tv")},
+        entries=[{"tmdb_id": 57, "title": "Doctor Who", "content_type": "tv"}],
+    )
+    hints_map = {("Doctor Who", "tv"): MatchHints(release_year=2005)}
+
+    setup._audit_cache_mismatches(index, str(tmp_path), hints_map, audit_output_path=str(tmp_path / "audit.txt"))
+
+    err = capsys.readouterr().err
+    assert "likely real bugs" in err.lower()
+    assert "Doctor Who" in err
+    assert "2005" in err
+
+
+def test_audit_flags_severe_year_collision_from_parenthetical_title_year(tmp_path, capsys):
+    """Same scenario as above, but with NO hints_map entry at all -- the
+    disambiguating year only exists as "(2005)" in the raw indexed title.
+    _titles_are_compatible strips parenthetical content before comparing,
+    so without a fallback this year signal would be discarded before ever
+    being checked, leaving the collision invisible."""
+    import json
+    import recommender.setup as setup
+    from recommender.watch_index import WatchIndex
+
+    cache_path = tmp_path / "tv" / "57.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({
+        "id": 57, "name": "Doctor Who", "first_air_date": "1963-11-23",
+        "vote_count": 100, "popularity": 10, "poster_path": "/p.jpg",
+    }))
+    index = WatchIndex(
+        tmdb_ids={57},
+        tmdb_keys={("tv", 57)},
+        normalized_titles={("doctor who", "tv")},
+        entries=[{"tmdb_id": 57, "title": "Doctor Who (2005)", "content_type": "tv"}],
+    )
+
+    setup._audit_cache_mismatches(index, str(tmp_path), audit_output_path=str(tmp_path / "audit.txt"))
+
+    err = capsys.readouterr().err
+    assert "likely real bugs" in err.lower()
+    assert "Doctor Who (2005)" in err

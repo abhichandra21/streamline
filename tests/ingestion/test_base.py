@@ -87,10 +87,20 @@ def test_is_bonus_content_detects_pipe_separated_featurette_markers():
     assert is_bonus_content("Trailer | Wonder Man | Season 1")
 
 
-def test_is_bonus_content_checks_across_multiple_parts():
-    # Pipe markers split across separate fields (e.g. program/season) still
-    # count toward the combined featurette-marker threshold.
-    assert is_bonus_content("Inside | Pandora's Box", "| Avatar: The Way of Water")
+def test_is_bonus_content_detects_trailing_version_or_number_suffix():
+    # A keyword can still be followed by a short numbering/version suffix
+    # before end-of-string, not just a bare end-of-string or separator.
+    assert is_bonus_content("Cars 3 Trailer 2")
+    assert is_bonus_content("Official Trailer #3")
+    assert is_bonus_content("Movie Clip 2")
+    assert is_bonus_content("Moana Sing-Along Version")
+
+
+def test_is_bonus_content_false_for_pipe_styled_real_titles():
+    # A blanket "2+ pipes" heuristic would flag these; only the specific
+    # "more from" featurette-breadcrumb phrase (or another keyword) should.
+    assert not is_bonus_content("Love | Death | Robots")
+    assert not is_bonus_content("Eat | Pray | Love")
 
 
 def test_is_bonus_content_false_for_real_titles():
@@ -129,8 +139,21 @@ def test_detect_language_hint_korean_hangul():
     assert detect_language_hint("기생충") == "ko"
 
 
-def test_detect_language_hint_chinese_without_kana():
-    assert detect_language_hint("流浪地球") == "zh"
+def test_detect_language_hint_bare_han_ideographs_are_ambiguous():
+    """Bare CJK ideographs with no kana/hangul present can't be reliably
+    told apart from Chinese vs. Japanese kanji-only by script alone --
+    "怪物" is Japanese, not Chinese, despite being pure Han. Guessing "zh"
+    would bias the TMDB search toward the wrong language, so neither case
+    returns a hint."""
+    assert detect_language_hint("流浪地球") is None
+    assert detect_language_hint("怪物") is None
+
+
+def test_detect_language_hint_ignores_incidental_non_latin_characters():
+    """A single foreign-script word (e.g. a place name) inside an
+    overwhelmingly Latin-script title must not bias the search -- the
+    title isn't actually in that language."""
+    assert detect_language_hint("Lost in Translation 東京") is None
 
 
 def test_detect_language_hint_none_for_latin_titles():
