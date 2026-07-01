@@ -259,7 +259,7 @@ def _load_enrichments() -> dict[str, str]:
     return {}
 
 
-_CLUSTER_TITLES_RE = re.compile(r'^\*\*\*(.+)\*\*\*\s*$', re.MULTILINE)
+_CLUSTER_TITLES_RE = re.compile(r'^\*\*\*(.+?)\*\*\*\s*$', re.MULTILINE)
 
 
 def _split_cluster_titles(body: str) -> tuple[str, list[str]]:
@@ -274,7 +274,7 @@ def _split_cluster_titles(body: str) -> tuple[str, list[str]]:
     match = _CLUSTER_TITLES_RE.search(body)
     if not match:
         return body.strip(), []
-    titles = [t.strip() for t in re.findall(r'\*([^*]+)\*', match.group(1)) if t.strip()]
+    titles = [t.strip() for t in re.findall(r'([^*,]+)(?:\*|$)', match.group(1)) if t.strip()]
     essay = body[:match.start()] + body[match.end():]
     return essay.strip(), titles
 

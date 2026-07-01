@@ -15,7 +15,7 @@ class TestSplitClusterTitles:
         body = (
             "You gravitate toward British crime television with a consistency "
             "that makes it your single most reliable viewing pattern.\n\n"
-            "*** *Slow Horses*, *Luther*, *Broadchurch* ***\n"
+            "***Slow Horses*, *Luther*, *Broadchurch***\n"
         )
         essay, titles = web._split_cluster_titles(body)
         assert titles == ["Slow Horses", "Luther", "Broadchurch"]
