@@ -10,6 +10,53 @@ from recommender.jobs import Job, JobRegistry
 from recommender.web import app
 
 
+class TestSplitClusterTitles:
+    def test_extracts_titles_and_strips_line_from_essay(self):
+        body = (
+            "You gravitate toward British crime television with a consistency "
+            "that makes it your single most reliable viewing pattern.\n\n"
+            "*** *Slow Horses*, *Luther*, *Broadchurch* ***\n"
+        )
+        essay, titles = web._split_cluster_titles(body)
+        assert titles == ["Slow Horses", "Luther", "Broadchurch"]
+        assert "***" not in essay
+        assert "Slow Horses" not in essay
+        assert essay.startswith("You gravitate toward British crime television")
+
+    def test_no_title_line_returns_empty_list(self):
+        body = "Just a paragraph with no title list at all."
+        essay, titles = web._split_cluster_titles(body)
+        assert titles == []
+        assert essay == body
+
+    def test_ignores_inline_bold_that_is_not_a_title_line(self):
+        body = "This has **bold text** mid-sentence but no title list.\n"
+        essay, titles = web._split_cluster_titles(body)
+        assert titles == []
+        assert "**bold text**" in essay
+
+
+class TestFirstSentence:
+    def test_returns_first_sentence_only(self):
+        text = "Short sentence here. More text after that is ignored."
+        assert web._first_sentence(text) == "Short sentence here."
+
+    def test_strips_markdown_emphasis(self):
+        text = "*Emphasis* word here. Rest of paragraph."
+        assert web._first_sentence(text) == "Emphasis word here."
+
+    def test_truncates_long_sentence_at_word_boundary(self):
+        text = "This is a very long single sentence with no punctuation break at all so it must be truncated somewhere in the middle of it"
+        result = web._first_sentence(text, max_len=40)
+        assert len(result) <= 41  # 40 + ellipsis char
+        assert result.endswith("…")
+        assert not result[:-1].endswith(" ")
+
+    def test_short_text_without_terminal_punctuation_returned_whole(self):
+        text = "No period at the end"
+        assert web._first_sentence(text, max_len=80) == "No period at the end"
+
+
 @pytest.fixture
 def client():
     app.config["TESTING"] = True

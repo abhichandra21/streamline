@@ -259,6 +259,43 @@ def _load_enrichments() -> dict[str, str]:
     return {}
 
 
+_CLUSTER_TITLES_RE = re.compile(r'^\*\*\*(.+)\*\*\*\s*$', re.MULTILINE)
+
+
+def _split_cluster_titles(body: str) -> tuple[str, list[str]]:
+    """Split a cluster's raw markdown body into (essay_text, title_list).
+
+    The representative-title list is a single line wrapped in ``***...***``
+    with each title individually italicized inside it, e.g.
+    ``***Slow Horses*, *Luther*, *Broadchurch***``. Inline ``**bold**`` text
+    elsewhere in the essay does not match because it isn't a whole-line
+    ``***...***`` span.
+    """
+    match = _CLUSTER_TITLES_RE.search(body)
+    if not match:
+        return body.strip(), []
+    titles = [t.strip() for t in re.findall(r'\*([^*]+)\*', match.group(1)) if t.strip()]
+    essay = body[:match.start()] + body[match.end():]
+    return essay.strip(), titles
+
+
+def _strip_markdown_emphasis(text: str) -> str:
+    return re.sub(r'\*+', '', text)
+
+
+def _first_sentence(text: str, max_len: int = 80) -> str:
+    """Return the first sentence of text, truncated to max_len at a word boundary."""
+    text = _strip_markdown_emphasis(text).strip()
+    match = re.search(r'[.!?](?:\s|$)', text)
+    sentence = text[:match.end()].strip() if match else text
+    if len(sentence) <= max_len:
+        return sentence
+    truncated = sentence[:max_len].rsplit(' ', 1)[0].rstrip(' ,;:.')
+    if not truncated:
+        truncated = sentence[:max_len]
+    return truncated + '…'
+
+
 def _md_to_html(text: str) -> str:
     html = str(escape(text))
     html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html)
