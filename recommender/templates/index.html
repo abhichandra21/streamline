@@ -169,7 +169,7 @@
         var extras = document.querySelectorAll('.mosaic-tile--extra');
         var moreTile = document.getElementById('cluster-more-tile');
         var expanded = moreTile.dataset.expanded === '1';
-        extras.forEach(function(t) { t.style.display = expanded ? 'none' : ''; });
+        extras.forEach(function(t) { t.style.display = expanded ? 'none' : 'flex'; });
         moreTile.dataset.expanded = expanded ? '0' : '1';
         var label = document.getElementById('cluster-more-label');
         label.textContent = expanded ? ('+ ' + extras.length + ' more clusters') : 'show fewer ↑';
