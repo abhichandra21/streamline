@@ -62,21 +62,6 @@
   </script>
 </section>
 
-{% if recent_queries %}
-<!-- ════════ RECENT SEARCHES ════════ -->
-<section style="margin-bottom:2.5rem;">
-  <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:0.6rem;">
-    <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted);">Recent searches</span>
-    <a href="/searches" class="mono" style="font-size:0.58rem; color:var(--muted); text-decoration:none; transition:color 0.15s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'">View all</a>
-  </div>
-  <div style="display:flex; flex-wrap:wrap; gap:0.4rem;">
-    {% for q in recent_queries %}
-    <a href="/searches#q-{{ loop.index }}" class="btn-ghost" style="padding:4px 12px; font-size:0.7rem; text-decoration:none;"{% if q.summary %} title="{{ q.summary }}"{% endif %}>{{ q.label or q.query }}</a>
-    {% endfor %}
-  </div>
-</section>
-{% endif %}
-
 <div style="height:1px; background:linear-gradient(90deg, var(--accent), var(--lavender), var(--teal)); margin-bottom:3.5rem; opacity:0.4;"></div>
 
 <!-- ════════ TASTE PROFILE ════════ -->
@@ -109,8 +94,10 @@
     {% if not c.folded %}
     <div class="mosaic-tile mosaic-tile--{{ c.tier }} mosaic-tile--{{ colors[loop.index0 % 4] }}" data-cluster-idx="{{ loop.index0 }}" onclick="toggleClusterPanel({{ loop.index0 }})">
       <div class="mosaic-tile-count">{{ c.title_count }} titles</div>
-      <div class="mosaic-tile-heading">{{ c.heading }}</div>
-      {% if c.tier != 'small' %}<div class="mosaic-tile-tagline">{{ c.tagline }}</div>{% endif %}
+      <div class="mosaic-tile-body">
+        <div class="mosaic-tile-heading">{{ c.heading }}</div>
+        {% if c.tier != 'small' %}<div class="mosaic-tile-tagline">{{ c.tagline }}</div>{% endif %}
+      </div>
     </div>
     {% endif %}
     {% endfor %}
@@ -124,7 +111,9 @@
     {% if c.folded %}
     <div class="mosaic-tile mosaic-tile--small mosaic-tile--extra mosaic-tile--{{ colors[loop.index0 % 4] }}" data-cluster-idx="{{ loop.index0 }}" onclick="toggleClusterPanel({{ loop.index0 }})">
       <div class="mosaic-tile-count">{{ c.title_count }} titles</div>
-      <div class="mosaic-tile-heading">{{ c.heading }}</div>
+      <div class="mosaic-tile-body">
+        <div class="mosaic-tile-heading">{{ c.heading }}</div>
+      </div>
     </div>
     {% endif %}
     {% endfor %}
@@ -224,22 +213,21 @@
   .mosaic-grid {
     display: grid;
     grid-template-columns: 1.3fr 1fr 1fr;
-    grid-auto-rows: 96px;
+    grid-auto-rows: minmax(96px, auto);
     gap: 0.65rem;
   }
   @media (max-width: 720px) {
     .mosaic-grid { grid-template-columns: 1fr; grid-auto-rows: auto; }
     .mosaic-tile--big { grid-row: auto; }
+    .mosaic-tile--more { grid-column: auto; }
   }
 
   .mosaic-tile {
     border-radius: 8px;
     padding: 0.9rem 1.05rem;
-    position: relative;
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    justify-content: flex-end;
     cursor: pointer;
     border: 1px solid rgba(255,255,255,0.06);
     transition: box-shadow 0.15s, transform 0.15s;
@@ -249,6 +237,7 @@
   .mosaic-tile--big { grid-row: span 2; padding: 1.2rem 1.3rem; }
   .mosaic-tile--extra { display: none; }
   .mosaic-tile--more {
+    grid-column: 2;
     background: var(--surface);
     border: 1px dashed var(--border);
     align-items: center;
@@ -279,20 +268,20 @@
     margin: 0;
     text-align: center;
   }
+  .mosaic-tile-body { margin-top: auto; }
   .mosaic-tile-tagline {
     font-family: 'DM Sans', sans-serif;
     font-style: italic;
     font-size: 0.68rem;
-    color: rgba(255,255,255,0.72);
+    color: var(--body);
     line-height: 1.35;
   }
   .mosaic-tile-count {
-    position: absolute;
-    top: 0.65rem;
-    right: 0.8rem;
+    align-self: flex-end;
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.56rem;
-    color: rgba(255,255,255,0.45);
+    color: var(--muted);
+    margin-bottom: 0.4rem;
   }
 
   .cluster-panel {

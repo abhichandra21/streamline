@@ -476,7 +476,6 @@ def dashboard() -> str:
     _assign_cluster_tiers(clusters)
 
     posters = _get_recent_posters(entries, limit=30)
-    recent_queries = query_history.load(limit=5)
 
     return render_template(
         "index.html",
@@ -487,7 +486,6 @@ def dashboard() -> str:
         movie_count=movie_count,
         enrichment_count=len(enrichments),
         posters=posters,
-        recent_queries=recent_queries,
     )
 
 
