@@ -296,6 +296,24 @@ def _first_sentence(text: str, max_len: int = 80) -> str:
     return truncated + '…'
 
 
+def _assign_cluster_tiers(clusters: list[dict], visible_count: int = 5) -> None:
+    """Rank clusters by title_count (desc) and assign tier + fold state in place.
+
+    Rank 1 -> 'big', ranks 2-4 -> 'medium', rank 5+ -> 'small'.
+    Ranks beyond visible_count are marked folded=True (hidden behind "+more").
+    """
+    ranked = sorted(range(len(clusters)), key=lambda i: -clusters[i]["title_count"])
+    for rank, idx in enumerate(ranked, start=1):
+        c = clusters[idx]
+        if rank == 1:
+            c["tier"] = "big"
+        elif rank <= 4:
+            c["tier"] = "medium"
+        else:
+            c["tier"] = "small"
+        c["folded"] = rank > visible_count
+
+
 def _md_to_html(text: str) -> str:
     html = str(escape(text))
     html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html)

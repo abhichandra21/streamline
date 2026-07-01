@@ -57,6 +57,34 @@ class TestFirstSentence:
         assert web._first_sentence(text, max_len=80) == "No period at the end"
 
 
+class TestAssignClusterTiers:
+    def _clusters(self, counts):
+        return [{"title_count": c} for c in counts]
+
+    def test_top_rank_is_big_next_three_medium_fifth_small_visible(self):
+        clusters = self._clusters([26, 26, 26, 23, 23, 20, 19])
+        web._assign_cluster_tiers(clusters)
+        tiers = [c["tier"] for c in clusters]
+        folded = [c["folded"] for c in clusters]
+        assert tiers[0] == "big"
+        assert tiers[1:4] == ["medium", "medium", "medium"]
+        assert tiers[4] == "small"
+        assert folded[4] is False
+        assert tiers[5:] == ["small", "small"]
+        assert folded[5:] == [True, True]
+
+    def test_fewer_than_visible_count_none_folded(self):
+        clusters = self._clusters([26, 23, 20])
+        web._assign_cluster_tiers(clusters)
+        assert all(c["folded"] is False for c in clusters)
+        assert [c["tier"] for c in clusters] == ["big", "medium", "medium"]
+
+    def test_custom_visible_count(self):
+        clusters = self._clusters([10, 9, 8, 7, 6, 5])
+        web._assign_cluster_tiers(clusters, visible_count=2)
+        assert [c["folded"] for c in clusters] == [False, False, True, True, True, True]
+
+
 @pytest.fixture
 def client():
     app.config["TESTING"] = True
