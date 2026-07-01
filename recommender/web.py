@@ -468,7 +468,12 @@ def dashboard() -> str:
         clusters.append(current_cluster)
 
     for c in clusters:
-        c["body_html"] = _md_to_html(c["body"].strip())
+        essay, titles = _split_cluster_titles(c["body"].strip())
+        c["titles"] = titles
+        c["title_count"] = len(titles)
+        c["tagline"] = _first_sentence(essay)
+        c["body_html"] = _md_to_html(essay)
+    _assign_cluster_tiers(clusters)
 
     posters = _get_recent_posters(entries, limit=30)
     recent_queries = query_history.load(limit=5)

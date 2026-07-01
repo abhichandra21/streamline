@@ -1287,3 +1287,35 @@ class TestHistoryTmdbOverview:
 
         from recommender.web import _get_tmdb_overview
         assert _get_tmdb_overview(88888, "tv") is None
+
+
+class TestDashboardClusterMosaicData:
+    SAMPLE_PROFILE = (
+        "# Consolidated Taste Profile\n\n---\n"
+        "## 1. British Crime Drama & Psychological Procedural\n\n"
+        "You gravitate toward British crime television with a consistency "
+        "that makes it your single most reliable viewing pattern.\n\n"
+        "***Slow Horses*, *Luther*, *Broadchurch*, *Hinterland*, *Happy Valley***\n\n"
+        "---\n"
+        "## 2. Indie Dramedy\n\n"
+        "You maintain a consistent appetite for quiet character cinema.\n\n"
+        "***Columbus*, *Gloria Bell***\n"
+    )
+
+    @patch("recommender.web._load_enrichments", return_value={})
+    @patch("recommender.web._get_context")
+    def test_dashboard_clusters_have_mosaic_fields(self, mock_ctx, _mock_enrichments, client):
+        mock_ctx.return_value = MagicMock(
+            taste_profile=self.SAMPLE_PROFILE,
+            watch_index=MagicMock(entries=[]),
+        )
+        with patch("recommender.web.query_history.load", return_value=[]):
+            resp = client.get("/")
+
+        assert resp.status_code == 200
+        html = resp.data.decode()
+        assert "mosaic-grid" in html
+        assert "British Crime Drama" in html
+        assert "5 titles" in html   # cluster 1 has 5 representative titles
+        assert "2 titles" in html   # cluster 2 has 2 representative titles
+        assert "Slow Horses" not in html.split('id="cluster-panels"')[0]  # chips only in panels, not tiles
