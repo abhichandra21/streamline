@@ -10,6 +10,81 @@ from recommender.jobs import Job, JobRegistry
 from recommender.web import app
 
 
+class TestSplitClusterTitles:
+    def test_extracts_titles_and_strips_line_from_essay(self):
+        body = (
+            "You gravitate toward British crime television with a consistency "
+            "that makes it your single most reliable viewing pattern.\n\n"
+            "***Slow Horses*, *Luther*, *Broadchurch***\n"
+        )
+        essay, titles = web._split_cluster_titles(body)
+        assert titles == ["Slow Horses", "Luther", "Broadchurch"]
+        assert "***" not in essay
+        assert "Slow Horses" not in essay
+        assert essay.startswith("You gravitate toward British crime television")
+
+    def test_no_title_line_returns_empty_list(self):
+        body = "Just a paragraph with no title list at all."
+        essay, titles = web._split_cluster_titles(body)
+        assert titles == []
+        assert essay == body
+
+    def test_ignores_inline_bold_that_is_not_a_title_line(self):
+        body = "This has **bold text** mid-sentence but no title list.\n"
+        essay, titles = web._split_cluster_titles(body)
+        assert titles == []
+        assert "**bold text**" in essay
+
+
+class TestFirstSentence:
+    def test_returns_first_sentence_only(self):
+        text = "Short sentence here. More text after that is ignored."
+        assert web._first_sentence(text) == "Short sentence here."
+
+    def test_strips_markdown_emphasis(self):
+        text = "*Emphasis* word here. Rest of paragraph."
+        assert web._first_sentence(text) == "Emphasis word here."
+
+    def test_truncates_long_sentence_at_word_boundary(self):
+        text = "This is a very long single sentence with no punctuation break at all so it must be truncated somewhere in the middle of it"
+        result = web._first_sentence(text, max_len=40)
+        assert len(result) <= 41  # 40 + ellipsis char
+        assert result.endswith("…")
+        assert not result[:-1].endswith(" ")
+
+    def test_short_text_without_terminal_punctuation_returned_whole(self):
+        text = "No period at the end"
+        assert web._first_sentence(text, max_len=80) == "No period at the end"
+
+
+class TestAssignClusterTiers:
+    def _clusters(self, counts):
+        return [{"title_count": c} for c in counts]
+
+    def test_top_rank_is_big_next_three_medium_fifth_small_visible(self):
+        clusters = self._clusters([26, 26, 26, 23, 23, 20, 19])
+        web._assign_cluster_tiers(clusters)
+        tiers = [c["tier"] for c in clusters]
+        folded = [c["folded"] for c in clusters]
+        assert tiers[0] == "big"
+        assert tiers[1:4] == ["medium", "medium", "medium"]
+        assert tiers[4] == "small"
+        assert folded[4] is False
+        assert tiers[5:] == ["small", "small"]
+        assert folded[5:] == [True, True]
+
+    def test_fewer_than_visible_count_none_folded(self):
+        clusters = self._clusters([26, 23, 20])
+        web._assign_cluster_tiers(clusters)
+        assert all(c["folded"] is False for c in clusters)
+        assert [c["tier"] for c in clusters] == ["big", "medium", "medium"]
+
+    def test_custom_visible_count(self):
+        clusters = self._clusters([10, 9, 8, 7, 6, 5])
+        web._assign_cluster_tiers(clusters, visible_count=2)
+        assert [c["folded"] for c in clusters] == [False, False, True, True, True, True]
+
+
 @pytest.fixture
 def client():
     app.config["TESTING"] = True
@@ -1212,3 +1287,35 @@ class TestHistoryTmdbOverview:
 
         from recommender.web import _get_tmdb_overview
         assert _get_tmdb_overview(88888, "tv") is None
+
+
+class TestDashboardClusterMosaicData:
+    SAMPLE_PROFILE = (
+        "# Consolidated Taste Profile\n\n---\n"
+        "## 1. British Crime Drama & Psychological Procedural\n\n"
+        "You gravitate toward British crime television with a consistency "
+        "that makes it your single most reliable viewing pattern.\n\n"
+        "***Slow Horses*, *Luther*, *Broadchurch*, *Hinterland*, *Happy Valley***\n\n"
+        "---\n"
+        "## 2. Indie Dramedy\n\n"
+        "You maintain a consistent appetite for quiet character cinema.\n\n"
+        "***Columbus*, *Gloria Bell***\n"
+    )
+
+    @patch("recommender.web._load_enrichments", return_value={})
+    @patch("recommender.web._get_context")
+    def test_dashboard_clusters_have_mosaic_fields(self, mock_ctx, _mock_enrichments, client):
+        mock_ctx.return_value = MagicMock(
+            taste_profile=self.SAMPLE_PROFILE,
+            watch_index=MagicMock(entries=[]),
+        )
+        with patch("recommender.web.query_history.load", return_value=[]):
+            resp = client.get("/")
+
+        assert resp.status_code == 200
+        html = resp.data.decode()
+        assert "mosaic-grid" in html
+        assert "British Crime Drama" in html
+        assert "5 titles" in html   # cluster 1 has 5 representative titles
+        assert "2 titles" in html   # cluster 2 has 2 representative titles
+        assert "Slow Horses" not in html.split('id="cluster-panels"')[0]  # chips only in panels, not tiles
