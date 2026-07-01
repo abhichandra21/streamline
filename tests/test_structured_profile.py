@@ -66,6 +66,42 @@ def test_parse_structured_profile_response_rejects_invalid_json():
         raise AssertionError("invalid JSON did not raise ValueError")
 
 
+def test_parse_structured_profile_response_deprioritizes_family_weight_once():
+    payload = {
+        "clusters": [
+            {
+                "label": "Family animation",
+                "weight": 1.0,
+                "co_viewing": "family",
+            }
+        ]
+    }
+
+    result = parse_structured_profile_response(json.dumps(payload))
+    revalidated = validate_structured_profile(result)
+
+    assert result["clusters"][0]["weight"] == 0.75
+    assert revalidated["clusters"][0]["weight"] == 0.75
+
+
+def test_save_and_load_does_not_reapply_family_weight_penalty(tmp_path):
+    profile = parse_structured_profile_response(json.dumps({
+        "clusters": [
+            {
+                "label": "Family animation",
+                "weight": 1.0,
+                "co_viewing": "family",
+            }
+        ]
+    }))
+    path = tmp_path / "taste_profile_structured.json"
+
+    save_structured_profile(profile, path)
+
+    loaded = load_structured_profile(path)
+    assert loaded["clusters"][0]["weight"] == 0.75
+
+
 def test_validate_structured_profile_drops_empty_clusters_and_fills_lists():
     result = validate_structured_profile({
         "clusters": [

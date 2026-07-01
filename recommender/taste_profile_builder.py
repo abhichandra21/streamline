@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -11,6 +12,23 @@ from .llm import LLMClient
 log = logging.getLogger("recommender.profile")
 
 _BATCH_DIR = Path(config.ENRICHMENT_CACHE_DIR).parent / "profile_batches"
+_MAX_PROFILE_CLUSTERS = 15
+_LIST_ITEM_RE = re.compile(r"^\s*(?:[-*]\s+|\d+[\.)]\s*)(.+?)\s*$")
+_MARKDOWN_HEADING_NUMBER_RE = re.compile(r"^(##\s+)(?:\d+[\.)]\s*)?(.+?)\s*$")
+_FAMILY_CLUSTER_PATTERNS = (
+    r"\bdisney\b",
+    r"\bpixar\b",
+    r"\bchristmas\b",
+    r"\bholiday\b",
+    r"\bseasonal\b",
+    r"\bkids?\b",
+    r"\bchildren(?:'s)?\b",
+    r"\bchild[- ]friendly\b",
+    r"\bfamily\s+(?:animation|animated|television|tv|sitcom|comfort|viewing|content|"
+    r"movie|movies|film|films|musical|musicals|adventure|adventures|channel)\b",
+    r"\b(?:animation|animated|television|tv|sitcom|comfort|viewing|content|movie|movies|"
+    r"film|films|musical|musicals|adventure|adventures|channel)\s+(?:and\s+)?family\b",
+)
 
 
 def _batch_fingerprint(scored: list[tuple[str, float]]) -> str:
@@ -93,6 +111,94 @@ def _build_batch_profile(
                             timeout=config.TIMEOUT_PROFILE_BATCH).strip()
 
 
+def _is_family_cluster_text(text: str) -> bool:
+    normalized = text.strip().splitlines()[0].casefold() if text.strip() else ""
+    return any(re.search(pattern, normalized) for pattern in _FAMILY_CLUSTER_PATTERNS)
+
+
+def _personal_clusters_first(items: list[str]) -> list[str]:
+    personal: list[str] = []
+    family: list[str] = []
+    for item in items:
+        if _is_family_cluster_text(item):
+            family.append(item)
+        else:
+            personal.append(item)
+    return personal + family
+
+
+def _cap_cluster_list(text: str, max_clusters: int = _MAX_PROFILE_CLUSTERS) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    list_items = []
+    for line in lines:
+        match = _LIST_ITEM_RE.match(line)
+        if match:
+            list_items.append(match.group(1).strip())
+
+    if list_items:
+        ordered = _personal_clusters_first(list_items)
+        capped = ordered[:max_clusters]
+        if len(list_items) > max_clusters:
+            log.info("Capped extracted clusters to %d (was %d list items)", max_clusters, len(list_items))
+        return "\n".join(f"{index}. {item}" for index, item in enumerate(capped, start=1))
+
+    if len(lines) > max_clusters:
+        log.info("Capped extracted clusters to %d lines (was %d lines)", max_clusters, len(lines))
+    return "\n".join(lines[:max_clusters])
+
+
+def _split_markdown_sections(text: str) -> tuple[str, list[str]]:
+    preamble: list[str] = []
+    sections: list[str] = []
+    current_section: list[str] | None = None
+
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if current_section is not None:
+                sections.append("\n".join(current_section).strip())
+            current_section = [line]
+        elif current_section is None:
+            preamble.append(line)
+        else:
+            current_section.append(line)
+
+    if current_section is not None:
+        sections.append("\n".join(current_section).strip())
+
+    return "\n".join(preamble).strip(), sections
+
+
+def _renumber_markdown_sections(sections: list[str]) -> list[str]:
+    renumbered: list[str] = []
+    for index, section in enumerate(sections, start=1):
+        lines = section.splitlines()
+        if not lines:
+            continue
+        match = _MARKDOWN_HEADING_NUMBER_RE.match(lines[0])
+        if match:
+            lines[0] = f"{match.group(1)}{index}. {match.group(2)}"
+        renumbered.append("\n".join(lines))
+    return renumbered
+
+
+def _cap_markdown_sections(text: str, max_sections: int = _MAX_PROFILE_CLUSTERS) -> str:
+    """Keep at most max_sections markdown h2 sections, preserving any preamble."""
+    preamble, sections = _split_markdown_sections(text)
+    if not sections:
+        return text.strip()
+
+    ordered_sections = _personal_clusters_first(sections)
+    kept_sections = _renumber_markdown_sections(ordered_sections[:max_sections])
+    if len(sections) > max_sections:
+        log.info("Capped final profile to %d sections (was %d)", max_sections, len(sections))
+
+    parts = []
+    if preamble:
+        parts.append(preamble)
+    parts.extend(kept_sections)
+    return "\n".join(parts).strip()
+
+
 def _merge_profiles(
     batch_profiles: list[str],
     client: LLMClient,
@@ -111,12 +217,17 @@ def _merge_profiles(
     cluster_prompt = (
         "Below are taste profile analyses from different segments of the same person's "
         "watch history. List ONLY the distinct taste cluster names you see, merging "
-        "overlapping clusters. Return a numbered list of 8-15 cluster names, nothing else.\n\n"
+        "overlapping clusters. Return a numbered list of 8-15 cluster names, nothing else.\n"
+        "Order the clusters by importance to the person's true personal taste, deprioritizing "
+        "high-volume family/co-viewing content.\n\n"
         f"{profiles_str}"
     )
     clusters_text = client.generate(cluster_prompt, role="reason",
                                      max_tokens=500, timeout=config.TIMEOUT_PROFILE_MERGE).strip()
     log.debug("Extracted clusters: %s", clusters_text[:500])
+
+    # Enforce maximum clusters and keep family/co-viewing patterns from occupying the top slots.
+    clusters_text = _cap_cluster_list(clusters_text)
 
     # Step 2: Write the full profile constrained to those clusters
     prompt = (
@@ -126,6 +237,8 @@ def _merge_profiles(
         f"CONSOLIDATED CLUSTERS:\n{clusters_text}\n\n"
         "Write the final merged taste profile. Rules:\n"
         "- Write one section (## heading) per cluster from the list above\n"
+        "- Do not add extra ## sections beyond the consolidated cluster list; merge leftover "
+        "patterns into the nearest retained cluster\n"
         "- Each section: a rich paragraph describing the pattern (tone, pacing, themes, "
         "what draws this person), followed by key titles in bold/italic\n"
         "- Merge overlapping content from different batches into the same cluster\n"
@@ -135,8 +248,9 @@ def _merge_profiles(
         "- IMPORTANT: You MUST complete every section. If running low on space, "
         "make later sections shorter rather than cutting off mid-sentence.\n"
     )
-    return client.generate(prompt, role="reason", max_tokens=config.TOKENS_PROFILE_MERGE,
-                            timeout=config.TIMEOUT_PROFILE_MERGE).strip()
+    profile_text = client.generate(prompt, role="reason", max_tokens=config.TOKENS_PROFILE_MERGE,
+                                   timeout=config.TIMEOUT_PROFILE_MERGE).strip()
+    return _cap_markdown_sections(profile_text)
 
 
 def build(

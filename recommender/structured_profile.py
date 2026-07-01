@@ -17,6 +17,7 @@ from .llm import LLMClient
 log = logging.getLogger("recommender.structured_profile")
 
 ALLOWED_CO_VIEWING = {"personal", "family", "mixed", "unknown"}
+FAMILY_WEIGHT_MULTIPLIER = 0.75
 FAMILY_TERMS = {
     "animation",
     "animated",
@@ -165,12 +166,29 @@ def validate_structured_profile(data: dict[str, Any]) -> dict[str, Any]:
     return profile
 
 
+def _deprioritize_family_cluster_weights(profile: dict[str, Any]) -> dict[str, Any]:
+    adjusted = {
+        key: value.copy() if isinstance(value, list) else value
+        for key, value in profile.items()
+    }
+    adjusted_clusters: list[dict[str, Any]] = []
+    for cluster in profile["clusters"]:
+        adjusted_cluster = cluster.copy()
+        if adjusted_cluster["co_viewing"] == "family":
+            adjusted_cluster["weight"] = _clamp_weight(
+                adjusted_cluster["weight"] * FAMILY_WEIGHT_MULTIPLIER
+            )
+        adjusted_clusters.append(adjusted_cluster)
+    adjusted["clusters"] = adjusted_clusters
+    return adjusted
+
+
 def parse_structured_profile_response(text: str) -> dict[str, Any]:
     try:
         data = json.loads(_strip_json_fence(text))
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid structured profile JSON: {exc}") from exc
-    return validate_structured_profile(data)
+    return _deprioritize_family_cluster_weights(validate_structured_profile(data))
 
 
 def build_structured_profile(
