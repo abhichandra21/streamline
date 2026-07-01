@@ -106,10 +106,13 @@ def test_merge_profiles_reorders_family_sections_after_personal_before_capping()
 
     headings = [line for line in result.splitlines() if line.startswith("## ")]
     assert len(headings) == 15
-    assert headings[0] == "## 4. British Crime & Police Drama"
-    assert headings[12] == "## 16. Slow-Burn Prestige Crime & Noir"
-    assert "## 1. Disney/Pixar Animated Canon" in headings[13:]
-    assert "## 3. Christmas & Holiday Content" not in headings
+    assert headings[0] == "## 1. British Crime & Police Drama"
+    assert headings[12] == "## 13. Slow-Burn Prestige Crime & Noir"
+    assert headings[13] == "## 14. Disney/Pixar Animated Canon"
+    assert headings[14] == "## 15. Disney Channel & Family Television"
+    assert "Christmas & Holiday Content" not in result
+    for index, heading in enumerate(headings, start=1):
+        assert heading.startswith(f"## {index}. ")
 
     final_prompt = client.generate.call_args_list[1].args[0]
     cluster_block = final_prompt.split("CONSOLIDATED CLUSTERS:\n", 1)[1]

@@ -14,6 +14,7 @@ log = logging.getLogger("recommender.profile")
 _BATCH_DIR = Path(config.ENRICHMENT_CACHE_DIR).parent / "profile_batches"
 _MAX_PROFILE_CLUSTERS = 15
 _LIST_ITEM_RE = re.compile(r"^\s*(?:[-*]\s+|\d+[\.)]\s*)(.+?)\s*$")
+_MARKDOWN_HEADING_NUMBER_RE = re.compile(r"^(##\s+)(?:\d+[\.)]\s*)?(.+?)\s*$")
 _FAMILY_CLUSTER_PATTERNS = (
     r"\bdisney\b",
     r"\bpixar\b",
@@ -167,6 +168,19 @@ def _split_markdown_sections(text: str) -> tuple[str, list[str]]:
     return "\n".join(preamble).strip(), sections
 
 
+def _renumber_markdown_sections(sections: list[str]) -> list[str]:
+    renumbered: list[str] = []
+    for index, section in enumerate(sections, start=1):
+        lines = section.splitlines()
+        if not lines:
+            continue
+        match = _MARKDOWN_HEADING_NUMBER_RE.match(lines[0])
+        if match:
+            lines[0] = f"{match.group(1)}{index}. {match.group(2)}"
+        renumbered.append("\n".join(lines))
+    return renumbered
+
+
 def _cap_markdown_sections(text: str, max_sections: int = _MAX_PROFILE_CLUSTERS) -> str:
     """Keep at most max_sections markdown h2 sections, preserving any preamble."""
     preamble, sections = _split_markdown_sections(text)
@@ -174,7 +188,7 @@ def _cap_markdown_sections(text: str, max_sections: int = _MAX_PROFILE_CLUSTERS)
         return text.strip()
 
     ordered_sections = _personal_clusters_first(sections)
-    kept_sections = ordered_sections[:max_sections]
+    kept_sections = _renumber_markdown_sections(ordered_sections[:max_sections])
     if len(sections) > max_sections:
         log.info("Capped final profile to %d sections (was %d)", max_sections, len(sections))
 
