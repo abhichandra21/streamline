@@ -53,6 +53,7 @@ class MatchHints:
     release_year: int | None = None
     runtime_minutes: int | None = None
     runtime_is_exact: bool = False
+    language: str | None = None  # TMDB original_language code, e.g. "hi"
 
 
 def _normalize_for_match(s: str) -> str:
@@ -64,16 +65,39 @@ def _normalize_for_match(s: str) -> str:
 
 
 def _title_similarity(query: str, candidate: str) -> float:
-    """Score 0.0-1.0 for how well the candidate title matches the query."""
+    """Score 0.0-1.0 for how well the candidate title matches the query.
+
+    Deliberately has no containment/substring bonus: "Up" is a substring of
+    "Up in the Air" and "Avatar" is a substring of "Avatar: The Way of
+    Water", but those are unrelated or distinct works, not the same title
+    with cosmetic differences. Plain sequence similarity handles genuine
+    cosmetic variants (punctuation, minor spelling) without rewarding a
+    short title for merely appearing inside an unrelated longer one.
+    """
     nq = _normalize_for_match(query)
     nc = _normalize_for_match(candidate)
     if nq == nc:
         return 1.0
-    ratio = SequenceMatcher(None, nq, nc).ratio()
-    # Bonus for containment
-    if nq in nc or nc in nq:
-        ratio = max(ratio, 0.85)
-    return ratio
+    return SequenceMatcher(None, nq, nc).ratio()
+
+
+# Below this similarity, a candidate is not a plausible match for the source
+# title at all -- distinct from resolve_title_confident's much stricter 0.9
+# "is this THE title" bar. Used to catch cases like "Don" -> "America's
+# Sweethearts", where the top-ranked candidate isn't related to the query.
+_PLAUSIBLE_TITLE_THRESHOLD = 0.5
+
+
+def _is_plausible_title_match(source_title: str, candidate: dict) -> bool:
+    """Return True if candidate's title or original title plausibly matches
+    the source title (checked separately, since the localized title and the
+    original-language title can differ completely)."""
+    cand_title = candidate.get("name") or candidate.get("title") or ""
+    cand_original = candidate.get("original_name") or candidate.get("original_title") or ""
+    for cand in (cand_title, cand_original):
+        if cand and _title_similarity(source_title, cand) >= _PLAUSIBLE_TITLE_THRESHOLD:
+            return True
+    return False
 
 
 class TmdbClient:
@@ -95,9 +119,13 @@ class TmdbClient:
 
     def _load_cache(self, content_type: str, tmdb_id: int) -> dict | None:
         path = self._cache_path(content_type, tmdb_id)
-        if path.exists():
+        if not path.exists():
+            return None
+        try:
             return json.loads(path.read_text())
-        return None
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("Corrupt TMDB cache file %s, treating as a cache miss: %s", path, exc)
+            return None
 
     def _save_cache(self, content_type: str, tmdb_id: int, data: dict) -> None:
         path = self._cache_path(content_type, tmdb_id)
@@ -168,6 +196,13 @@ class TmdbClient:
                     score += 5.0
                 # >3 years off: no bonus
 
+        # Original-language match (0-10 points). TMDB's /search endpoint has
+        # no with_original_language filter (that's discover-only and
+        # discover has no free-text query), so this is applied as a
+        # candidate-ranking bonus instead of a search-time filter.
+        if hints and hints.language and candidate.get("original_language") == hints.language:
+            score += 10.0
+
         # Runtime match (0-15 points) - needs details
         if hints and hints.runtime_minutes and details:
             if content_type == "tv":
@@ -209,7 +244,15 @@ class TmdbClient:
             return None
 
         if len(candidates) == 1 and not hints:
-            return candidates[0]["id"]
+            cand = candidates[0]
+            if not _is_plausible_title_match(title, cand):
+                cand_title = cand.get("name") or cand.get("title") or ""
+                log.warning(
+                    "Rejecting sole TMDB candidate for %r: %r (id=%d) does not "
+                    "plausibly match", title, cand_title, cand["id"],
+                )
+                return None
+            return cand["id"]
 
         # Score candidates, fetching details for top 3 to get runtime
         scored: list[tuple[float, int, str]] = []
@@ -238,6 +281,38 @@ class TmdbClient:
 
         scored.sort(key=lambda x: x[0], reverse=True)
         best_score, best_id, best_title = scored[0]
+
+        # Post-search validator: the highest-scoring candidate can still be
+        # unrelated to the source title (e.g. a generic query like "Don"
+        # ranking a popular unrelated film first on votes/popularity alone).
+        # If the winner doesn't plausibly match by title at all, prefer the
+        # first lower-ranked candidate that does. If NONE of the candidates
+        # plausibly match, there is no good answer here -- return None
+        # rather than silently keeping the best-scoring wrong match.
+        by_id = {cand["id"]: cand for cand in candidates}
+        if not _is_plausible_title_match(title, by_id[best_id]):
+            replacement = next(
+                (
+                    (alt_score, alt_id, alt_title)
+                    for alt_score, alt_id, alt_title in scored[1:]
+                    if _is_plausible_title_match(title, by_id[alt_id])
+                ),
+                None,
+            )
+            if replacement is None:
+                log.warning(
+                    "Rejecting TMDB match for %r: no candidate plausibly matches "
+                    "(top candidate was %r, id=%d, score=%.1f)",
+                    title, best_title, best_id, best_score,
+                )
+                return None
+            alt_score, alt_id, alt_title = replacement
+            log.warning(
+                "Rejecting implausible top TMDB match for %r: %r (id=%d, "
+                "score=%.1f) -> using %r (id=%d, score=%.1f) instead",
+                title, best_title, best_id, best_score, alt_title, alt_id, alt_score,
+            )
+            best_id, best_title, best_score = alt_id, alt_title, alt_score
 
         # Log low-confidence selections
         if best_score < 30.0:

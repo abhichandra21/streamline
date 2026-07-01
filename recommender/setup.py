@@ -4,7 +4,9 @@ import json
 import logging
 import re
 import sys
+import unicodedata
 from datetime import datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from rich.progress import (
@@ -187,10 +189,42 @@ def _title_keyed_enrichments(
     return title_keyed
 
 
+# A title that's entirely single letters separated by periods, e.g. "I.T."
+# or "U.S.A." -- an acronym-style title where the periods are load-bearing.
+# Stripping them would collapse "I.T." (the 2016 film) to the same string as
+# "It" (Stephen King's), making two distinct works compare as equal.
+_ACRONYM_RE = re.compile(r'^(?:[a-z]\.){2,}$|^(?:[a-z]\.){1,}[a-z]$')
+
+
 def _normalize_audit_title(title: str) -> str:
+    title = unicodedata.normalize("NFKD", title)
+    title = "".join(c for c in title if not unicodedata.combining(c))
     title = title.lower()
     title = re.sub(r'\s*\([^)]*\)', '', title)
+    title = title.replace('&', 'and')
+    title = re.sub(r'^(the|a|an)\s+', '', title.strip())
+    title = title.strip()
+    if _ACRONYM_RE.match(title):
+        return title
+    # Drop punctuation entirely rather than leaving it to the fuzzy-ratio
+    # fallback -- "WALL-E" vs "WALL·E", "'83" vs "83" are the same
+    # title with different punctuation glyphs, not a cosmetic near-miss.
+    title = re.sub(r'[^\w\s]', '', title)
     return title.strip()
+
+
+def _extract_parenthetical_year(title: str) -> int | None:
+    """Extract a trailing "(YYYY)" disambiguator from a raw title, e.g. the
+    "2005" in "Doctor Who (2005)".
+
+    _normalize_audit_title strips parenthetical content before any title
+    comparison, so when a title's *only* disambiguating signal is a
+    parenthetical year and hints_map has no release_year for it, that
+    signal would otherwise be discarded before the year-mismatch check ever
+    sees it -- silently hiding same-title reboot/remake collisions.
+    """
+    match = re.search(r'\((\d{4})\)\s*$', title)
+    return int(match.group(1)) if match else None
 
 
 def _cache_title(cache_path: Path) -> str:
@@ -202,6 +236,14 @@ def _cache_title(cache_path: Path) -> str:
     return raw.get("name") or raw.get("title") or ""
 
 
+# Deliberately high: only meant to absorb cosmetic differences normalization
+# doesn't already catch (stray punctuation, minor spelling). "Avatar" vs
+# "Avatar: The Way of Water" scores ~0.41 and "Dune" vs "Dune: Part Two"
+# scores ~0.47 -- comfortably below this, so franchise/sequel collisions are
+# still rejected.
+_TITLE_COMPATIBLE_THRESHOLD = 0.85
+
+
 def _titles_are_compatible(index_title: str, cache_title: str) -> bool:
     index_norm = _normalize_audit_title(index_title)
     cache_norm = _normalize_audit_title(cache_title)
@@ -209,21 +251,103 @@ def _titles_are_compatible(index_title: str, cache_title: str) -> bool:
         return False
     if index_norm == cache_norm:
         return True
-    if len(cache_norm) < 4:
-        return False
-    return cache_norm in index_norm
+    # No substring/containment acceptance: a shorter title being contained in
+    # a longer one does not mean they're the same work. "Avatar" is a
+    # substring of "Avatar: The Way of Water", and "Apollo 11" is a
+    # substring of "Man on the Moon: The Epic Journey of Apollo 11" -- both
+    # are wrong-match cases the audit exists to catch, not cosmetic
+    # variants. Only a high overall similarity ratio is accepted instead.
+    return SequenceMatcher(None, index_norm, cache_norm).ratio() >= _TITLE_COMPATIBLE_THRESHOLD
+
+
+def _resolve_tmdb_id_override(
+    tmdb: TmdbClient, title: str, ct: str, tmdb_id: int, search_title: str | None = None,
+    trust: bool = False,
+) -> object | None:
+    """Resolve a `{"tmdb_id": X}` override, rejecting it if the resolved
+    TMDB entry doesn't plausibly match the source title.
+
+    A bare tmdb_id override is trusted blindly today, which lets a bogus
+    override (e.g. an LLM parroting a wrong ID back from an audit report)
+    permanently pin a title to the wrong work. This validates the override
+    the same way the audit validates indexed entries, before persisting it.
+
+    Direct IDs exist specifically to route around failed/noisy searches
+    (raw non-Latin titles, a corrected title supplied via the override's own
+    "title" field), so the check accepts a match against any of: the raw
+    source title, the override's corrected search_title, the cache's
+    localized title/name, or the cache's original_title/original_name.
+
+    Deliberate abbreviations ("LOTR: Fellowship" for The Lord of the Rings:
+    The Fellowship of the Ring) look nothing like the real title by any
+    string-similarity measure, so `trust=True` (the override's own "trust"
+    field) skips the plausibility check entirely -- this is the escape
+    hatch back to the pre-validation "force this ID" behavior for entries
+    the user has manually verified.
+
+    Returns parsed TmdbMetadata if the override is plausible (or trusted),
+    or None if it was rejected (caller should fall back to a fresh search)
+    or the fetch failed.
+    """
+    cached = tmdb._load_cache(ct, tmdb_id)
+    if cached is not None:
+        raw = cached
+    else:
+        try:
+            raw = tmdb._fetch_details(tmdb_id, ct)
+        except Exception as exc:
+            msg = f"Override TMDB fetch failed for {title} (ID {tmdb_id}): {exc}"
+            log.warning(msg)
+            console.print(f"  [yellow]{msg}[/yellow]")
+            return None
+        tmdb._save_cache(ct, tmdb_id, raw)
+
+    if trust:
+        return tmdb._parse_metadata(raw, ct)
+
+    cache_title = raw.get("name") or raw.get("title") or ""
+    cache_original_title = raw.get("original_name") or raw.get("original_title") or ""
+
+    source_titles = {title}
+    if search_title:
+        source_titles.add(search_title)
+    cache_titles = {t for t in (cache_title, cache_original_title) if t}
+
+    is_plausible = any(
+        _titles_are_compatible(source, cache) for source in source_titles for cache in cache_titles
+    )
+    if not is_plausible:
+        msg = (
+            f"Rejecting override for {title!r}: tmdb_id {tmdb_id} resolves to "
+            f"{cache_title!r} (original: {cache_original_title!r}), which does not "
+            f"plausibly match the source title. Falling back to a fresh search — "
+            f"fix or remove this entry in the overrides file."
+        )
+        log.warning(msg)
+        console.print(f"  [yellow]{msg}[/yellow]")
+        return None
+
+    return tmdb._parse_metadata(raw, ct)
 
 
 def _build_hints_map(events: list) -> dict[tuple[str, str], MatchHints]:
-    """Build per-title MatchHints from source event data."""
-    hints_map: dict[tuple[str, str], MatchHints] = {}
+    """Build per-title MatchHints from source event data.
+
+    Merges hints across every event sharing a (title, content_type) key
+    instead of taking only the first event seen. A title watched on
+    multiple platforms can have complementary hints spread across events --
+    e.g. a Netflix partial watch supplying only a rough runtime, while a
+    manual entry for the same title supplies the release year. Taking only
+    the first event would silently drop whichever hint the other event
+    carried.
+    """
+    accum: dict[tuple[str, str], dict] = {}
     for e in events:
         key_title = e.series_name if e.content_type == 'tv' else e.title
         map_key = (key_title, e.content_type)
-        if map_key in hints_map:
-            continue
 
         release_year = getattr(e, 'release_year_hint', None)
+        language = getattr(e, 'language_hint', None)
 
         runtime_minutes = None
         runtime_is_exact = False
@@ -237,14 +361,27 @@ def _build_hints_map(events: list) -> dict[tuple[str, str], MatchHints]:
                 runtime_is_exact = False
         # Do not use manual default durations as runtime hints (they are synthetic)
 
-        if release_year or runtime_minutes:
-            hints_map[map_key] = MatchHints(
-                release_year=release_year,
-                runtime_minutes=runtime_minutes,
-                runtime_is_exact=runtime_is_exact,
-            )
+        if not (release_year or runtime_minutes or language):
+            continue
 
-    return hints_map
+        fields = accum.setdefault(map_key, {
+            "release_year": None, "runtime_minutes": None,
+            "runtime_is_exact": False, "language": None,
+        })
+        if release_year and not fields["release_year"]:
+            fields["release_year"] = release_year
+        if language and not fields["language"]:
+            fields["language"] = language
+        if runtime_minutes and (
+            fields["runtime_minutes"] is None
+            or (runtime_is_exact and not fields["runtime_is_exact"])
+        ):
+            # Prefer an exact runtime measurement (apple_tv) over an
+            # inexact one (netflix/prime watched-duration heuristic).
+            fields["runtime_minutes"] = runtime_minutes
+            fields["runtime_is_exact"] = runtime_is_exact
+
+    return {key: MatchHints(**fields) for key, fields in accum.items()}
 
 
 def _audit_cache_mismatches(
@@ -292,20 +429,31 @@ def _audit_cache_mismatches(
             if cache_title and not _titles_are_compatible(e["title"], cache_title):
                 title_mismatches.append((e["title"], ct, tmdb_id, cache_title))
 
-            # Year mismatch check
+            # Year mismatch check. Falls back to a parenthetical year in
+            # the raw title itself when hints_map has no release_year --
+            # otherwise that's the only disambiguating signal available and
+            # _titles_are_compatible already stripped it before comparison.
             hints = hints_map.get((e["title"], ct))
-            if hints and hints.release_year:
+            hint_year = hints.release_year if hints else None
+            if not hint_year:
+                hint_year = _extract_parenthetical_year(e["title"])
+            if hint_year:
                 date_str = raw.get("first_air_date") if ct == "tv" else raw.get("release_date")
                 if date_str and len(date_str) >= 4:
                     cache_year = int(date_str[:4])
-                    if abs(cache_year - hints.release_year) > 2:
+                    if abs(cache_year - hint_year) > 2:
                         year_mismatches.append((
                             e["title"], ct, tmdb_id, cache_title,
-                            hints.release_year, cache_year,
+                            hint_year, cache_year,
                         ))
 
-            # Runtime mismatch check
-            if hints and hints.runtime_minutes:
+            # Runtime mismatch check. Only meaningful for an exact runtime
+            # measurement (apple_tv). The netflix/prime heuristic hint is
+            # just how much of the movie was watched, not its runtime -- a
+            # legitimately-matched 120min movie stopped at 61 minutes would
+            # otherwise fail the ratio check against its own correct cache
+            # entry, producing a false-positive audit mismatch.
+            if hints and hints.runtime_minutes and hints.runtime_is_exact:
                 if ct == "tv":
                     runtimes = raw.get("episode_run_time", [])
                     cache_runtime = runtimes[0] if runtimes else None
@@ -335,7 +483,44 @@ def _audit_cache_mismatches(
         else:
             missing.append((e["title"], ct, tmdb_id))
 
+    # High-confidence real bugs: entries failing the title check AND a
+    # year/runtime check. A title mismatch alone is often cosmetic noise
+    # (punctuation, diacritics); failing two independent checks at once is a
+    # much stronger signal of an actual wrong match.
+    title_mismatch_keys = {(t, c, tid) for t, c, tid, _ in title_mismatches}
+    year_mismatch_keys = {(t, c, tid) for t, c, tid, *_ in year_mismatches}
+    runtime_mismatch_keys = {(t, c, tid) for t, c, tid, *_ in runtime_mismatches}
+    high_confidence_keys = title_mismatch_keys & (year_mismatch_keys | runtime_mismatch_keys)
+
+    # Same-title-but-decades-off is just as strong a signal even though the
+    # title itself is compatible: a reboot/remake collision (e.g. "Doctor
+    # Who" 2005 cached as the unrelated 1963 original) has an identical
+    # normalized title, so it never lands in title_mismatches at all and
+    # would otherwise be invisible to this section.
+    _SEVERE_YEAR_GAP = 10
+    severe_year_entries = {
+        (t, c, tid): (cache_t, hint_year, cache_year)
+        for t, c, tid, cache_t, hint_year, cache_year in year_mismatches
+        if abs(hint_year - cache_year) >= _SEVERE_YEAR_GAP
+    }
+    high_confidence_keys |= set(severe_year_entries)
+
+    high_confidence = []
+    for item in title_mismatches:
+        key = (item[0], item[1], item[2])
+        if key in high_confidence_keys:
+            high_confidence.append((item[0], item[1], item[2], f"cached as {item[3]}"))
+    for (t, c, tid), (cache_t, hint_year, cache_year) in severe_year_entries.items():
+        if (t, c, tid) not in title_mismatch_keys:
+            high_confidence.append((
+                t, c, tid,
+                f"cached as {cache_t} ({cache_year}) but source year is {hint_year}",
+            ))
+
     sections = [
+        ("likely real bugs (title + year/runtime both off, or same title decades off)",
+         high_confidence,
+         lambda x: f"{x[0]} -> {x[1]}/{x[2]} {x[3]}"),
         ("unmatched titles (no TMDB ID)",
          unmatched,
          lambda x: f"[{x[1]}] {x[0]}"),
@@ -366,7 +551,10 @@ def _audit_cache_mismatches(
             console.print(f"    ... and {len(items) - limit} more")
 
     for label, items, formatter in sections:
-        _report(label, items, formatter)
+        # The high-confidence section is the prioritized signal -- show it
+        # in full rather than truncating to 10 like the noisier sections.
+        limit = len(high_confidence) if items is high_confidence else 10
+        _report(label, items, formatter, limit=limit)
 
     # Always rewrite the full audit so a clean rerun replaces stale findings
     # from a previous run. Empty sections are still written explicitly with
@@ -664,6 +852,7 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
 
         metadata = {}
         skipped = len(skip_titles)
+        rejected_overrides = 0
         with _progress_bar("Fetching TMDB metadata") as progress:
             task_id = progress.add_task("tmdb", total=len(title_type))
             for i, ((title, _), ct) in enumerate(title_type.items()):
@@ -677,17 +866,18 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                         ct = override["content_type"]
                     search_title = override.get("title", title)
                     if override.get("tmdb_id"):
-                        cached = tmdb._load_cache(ct, override["tmdb_id"])
-                        if cached:
-                            metadata[(title, ct)] = tmdb._parse_metadata(cached, ct)
+                        meta = _resolve_tmdb_id_override(
+                            tmdb, title, ct, override["tmdb_id"], search_title=search_title,
+                            trust=bool(override.get("trust")),
+                        )
+                        if meta:
+                            metadata[(title, ct)] = meta
                         else:
-                            try:
-                                data = tmdb._fetch_details(override["tmdb_id"], ct)
-                                tmdb._save_cache(ct, override["tmdb_id"], data)
-                                metadata[(title, ct)] = tmdb._parse_metadata(data, ct)
-                            except Exception as exc:
-                                log.warning("Override TMDB fetch failed for %s (ID %d): %s",
-                                            title, override["tmdb_id"], exc)
+                            rejected_overrides += 1
+                            hints = hints_map.get((title, ct))
+                            meta = tmdb.get_metadata(search_title, ct, hints=hints)
+                            if meta:
+                                metadata[(title, ct)] = meta
                     else:
                         hints = hints_map.get((title, ct))
                         meta = tmdb.get_metadata(search_title, ct, hints=hints)
@@ -701,6 +891,11 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         console.print(f"  {len(metadata)} titles with TMDB metadata")
         if skipped:
             console.print(f"  {skipped} titles skipped via overrides")
+        if rejected_overrides:
+            console.print(
+                f"  [yellow]{rejected_overrides} tmdb_id overrides did not resolve directly "
+                f"(implausible match or fetch failure — see log) — fell back to fresh search[/yellow]"
+            )
 
         console.print("\nBuilding watch index...")
         index = wi.build(events, metadata)

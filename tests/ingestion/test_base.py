@@ -1,5 +1,7 @@
 from datetime import timedelta
-from recommender.ingestion.base import classify_title, parse_duration
+from recommender.ingestion.base import (
+    classify_title, detect_language_hint, is_bonus_content, parse_duration,
+)
 
 
 def test_classify_tv_season():
@@ -54,3 +56,106 @@ def test_parse_duration_zero():
     assert parse_duration("00:00:00") == timedelta(0)
 
 
+def test_is_bonus_content_detects_known_keywords():
+    assert is_bonus_content("Ferdinand Clip")
+    assert is_bonus_content("The Santa Clause Clip")
+    assert is_bonus_content("Cars 3 Trailer")
+    assert is_bonus_content("Aladdin Featurette")
+    assert is_bonus_content("Behind the Scenes: Encanto")
+    assert is_bonus_content("Descendants: The Rise of Red Sing-Along")
+    assert is_bonus_content("Descendants: The Rise of Red Sing Along")
+    assert is_bonus_content("Deleted Scene: Frozen")
+    assert is_bonus_content("Deleted Song: 'Desert Moon'")
+    assert is_bonus_content("Aladdin's Video Journal: A New Fantastic Point of View")
+    assert is_bonus_content("Song Breakdowns: 'Under the Sea'")
+    assert is_bonus_content("Promo: Loki Season 2")
+    assert is_bonus_content("Promotional: Loki")
+
+
+def test_is_bonus_content_detects_quoted_deleted_scene_or_song():
+    assert is_bonus_content('Deleted Song "Desert Moon"')
+    assert is_bonus_content('Deleted Scene "Outtake"')
+
+
+def test_is_bonus_content_detects_non_latin_trailer_words():
+    assert is_bonus_content("Raya and the Last Dragon טריילר")
+    assert is_bonus_content("Laapataa Ladies ट्रेलर")
+
+
+def test_is_bonus_content_detects_pipe_separated_featurette_markers():
+    assert is_bonus_content("Stunts | More from Pandora's Box | Avatar: The Way of Water")
+    assert is_bonus_content("Trailer | Wonder Man | Season 1")
+
+
+def test_is_bonus_content_detects_trailing_version_or_number_suffix():
+    # A keyword can still be followed by a short numbering/version suffix
+    # before end-of-string, not just a bare end-of-string or separator.
+    assert is_bonus_content("Cars 3 Trailer 2")
+    assert is_bonus_content("Official Trailer #3")
+    assert is_bonus_content("Movie Clip 2")
+    assert is_bonus_content("Moana Sing-Along Version")
+
+
+def test_is_bonus_content_false_for_pipe_styled_real_titles():
+    # A blanket "2+ pipes" heuristic would flag these; only the specific
+    # "more from" featurette-breadcrumb phrase (or another keyword) should.
+    assert not is_bonus_content("Love | Death | Robots")
+    assert not is_bonus_content("Eat | Pray | Love")
+
+
+def test_is_bonus_content_false_for_real_titles():
+    assert not is_bonus_content("Inception")
+    assert not is_bonus_content("Cars 3", "")
+    assert not is_bonus_content("Inside")
+    assert not is_bonus_content("Promoter")
+    # Regression: a bare \b-word match on these would false-positive on real
+    # titles where the bonus keyword is just the first word of a longer,
+    # unrelated phrase rather than a tag.
+    assert not is_bonus_content("Trailer Park Boys")
+    assert not is_bonus_content("BTS: Permission to Dance on Stage")
+    assert not is_bonus_content("Clipped")
+    assert not is_bonus_content("Promotional content for Loki")
+
+
+def test_detect_language_hint_devanagari():
+    assert detect_language_hint("Don") is None  # transliterated, no script
+    assert detect_language_hint("डॉन") == "hi"
+
+
+def test_detect_language_hint_hebrew():
+    assert detect_language_hint("טריילר") == "he"
+
+
+def test_detect_language_hint_arabic():
+    assert detect_language_hint("الفيلم") == "ar"
+
+
+def test_detect_language_hint_japanese_kana_takes_precedence_over_kanji():
+    assert detect_language_hint("おはよう") == "ja"
+    assert detect_language_hint("ひらがな漢字") == "ja"
+
+
+def test_detect_language_hint_korean_hangul():
+    assert detect_language_hint("기생충") == "ko"
+
+
+def test_detect_language_hint_bare_han_ideographs_are_ambiguous():
+    """Bare CJK ideographs with no kana/hangul present can't be reliably
+    told apart from Chinese vs. Japanese kanji-only by script alone --
+    "怪物" is Japanese, not Chinese, despite being pure Han. Guessing "zh"
+    would bias the TMDB search toward the wrong language, so neither case
+    returns a hint."""
+    assert detect_language_hint("流浪地球") is None
+    assert detect_language_hint("怪物") is None
+
+
+def test_detect_language_hint_ignores_incidental_non_latin_characters():
+    """A single foreign-script word (e.g. a place name) inside an
+    overwhelmingly Latin-script title must not bias the search -- the
+    title isn't actually in that language."""
+    assert detect_language_hint("Lost in Translation 東京") is None
+
+
+def test_detect_language_hint_none_for_latin_titles():
+    assert detect_language_hint("Inception") is None
+    assert detect_language_hint("") is None

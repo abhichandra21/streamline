@@ -6,7 +6,7 @@ from recommender.signals import compute_scores
 
 
 def make_event(title, series, ct, minutes, days_ago, profile="Ratna"):
-    ts = datetime(2026, 3, 31) - timedelta(days=days_ago)
+    ts = datetime.now() - timedelta(days=days_ago)
     return WatchEvent(
         platform="netflix", title=title, content_type=ct,
         series_name=series, watched_duration=timedelta(minutes=minutes),

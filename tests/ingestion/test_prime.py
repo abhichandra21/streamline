@@ -68,6 +68,51 @@ def test_parse_zip_skips_non_feature_material_and_short_watches(tmp_path):
     assert [event.title for event in events] == ["Dune"]
 
 
+def test_parse_zip_skips_bonus_content_titles(tmp_path):
+    export_path = _write_export_zip(
+        tmp_path,
+        [
+            _row(Title="Dune"),
+            _row(Title="Dune Featurette"),
+            _row(Title="Behind the Scenes: Dune"),
+        ],
+    )
+
+    events = parse(export_path)
+
+    assert [event.title for event in events] == ["Dune"]
+
+
+def test_parse_zip_sets_language_hint_for_non_latin_titles(tmp_path):
+    export_path = _write_export_zip(
+        tmp_path,
+        [_row(Title="डॉन"), _row(Title="Dune")],
+    )
+
+    events = parse(export_path)
+
+    by_title = {e.title: e for e in events}
+    assert by_title["डॉन"].language_hint == "hi"
+    assert by_title["Dune"].language_hint is None
+
+
+def test_parse_zip_tv_language_hint_derived_from_series_name_not_episode_title(tmp_path):
+    """A Latin-script show with a non-Latin episode title must not bias the
+    series-level TMDB search toward a foreign original_language -- the hint
+    has to come from the series name, since that's the lookup key used."""
+    export_path = _write_export_zip(
+        tmp_path,
+        [_row(Title="डॉन - Breaking Bad, Season 1", **{"Seconds Viewed": "2700"})],
+    )
+
+    events = parse(export_path)
+
+    assert len(events) == 1
+    assert events[0].content_type == "tv"
+    assert events[0].series_name == "Breaking Bad"
+    assert events[0].language_hint is None
+
+
 def test_parse_zip_classifies_tv_and_movies(tmp_path):
     export_path = _write_export_zip(
         tmp_path,

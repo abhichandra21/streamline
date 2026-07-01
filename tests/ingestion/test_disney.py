@@ -67,6 +67,31 @@ def test_drops_trailers(pdf_path, monkeypatch):
     assert [e.series_name for e in events] == ["Cars 3"]
 
 
+def test_sets_language_hint_from_series_name(pdf_path, monkeypatch):
+    monkeypatch.setattr(config, "DISNEY_PROFILES", [])
+    rows = _rows(("2026-04-08", "Abhishek", "Cars 3", "डॉन"))
+    with patch.object(disney, "_extract_rows", return_value=rows):
+        events = parse(pdf_path)
+    assert len(events) == 1
+    assert events[0].language_hint == "hi"
+
+
+def test_drops_bonus_content_beyond_trailers(pdf_path, monkeypatch):
+    monkeypatch.setattr(config, "DISNEY_PROFILES", [])
+    rows = _rows(
+        ("2026-04-04", "Abhishek", "Ferdinand Clip", ""),
+        ("2026-04-04", "Abhishek", "Song Breakdowns: 'Under the Sea'", ""),
+        ("2026-04-04", "Abhishek", "Deleted Song: 'Desert Moon'", ""),
+        ("2026-04-04", "Abhishek", "Stunts | More from Pandora's Box | Avatar: The Way of Water", ""),
+        ("2026-04-04", "Abhishek", "Descendants: The Rise of Red Sing-Along", ""),
+        ("2026-04-04", "Abhishek", "Raya and the Last Dragon טריילר", ""),
+        ("2026-04-04", "Abhishek", "Cars 3", ""),
+    )
+    with patch.object(disney, "_extract_rows", return_value=rows):
+        events = parse(pdf_path)
+    assert [e.series_name for e in events] == ["Cars 3"]
+
+
 def test_profile_filter_keeps_only_allowed(pdf_path, monkeypatch):
     monkeypatch.setattr(config, "DISNEY_PROFILES", ["Abhishek"])
     rows = _rows(

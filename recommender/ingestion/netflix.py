@@ -5,7 +5,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from .base import WatchEvent, classify_title, parse_duration
+from .base import WatchEvent, classify_title, detect_language_hint, is_bonus_content, parse_duration
 
 log = logging.getLogger("recommender.ingestion.netflix")
 
@@ -22,19 +22,27 @@ def _parse_csv(filepath: str) -> list[WatchEvent]:
         for row in reader:
             if row["Supplemental Video Type"].strip():
                 continue
+            if is_bonus_content(row["Title"]):
+                continue
             duration = parse_duration(row["Duration"])
             if duration.total_seconds() < MIN_WATCH_SECONDS:
                 continue
             timestamp = datetime.strptime(row["Start Time"], "%Y-%m-%d %H:%M:%S")
-            content_type, series_name = classify_title(row["Title"].strip())
+            title = row["Title"].strip()
+            content_type, series_name = classify_title(title)
             events.append(WatchEvent(
                 platform="netflix",
-                title=row["Title"].strip(),
+                title=title,
                 content_type=content_type,
                 series_name=series_name,
                 watched_duration=duration,
                 total_duration=None,
                 timestamp=timestamp,
+                # Use series_name, not the full title -- for TV episodes the
+                # title includes the episode/season text, and a Latin-script
+                # show with a non-Latin episode title must not bias the
+                # series-level TMDB search toward a foreign original_language.
+                language_hint=detect_language_hint(series_name),
                 profile=row["Profile Name"].strip(),
             ))
     return events

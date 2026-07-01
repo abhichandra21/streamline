@@ -2,7 +2,7 @@ import re
 from datetime import datetime, timedelta
 
 import config
-from .base import WatchEvent
+from .base import WatchEvent, detect_language_hint
 
 _YEAR_RE = re.compile(r'\s+(19|20)\d{2}$')
 
@@ -44,6 +44,7 @@ def parse(tv_path: str, movies_path: str) -> list[WatchEvent]:
                 total_duration=tv_duration,
                 timestamp=timestamp,
                 profile='',
+                language_hint=detect_language_hint(title),
             ))
 
     with open(movies_path, encoding='utf-8') as f:
@@ -67,6 +68,7 @@ def parse(tv_path: str, movies_path: str) -> list[WatchEvent]:
                 timestamp=timestamp,
                 profile='',
                 release_year_hint=year_hint,
+                language_hint=detect_language_hint(title),
             ))
 
     return events

@@ -6,7 +6,7 @@ import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .base import WatchEvent
+from .base import WatchEvent, detect_language_hint, is_bonus_content
 
 log = logging.getLogger("recommender.ingestion.prime")
 
@@ -60,6 +60,8 @@ def _parse_csv(filepath: str) -> list[WatchEvent]:
                 continue
             if secs < MIN_WATCH_SECONDS:
                 continue
+            if is_bonus_content(row['Title']):
+                continue
             try:
                 timestamp = datetime.strptime(
                     _clean(row['Playback Start Datetime (UTC)']), '%Y-%m-%dT%H:%M:%SZ'
@@ -77,6 +79,11 @@ def _parse_csv(filepath: str) -> list[WatchEvent]:
                 total_duration=None,
                 timestamp=timestamp,
                 profile=_clean(row['Profile Type']),
+                # Use series_name, not the full title -- for TV episodes the
+                # title includes the episode/season text, and a Latin-script
+                # show with a non-Latin episode title must not bias the
+                # series-level TMDB search toward a foreign original_language.
+                language_hint=detect_language_hint(series_name),
             ))
     return events
 

@@ -10,7 +10,8 @@ Format:
   "21 REPACK": {"title": "21"},
   "Gabriel lglesias: ...": {"title": "Gabriel Iglesias: ..."},
   "Hindu Weddings: Traditions Unveiled": {"skip": true},
-  "Some Known Show": {"tmdb_id": 12345, "content_type": "tv"}
+  "Some Known Show": {"tmdb_id": 12345, "content_type": "tv"},
+  "LOTR: Fellowship": {"tmdb_id": 120, "trust": true}
 }
 
 Fields:
@@ -18,6 +19,13 @@ Fields:
   tmdb_id      — direct TMDB ID (skips search entirely)
   content_type — override content type ("tv" or "movie")
   skip         — if true, ignore this title completely
+  trust        — if true, skip the tmdb_id plausibility check (see
+                 setup._resolve_tmdb_id_override). Use this when the source
+                 title is a deliberate abbreviation or otherwise looks
+                 nothing like the real title (e.g. "LOTR: Fellowship" -> The
+                 Lord of the Rings: The Fellowship of the Ring) -- the
+                 default validation exists to catch accidental/bogus IDs and
+                 will reject a legitimate but very different-looking title.
 """
 
 import json
