@@ -33,6 +33,13 @@
   <div id="results" style="margin-top:1.5rem;"></div>
 
   <div style="margin-top:1.25rem; display:flex; flex-wrap:wrap; gap:0.4rem; align-items:center;">
+    {% if recent_queries %}
+    <span class="mono" style="font-size:0.6rem; color:var(--muted); padding-top:2px;">Recent:</span>
+    {% for q in recent_queries %}
+    <a href="/searches#q-{{ loop.index }}" class="btn-ghost" style="padding:3px 10px; font-size:0.58rem; text-decoration:none;"{% if q.summary %} title="{{ q.summary }}"{% endif %}>{{ q.label or q.query }}</a>
+    {% endfor %}
+    <a href="/searches" class="mono" style="font-size:0.58rem; color:var(--muted); text-decoration:none; padding-top:2px; transition:color 0.15s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'">View all</a>
+    {% else %}
     <span class="mono" style="font-size:0.6rem; color:var(--muted); padding-top:2px;">Try:</span>
     {% for s in ["gritty British crime drama", "feel-good comedy", "dark espionage thriller", "Indian family drama"] %}
     <button
@@ -40,6 +47,7 @@
       class="btn-ghost" style="padding:3px 10px; font-size:0.58rem; cursor:pointer;"
     >{{ s }}</button>
     {% endfor %}
+    {% endif %}
   </div>
 
   <p style="margin-top:0.75rem; color:var(--muted); font-size:0.78rem;">
@@ -61,21 +69,6 @@
     })();
   </script>
 </section>
-
-{% if recent_queries %}
-<!-- ════════ RECENT SEARCHES ════════ -->
-<section style="margin-bottom:2.5rem;">
-  <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:0.6rem;">
-    <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted);">Recent searches</span>
-    <a href="/searches" class="mono" style="font-size:0.58rem; color:var(--muted); text-decoration:none; transition:color 0.15s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'">View all</a>
-  </div>
-  <div style="display:flex; flex-wrap:wrap; gap:0.4rem;">
-    {% for q in recent_queries %}
-    <a href="/searches#q-{{ loop.index }}" class="btn-ghost" style="padding:4px 12px; font-size:0.7rem; text-decoration:none;"{% if q.summary %} title="{{ q.summary }}"{% endif %}>{{ q.label or q.query }}</a>
-    {% endfor %}
-  </div>
-</section>
-{% endif %}
 
 <div style="height:1px; background:linear-gradient(90deg, var(--accent), var(--lavender), var(--teal)); margin-bottom:3.5rem; opacity:0.4;"></div>
 
