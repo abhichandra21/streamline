@@ -8,8 +8,12 @@ provider availability) is not touched here -- it's fine to overwrite since
 it's rebuilt from setup, not user input.
 
 Usage:
-    python3 tools/merge_user_state.py db <local_events.db> <other_events.db>
-    python3 tools/merge_user_state.py history <local_query_history.json> <other_query_history.json>
+    python3 tools/merge_user_state.py db <local db.sqlite path> <other db.sqlite path>
+    python3 tools/merge_user_state.py history <local query_history.json> <other query_history.json>
+
+The "db" form expects the app's user-store database (default path:
+data/streamline.db, see config.py's EVENT_DB_PATH) -- not
+recommender/cache/events.db, which is an unrelated always-empty file.
 
 Both forms merge "other" into "local" in place. Run the merged local file
 back through rsync/scp to push the union to the other side.
