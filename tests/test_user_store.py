@@ -485,3 +485,43 @@ def test_ensure_user_store_retries_rename_if_marker_set(tmp_path):
     # Should have renamed without re-importing
     assert not Path(feedback_path).exists()
     assert Path(feedback_path + ".migrated").exists()
+
+
+def test_find_conflict_returns_none_when_no_match(tmp_path):
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import init_db, find_conflict
+
+    init_db(db)
+    assert find_conflict(db, "tv", 999) is None
+
+
+def test_find_conflict_detects_watchlist_hit(tmp_path):
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import init_db, save_title, find_conflict
+
+    init_db(db)
+    save_title(db, "The Bear", "tv", tmdb_id=194583)
+
+    conflict = find_conflict(db, "tv", 194583)
+    assert conflict == {"source": "watchlist", "title": "The Bear"}
+
+
+def test_find_conflict_detects_archive_hit(tmp_path):
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import init_db, add_to_archive, find_conflict
+
+    init_db(db)
+    add_to_archive(db, "The Bear", "tv", tmdb_id=194583)
+
+    conflict = find_conflict(db, "tv", 194583)
+    assert conflict == {"source": "archive", "title": "The Bear"}
+
+
+def test_find_conflict_is_scoped_to_content_type(tmp_path):
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import init_db, add_to_archive, find_conflict
+
+    init_db(db)
+    add_to_archive(db, "Up", "movie", tmdb_id=14160)
+
+    assert find_conflict(db, "tv", 14160) is None

@@ -373,6 +373,35 @@ def apply_rating_multipliers(scores: dict[str, float],
     return modified
 
 
+def find_conflict(db_path: str, content_type: str, tmdb_id: int) -> dict | None:
+    """Return the existing entry matching (content_type, tmdb_id) in the
+    watchlist or archive, or None if there is no conflict.
+
+    Checks saved_titles before manual_archive_entries: a watchlist hit
+    usually implies a different intended action (mark as watched) than
+    an archive hit (already logged as watched).
+    """
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT title FROM saved_titles WHERE content_type = ? AND tmdb_id = ?",
+            (content_type, tmdb_id),
+        ).fetchone()
+        if row:
+            return {"source": "watchlist", "title": row["title"]}
+
+        row = conn.execute(
+            "SELECT title FROM manual_archive_entries WHERE content_type = ? AND tmdb_id = ?",
+            (content_type, tmdb_id),
+        ).fetchone()
+        if row:
+            return {"source": "archive", "title": row["title"]}
+
+        return None
+    finally:
+        conn.close()
+
+
 def add_to_archive(db_path: str, title: str, content_type: str,
                    tmdb_id: int | None = None, source: str = "web") -> None:
     """Upsert a manual archive entry."""
