@@ -1304,9 +1304,22 @@ def archive_resolve() -> str:
     tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
     result = tmdb.get_disambiguation_candidates(title, ct)
 
+    watched_index: dict[tuple[str, int], str] = {}
+    try:
+        ctx = _get_context()
+        for e in ctx.watch_index.entries:
+            tid = e.get("tmdb_id")
+            if tid:
+                watched_index.setdefault((e.get("content_type", "tv"), tid), e.get("title", ""))
+    except Exception:
+        pass
+
     candidates = []
     for cand in result.candidates:
+        key = (cand.content_type, cand.tmdb_id)
         conflict = user_store.find_conflict(config.EVENT_DB_PATH, cand.content_type, cand.tmdb_id)
+        if conflict is None and key in watched_index:
+            conflict = {"source": "watched", "title": watched_index[key]}
         candidates.append({
             "tmdb_id": cand.tmdb_id,
             "content_type": cand.content_type,

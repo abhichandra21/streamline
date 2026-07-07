@@ -1207,6 +1207,37 @@ class TestArchiveResolve:
         assert resp.status_code == 200
         assert b"Already on your watchlist" in resp.data
 
+    def test_renders_candidates_already_in_watch_history(self, client, tmp_path, monkeypatch):
+        """A title already present in the ingested watch_index (not the SQL
+        tables) must still be flagged, or the modal misses most real
+        already-watched titles from platform ingestion/rebuilds."""
+        from recommender.user_store import init_db
+        from recommender.tmdb_client import DisambiguationCandidate, DisambiguationResult
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+
+        mock_ctx = MagicMock()
+        mock_ctx.watch_index.entries = [
+            {"title": "1917", "content_type": "movie", "tmdb_id": 530915, "platforms": ["manual"]},
+        ]
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient, \
+             patch("recommender.web._get_context", return_value=mock_ctx):
+            MockClient.return_value.get_disambiguation_candidates.return_value = DisambiguationResult(
+                candidates=[DisambiguationCandidate(
+                    tmdb_id=530915, content_type="movie", title="1917",
+                    year=2019, poster_path=None, score=90.0,
+                )],
+            )
+            resp = self._post(client, title="1917", content_type="movie")
+
+        assert resp.status_code == 200
+        assert b"Already in your watch history" in resp.data
+        assert b"Add anyway" in resp.data
+
     def test_both_searches_failing_shows_error_state(self, client, tmp_path, monkeypatch):
         from recommender.user_store import init_db
         from recommender.tmdb_client import DisambiguationResult
@@ -1412,6 +1443,16 @@ class TestArchiveDisambiguatePartial:
             "conflict": {"source": "watchlist", "title": "The Bear"},
         }])
         assert "value=\"add\"" not in html
+
+    def test_renders_watch_history_conflict_with_add_anyway_label(self):
+        html = self._render(candidates=[{
+            "tmdb_id": 530915, "content_type": "movie", "title": "1917",
+            "year": 2019, "poster_path": None,
+            "conflict": {"source": "watched", "title": "1917"},
+        }])
+        assert "Already in your watch history" in html
+        assert "Add anyway" in html
+        assert "value=\"mark_watched\"" not in html
 
     def test_renders_archive_conflict_with_update_watched_date_label(self):
         html = self._render(candidates=[{
