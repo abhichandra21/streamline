@@ -1226,6 +1226,97 @@ class TestArchiveResolve:
         assert b"TMDB lookup failed" in resp.data
 
 
+class TestArchiveConfirm:
+    def _post(self, client, **overrides):
+        data = {
+            **_csrf_form(),
+            "title": "The Bear",
+            "content_type": "tv",
+            "resolution": "add",
+            "tmdb_id": "194583",
+        }
+        data.update(overrides)
+        return client.post("/archive/confirm", data=data)
+
+    def test_missing_title_returns_400(self, client):
+        resp = self._post(client, title="")
+        assert resp.status_code == 400
+
+    def test_add_without_tmdb_id_returns_400(self, client):
+        resp = self._post(client, tmdb_id="")
+        assert resp.status_code == 400
+
+    def test_invalid_resolution_returns_400(self, client):
+        resp = self._post(client, resolution="bogus")
+        assert resp.status_code == 400
+
+    def test_unmatched_saves_with_no_tmdb_id(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / ".profile_stale"))
+
+        resp = self._post(client, resolution="unmatched", tmdb_id="")
+
+        assert resp.status_code == 200
+        entries = list_manual_archive(db)
+        assert len(entries) == 1
+        assert entries[0]["tmdb_id"] is None
+
+    def test_add_fetches_canonical_title_before_saving(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / ".profile_stale"))
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            instance = MockClient.return_value
+            instance._load_cache.return_value = None
+            instance._fetch_details.return_value = {"name": "The Bear (Canonical)"}
+            resp = self._post(client, title="the bear typo")
+
+        assert resp.status_code == 200
+        entries = list_manual_archive(db)
+        assert len(entries) == 1
+        assert entries[0]["title"] == "The Bear (Canonical)"
+
+    def test_mark_watched_moves_from_watchlist_to_archive(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title, list_saved_titles, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "The Bear", "tv", tmdb_id=194583)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / ".profile_stale"))
+
+        resp = self._post(client, resolution="mark_watched")
+
+        assert resp.status_code == 200
+        assert list_saved_titles(db) == []
+        assert len(list_manual_archive(db)) == 1
+
+    def test_stale_flag_touched_after_confirm(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        stale_flag = tmp_path / ".profile_stale"
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(stale_flag))
+
+        self._post(client, resolution="unmatched", tmdb_id="")
+
+        assert stale_flag.exists()
+
+
 class TestHistoryTmdbOverview:
     """Archive/history page shows TMDB overview when enrichment text is absent."""
 

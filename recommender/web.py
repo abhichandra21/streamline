@@ -1326,6 +1326,48 @@ def archive_resolve() -> str:
     )
 
 
+@app.route("/archive/confirm", methods=["POST"])
+def archive_confirm() -> str:
+    resolution = request.form.get("resolution")
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    if not title:
+        return "Missing title", 400
+    _ensure_user_store_once()
+
+    if resolution == "unmatched":
+        user_store.add_to_archive(config.EVENT_DB_PATH, title, ct, tmdb_id=None, source="web")
+        final_title = title
+    elif resolution in ("add", "mark_watched"):
+        if tmdb_id is None:
+            return "Missing tmdb_id", 400
+        final_title = title
+        if config.TMDB_API_KEY:
+            from recommender.tmdb_client import TmdbClient
+            tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+            data = tmdb._load_cache(ct, tmdb_id)
+            if not data:
+                try:
+                    data = tmdb._fetch_details(tmdb_id, ct)
+                    tmdb._save_cache(ct, tmdb_id, data)
+                except Exception:
+                    data = None
+            if data:
+                final_title = data.get("name") or data.get("title") or title
+        if resolution == "mark_watched":
+            user_store.mark_watched_from_watchlist(config.EVENT_DB_PATH, final_title, ct, tmdb_id=tmdb_id)
+        else:
+            user_store.add_to_archive(config.EVENT_DB_PATH, final_title, ct, tmdb_id=tmdb_id, source="web")
+    else:
+        return "Invalid resolution", 400
+
+    Path(config.PROFILE_STALE_FLAG).touch()
+    uid = f"aa-{hash(final_title) & 0xFFFFFF:06x}"
+    return render_template("_rating_prompt.html", title=final_title, content_type=ct,
+                           tmdb_id=tmdb_id, uid=uid)
+
+
 @app.route("/archive/rate", methods=["POST"])
 def archive_rate() -> str:
     title = (request.form.get("title") or "").strip()
