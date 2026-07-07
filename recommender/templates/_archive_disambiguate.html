@@ -42,16 +42,6 @@
                 {% endif %}
               </div>
               <div class="candidate-actions">
-                <form hx-post="/archive/confirm" hx-target="#archive-modal" hx-swap="innerHTML" style="margin:0;">
-                  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                  <input type="hidden" name="tmdb_id" value="{{ c.tmdb_id }}">
-                  <input type="hidden" name="content_type" value="{{ c.content_type }}">
-                  <input type="hidden" name="title" value="{{ c.title }}">
-                  <input type="hidden" name="resolution" value="add">
-                  <button type="submit" class="btn-primary" style="padding:0.35rem 0.75rem; font-size:0.7rem;">
-                    {{ 'Update watched date' if c.conflict and c.conflict.source == 'archive' else 'Add' }}
-                  </button>
-                </form>
                 {% if c.conflict and c.conflict.source == 'watchlist' %}
                   <form hx-post="/archive/confirm" hx-target="#archive-modal" hx-swap="innerHTML" style="margin:0;">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
@@ -59,7 +49,18 @@
                     <input type="hidden" name="content_type" value="{{ c.content_type }}">
                     <input type="hidden" name="title" value="{{ c.title }}">
                     <input type="hidden" name="resolution" value="mark_watched">
-                    <button type="submit" class="btn-ghost" style="padding:0.35rem 0.75rem; font-size:0.7rem;">Mark as watched</button>
+                    <button type="submit" class="btn-primary" style="padding:0.35rem 0.75rem; font-size:0.7rem;">Mark as watched</button>
+                  </form>
+                {% else %}
+                  <form hx-post="/archive/confirm" hx-target="#archive-modal" hx-swap="innerHTML" style="margin:0;">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="tmdb_id" value="{{ c.tmdb_id }}">
+                    <input type="hidden" name="content_type" value="{{ c.content_type }}">
+                    <input type="hidden" name="title" value="{{ c.title }}">
+                    <input type="hidden" name="resolution" value="add">
+                    <button type="submit" class="btn-primary" style="padding:0.35rem 0.75rem; font-size:0.7rem;">
+                      {{ 'Update watched date' if c.conflict and c.conflict.source == 'archive' else 'Add' }}
+                    </button>
                   </form>
                 {% endif %}
               </div>

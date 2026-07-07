@@ -1402,6 +1402,17 @@ class TestArchiveDisambiguatePartial:
         assert "Already on your watchlist" in html
         assert "value=\"mark_watched\"" in html
 
+    def test_watchlist_conflict_does_not_offer_add_button(self):
+        """A watchlist conflict must only offer mark_watched, never a fresh add -
+        clicking Add would leave the same (content_type, tmdb_id) in both
+        saved_titles and manual_archive_entries."""
+        html = self._render(candidates=[{
+            "tmdb_id": 194583, "content_type": "tv", "title": "The Bear",
+            "year": 2022, "poster_path": None,
+            "conflict": {"source": "watchlist", "title": "The Bear"},
+        }])
+        assert "value=\"add\"" not in html
+
     def test_renders_archive_conflict_with_update_watched_date_label(self):
         html = self._render(candidates=[{
             "tmdb_id": 194583, "content_type": "tv", "title": "The Bear",

@@ -506,6 +506,17 @@ def test_find_conflict_detects_watchlist_hit(tmp_path):
     assert conflict == {"source": "watchlist", "title": "The Bear"}
 
 
+def test_find_conflict_ignores_dismissed_titles(tmp_path):
+    """A dismissed title is not on the watchlist and must not be reported as one."""
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import init_db, dismiss_title, find_conflict
+
+    init_db(db)
+    dismiss_title(db, "The Bear", "tv", tmdb_id=194583)
+
+    assert find_conflict(db, "tv", 194583) is None
+
+
 def test_find_conflict_detects_archive_hit(tmp_path):
     db = str(tmp_path / "test.db")
     from recommender.user_store import init_db, add_to_archive, find_conflict

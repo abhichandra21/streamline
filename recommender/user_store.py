@@ -384,7 +384,7 @@ def find_conflict(db_path: str, content_type: str, tmdb_id: int) -> dict | None:
     conn = _connect(db_path)
     try:
         row = conn.execute(
-            "SELECT title FROM saved_titles WHERE content_type = ? AND tmdb_id = ?",
+            "SELECT title FROM saved_titles WHERE content_type = ? AND tmdb_id = ? AND status = 'watchlist'",
             (content_type, tmdb_id),
         ).fetchone()
         if row:
