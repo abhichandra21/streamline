@@ -3,8 +3,13 @@
 {% block content %}
 
 <div style="margin-bottom:2rem;">
-  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--teal);">Collection</span>
-  <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:1.25rem;">Archive</h1>
+  <div style="display:flex; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; gap:0.75rem; margin-bottom:1.25rem;">
+    <div>
+      <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--teal);">Collection</span>
+      <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem;">Archive</h1>
+    </div>
+    <button type="button" id="add-toggle" onclick="toggleAddForm()" class="btn-teal" style="padding:0.6rem 1rem; margin-bottom:0.35rem;">+ Add Watched</button>
+  </div>
 
   <!-- Filter row -->
   <form method="get" action="/history" id="filter-form" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
@@ -42,10 +47,6 @@
     {% if q or ct_filter or platform_filter or rating_filter or sort != 'az' %}
     <a href="/history" class="btn-ghost" style="padding:0.6rem 0.9rem;">Clear</a>
     {% endif %}
-    <!-- Add watched toggle — inline at end of filter row -->
-    <button type="button" id="add-toggle" onclick="toggleAddForm()"
-      class="btn-ghost"
-      style="padding:0.6rem 0.9rem; margin-left:auto;">+ Add watched</button>
   </form>
 
   <!-- Collapsible Add Title form -->
@@ -313,8 +314,7 @@ function toggleAddForm() {
   const btn = document.getElementById('add-toggle');
   const open = wrapper.style.display !== 'none';
   wrapper.style.display = open ? 'none' : '';
-  btn.style.color = open ? '' : 'var(--teal)';
-  btn.style.borderColor = open ? '' : 'var(--teal)';
+  btn.classList.toggle('is-active', !open);
   if (!open) {
     setTimeout(() => document.getElementById('add-title-input').focus(), 50);
   }

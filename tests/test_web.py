@@ -1424,6 +1424,35 @@ class TestArchiveDisambiguatePartial:
         assert "2022" in html
         assert "value=\"add\"" in html
 
+    def test_only_top_ranked_candidate_gets_primary_emphasis(self):
+        """Candidates are already rank-ordered by score; only the top match
+        should read as the loud, primary action - the rest are secondary
+        so five equally emphasized buttons don't compete for attention."""
+        html = self._render(candidates=[
+            {"tmdb_id": 1, "content_type": "tv", "title": "First", "year": 2020,
+             "poster_path": None, "conflict": None},
+            {"tmdb_id": 2, "content_type": "tv", "title": "Second", "year": 2019,
+             "poster_path": None, "conflict": None},
+            {"tmdb_id": 3, "content_type": "tv", "title": "Third", "year": 2018,
+             "poster_path": None, "conflict": None},
+        ])
+        assert html.count('class="btn-primary"') == 1
+        assert html.count('class="btn-ghost"', html.index("candidate-list")) >= 2
+
+    def test_modal_has_scrollable_body_and_pinned_footer(self):
+        """Search-again/save-unmatched must live outside the scrollable
+        candidate region so they stay reachable in a long candidate list."""
+        html = self._render(candidates=[{
+            "tmdb_id": 194583, "content_type": "tv", "title": "The Bear",
+            "year": 2022, "poster_path": None, "conflict": None,
+        }])
+        assert "modal-scroll" in html
+        assert "modal-footer" in html
+        scroll_start = html.index("modal-scroll")
+        footer_start = html.index("modal-footer")
+        unmatched_start = html.index("save as unmatched")
+        assert scroll_start < footer_start < unmatched_start
+
     def test_renders_watchlist_conflict_with_mark_watched_button(self):
         html = self._render(candidates=[{
             "tmdb_id": 194583, "content_type": "tv", "title": "The Bear",

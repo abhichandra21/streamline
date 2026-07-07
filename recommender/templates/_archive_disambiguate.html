@@ -6,92 +6,99 @@
         onclick="document.getElementById('archive-modal').innerHTML=''">&times;</button>
     </div>
 
-    {% if api_key_missing %}
-      <p class="mono" style="color:var(--muted); font-size:0.75rem;">
-        TMDB lookup is disabled (no API key configured). You can still save the title without a TMDB match.
-      </p>
-    {% elif both_failed %}
-      <p class="mono" style="color:var(--muted); font-size:0.75rem;">
-        TMDB lookup failed. Check your connection and try again, or save without a match.
-      </p>
-    {% else %}
-      {% if hinted_type_failed or alternate_type_failed %}
-        <p class="mono" style="color:var(--muted); font-size:0.7rem;">
-          Note: the {{ 'primary' if hinted_type_failed else 'alternate' }} search failed; results may be incomplete.
+    <div class="modal-scroll">
+      {% if api_key_missing %}
+        <p class="mono" style="color:var(--muted); font-size:0.75rem;">
+          TMDB lookup is disabled (no API key configured). You can still save the title without a TMDB match.
         </p>
-      {% endif %}
-
-      {% if candidates %}
-        <div class="candidate-list">
-          {% for c in candidates %}
-            <div class="candidate-card">
-              {% if c.poster_path %}
-                <img src="https://image.tmdb.org/t/p/w92{{ c.poster_path }}" alt="" class="candidate-poster">
-              {% else %}
-                <div class="candidate-poster candidate-poster--empty"></div>
-              {% endif %}
-              <div class="candidate-info">
-                <div class="mono" style="font-size:0.8rem;">{{ c.title }}{% if c.year %} ({{ c.year }}){% endif %}</div>
-                <div class="mono" style="font-size:0.65rem; color:var(--muted); text-transform:uppercase;">
-                  {{ 'TV' if c.content_type == 'tv' else 'Film' }}
-                </div>
-                {% if c.conflict %}
-                  <div class="mono conflict-badge">
-                    {% if c.conflict.source == 'watchlist' %}Already on your watchlist
-                    {% elif c.conflict.source == 'watched' %}Already in your watch history
-                    {% else %}Already in your archive{% endif %}
-                  </div>
-                {% endif %}
-              </div>
-              <div class="candidate-actions">
-                {% if c.conflict and c.conflict.source == 'watchlist' %}
-                  <form hx-post="/archive/confirm" hx-target="#archive-modal" hx-swap="innerHTML" style="margin:0;">
-                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <input type="hidden" name="tmdb_id" value="{{ c.tmdb_id }}">
-                    <input type="hidden" name="content_type" value="{{ c.content_type }}">
-                    <input type="hidden" name="title" value="{{ c.title }}">
-                    <input type="hidden" name="resolution" value="mark_watched">
-                    <button type="submit" class="btn-primary" style="padding:0.35rem 0.75rem; font-size:0.7rem;">Mark as watched</button>
-                  </form>
-                {% else %}
-                  <form hx-post="/archive/confirm" hx-target="#archive-modal" hx-swap="innerHTML" style="margin:0;">
-                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <input type="hidden" name="tmdb_id" value="{{ c.tmdb_id }}">
-                    <input type="hidden" name="content_type" value="{{ c.content_type }}">
-                    <input type="hidden" name="title" value="{{ c.title }}">
-                    <input type="hidden" name="resolution" value="add">
-                    <button type="submit" class="btn-primary" style="padding:0.35rem 0.75rem; font-size:0.7rem;">
-                      {% if c.conflict and c.conflict.source == 'archive' %}Update watched date
-                      {% elif c.conflict and c.conflict.source == 'watched' %}Add anyway
-                      {% else %}Add{% endif %}
-                    </button>
-                  </form>
-                {% endif %}
-              </div>
-            </div>
-          {% endfor %}
-        </div>
+      {% elif both_failed %}
+        <p class="mono" style="color:var(--muted); font-size:0.75rem;">
+          TMDB lookup failed. Check your connection and try again, or save without a match.
+        </p>
       {% else %}
-        <p class="mono" style="color:var(--muted); font-size:0.75rem;">No matches found for &quot;{{ title }}&quot;.</p>
+        {% if hinted_type_failed or alternate_type_failed %}
+          <p class="mono" style="color:var(--muted); font-size:0.7rem;">
+            Note: the {{ 'primary' if hinted_type_failed else 'alternate' }} search failed; results may be incomplete.
+          </p>
+        {% endif %}
+
+        {% if candidates %}
+          <div class="candidate-list">
+            {% for c in candidates %}
+              <div class="candidate-card">
+                {% if c.poster_path %}
+                  <img src="https://image.tmdb.org/t/p/w92{{ c.poster_path }}" alt="" class="candidate-poster">
+                {% else %}
+                  <div class="candidate-poster candidate-poster--empty"></div>
+                {% endif %}
+                <div class="candidate-info">
+                  <div class="mono" style="font-size:0.8rem;">{{ c.title }}{% if c.year %} ({{ c.year }}){% endif %}</div>
+                  <div class="mono" style="font-size:0.65rem; color:var(--muted); text-transform:uppercase;">
+                    {{ 'TV' if c.content_type == 'tv' else 'Film' }}
+                  </div>
+                  {% if c.conflict %}
+                    <div class="mono conflict-badge">
+                      {% if c.conflict.source == 'watchlist' %}Already on your watchlist
+                      {% elif c.conflict.source == 'watched' %}Already in your watch history
+                      {% else %}Already in your archive{% endif %}
+                    </div>
+                  {% endif %}
+                </div>
+                <div class="candidate-actions">
+                  {% if c.conflict and c.conflict.source == 'watchlist' %}
+                    <form hx-post="/archive/confirm" hx-target="#archive-modal" hx-swap="innerHTML" style="margin:0;">
+                      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                      <input type="hidden" name="tmdb_id" value="{{ c.tmdb_id }}">
+                      <input type="hidden" name="content_type" value="{{ c.content_type }}">
+                      <input type="hidden" name="title" value="{{ c.title }}">
+                      <input type="hidden" name="resolution" value="mark_watched">
+                      <button type="submit" class="{{ 'btn-primary' if loop.first else 'btn-ghost' }}" style="padding:0.35rem 0.75rem; font-size:0.7rem;">Mark as watched</button>
+                    </form>
+                  {% else %}
+                    <form hx-post="/archive/confirm" hx-target="#archive-modal" hx-swap="innerHTML" style="margin:0;">
+                      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                      <input type="hidden" name="tmdb_id" value="{{ c.tmdb_id }}">
+                      <input type="hidden" name="content_type" value="{{ c.content_type }}">
+                      <input type="hidden" name="title" value="{{ c.title }}">
+                      <input type="hidden" name="resolution" value="add">
+                      <button type="submit" class="{{ 'btn-primary' if loop.first else 'btn-ghost' }}" style="padding:0.35rem 0.75rem; font-size:0.7rem;">
+                        {% if c.conflict and c.conflict.source == 'archive' %}Update watched date
+                        {% elif c.conflict and c.conflict.source == 'watched' %}Add anyway
+                        {% else %}Add{% endif %}
+                      </button>
+                    </form>
+                  {% endif %}
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="mono" style="color:var(--muted); font-size:0.75rem;">No matches found for &quot;{{ title }}&quot;.</p>
+        {% endif %}
+      {% endif %}
+      <div class="modal-scroll-fade"></div>
+    </div>
+
+    <div class="modal-footer">
+      {% if not api_key_missing and not both_failed %}
+        <form hx-post="/archive/resolve" hx-target="#archive-modal" hx-swap="innerHTML" class="retry-form">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input type="text" name="title" value="{{ title }}" class="input-field" style="padding:0.4rem 0.6rem; font-size:0.75rem;">
+          <select name="content_type" class="input-field mono" style="padding:0.4rem 0.6rem; font-size:0.65rem;">
+            <option value="tv" {% if content_type == 'tv' %}selected{% endif %}>TV</option>
+            <option value="movie" {% if content_type == 'movie' %}selected{% endif %}>Film</option>
+          </select>
+          <button type="submit" class="btn-ghost" style="padding:0.4rem 0.75rem; font-size:0.7rem;">Search again</button>
+        </form>
       {% endif %}
 
-      <form hx-post="/archive/resolve" hx-target="#archive-modal" hx-swap="innerHTML" class="retry-form">
+      <form hx-post="/archive/confirm" hx-target="#archive-modal" hx-swap="innerHTML" class="unmatched-form">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <input type="text" name="title" value="{{ title }}" class="input-field" style="padding:0.4rem 0.6rem; font-size:0.75rem;">
-        <select name="content_type" class="input-field mono" style="padding:0.4rem 0.6rem; font-size:0.65rem;">
-          <option value="tv" {% if content_type == 'tv' %}selected{% endif %}>TV</option>
-          <option value="movie" {% if content_type == 'movie' %}selected{% endif %}>Film</option>
-        </select>
-        <button type="submit" class="btn-ghost" style="padding:0.4rem 0.75rem; font-size:0.7rem;">Search again</button>
+        <input type="hidden" name="title" value="{{ title }}">
+        <input type="hidden" name="content_type" value="{{ content_type }}">
+        <input type="hidden" name="resolution" value="unmatched">
+        <button type="submit" class="btn-ghost" style="padding:0.4rem 0.75rem; font-size:0.7rem;">None of these — save as unmatched</button>
       </form>
-    {% endif %}
-
-    <form hx-post="/archive/confirm" hx-target="#archive-modal" hx-swap="innerHTML" class="unmatched-form">
-      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="title" value="{{ title }}">
-      <input type="hidden" name="content_type" value="{{ content_type }}">
-      <input type="hidden" name="resolution" value="unmatched">
-      <button type="submit" class="btn-ghost" style="padding:0.4rem 0.75rem; font-size:0.7rem;">None of these — save as unmatched</button>
-    </form>
+    </div>
   </div>
 </div>
