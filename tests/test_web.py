@@ -1212,3 +1212,62 @@ class TestHistoryTmdbOverview:
 
         from recommender.web import _get_tmdb_overview
         assert _get_tmdb_overview(88888, "tv") is None
+
+
+class TestArchiveDisambiguatePartial:
+    def _render(self, **overrides):
+        from recommender.web import app
+        defaults = dict(
+            title="The Bear", content_type="tv",
+            api_key_missing=False, both_failed=False,
+            hinted_type_failed=False, alternate_type_failed=False,
+            candidates=[],
+        )
+        defaults.update(overrides)
+        with app.test_request_context():
+            from flask import render_template
+            return render_template("_archive_disambiguate.html", **defaults)
+
+    def test_renders_plain_candidate_with_add_button(self):
+        html = self._render(candidates=[{
+            "tmdb_id": 194583, "content_type": "tv", "title": "The Bear",
+            "year": 2022, "poster_path": None, "conflict": None,
+        }])
+        assert "The Bear" in html
+        assert "2022" in html
+        assert "value=\"add\"" in html
+
+    def test_renders_watchlist_conflict_with_mark_watched_button(self):
+        html = self._render(candidates=[{
+            "tmdb_id": 194583, "content_type": "tv", "title": "The Bear",
+            "year": 2022, "poster_path": None,
+            "conflict": {"source": "watchlist", "title": "The Bear"},
+        }])
+        assert "Already on your watchlist" in html
+        assert "value=\"mark_watched\"" in html
+
+    def test_renders_archive_conflict_with_update_watched_date_label(self):
+        html = self._render(candidates=[{
+            "tmdb_id": 194583, "content_type": "tv", "title": "The Bear",
+            "year": 2022, "poster_path": None,
+            "conflict": {"source": "archive", "title": "The Bear"},
+        }])
+        assert "Already in your archive" in html
+        assert "Update watched date" in html
+
+    def test_renders_no_api_key_message(self):
+        html = self._render(api_key_missing=True)
+        assert "no API key configured" in html
+
+    def test_renders_both_failed_message(self):
+        html = self._render(both_failed=True)
+        assert "TMDB lookup failed" in html
+
+    def test_renders_no_matches_message_when_search_succeeded_with_zero_results(self):
+        html = self._render(candidates=[])
+        assert "No matches found" in html
+
+    def test_unmatched_button_always_present(self):
+        html = self._render()
+        assert "value=\"unmatched\"" in html
+        assert "save as unmatched" in html
