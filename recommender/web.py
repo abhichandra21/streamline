@@ -1285,6 +1285,47 @@ def archive_add() -> str:
                            tmdb_id=tmdb_id, uid=uid)
 
 
+@app.route("/archive/resolve", methods=["POST"])
+def archive_resolve() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    if not title:
+        return "Missing title", 400
+    _ensure_user_store_once()
+
+    if not config.TMDB_API_KEY:
+        return render_template(
+            "_archive_disambiguate.html", title=title, content_type=ct,
+            api_key_missing=True, both_failed=False,
+            hinted_type_failed=False, alternate_type_failed=False, candidates=[],
+        )
+
+    from recommender.tmdb_client import TmdbClient
+    tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+    result = tmdb.get_disambiguation_candidates(title, ct)
+
+    candidates = []
+    for cand in result.candidates:
+        conflict = user_store.find_conflict(config.EVENT_DB_PATH, cand.content_type, cand.tmdb_id)
+        candidates.append({
+            "tmdb_id": cand.tmdb_id,
+            "content_type": cand.content_type,
+            "title": cand.title,
+            "year": cand.year,
+            "poster_path": cand.poster_path,
+            "conflict": conflict,
+        })
+
+    return render_template(
+        "_archive_disambiguate.html", title=title, content_type=ct,
+        api_key_missing=False,
+        both_failed=result.hinted_type_failed and result.alternate_type_failed,
+        hinted_type_failed=result.hinted_type_failed,
+        alternate_type_failed=result.alternate_type_failed,
+        candidates=candidates,
+    )
+
+
 @app.route("/archive/rate", methods=["POST"])
 def archive_rate() -> str:
     title = (request.form.get("title") or "").strip()

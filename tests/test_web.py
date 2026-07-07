@@ -1161,6 +1161,71 @@ class TestArchiveAdd:
         mock_llm.assert_not_called()
 
 
+class TestArchiveResolve:
+    def _post(self, client, title="The Bear", content_type="tv"):
+        return client.post("/archive/resolve", data={
+            **_csrf_form(),
+            "title": title,
+            "content_type": content_type,
+        })
+
+    def test_missing_title_returns_400(self, client):
+        resp = self._post(client, title="")
+        assert resp.status_code == 400
+
+    def test_no_api_key_renders_unmatched_only_state(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "")
+
+        resp = self._post(client)
+        assert resp.status_code == 200
+        assert b"no API key configured" in resp.data
+
+    def test_renders_candidates_with_watchlist_conflict(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title
+        from recommender.tmdb_client import DisambiguationCandidate, DisambiguationResult
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "The Bear", "tv", tmdb_id=194583)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = DisambiguationResult(
+                candidates=[DisambiguationCandidate(
+                    tmdb_id=194583, content_type="tv", title="The Bear",
+                    year=2022, poster_path=None, score=90.0,
+                )],
+            )
+            resp = self._post(client)
+
+        assert resp.status_code == 200
+        assert b"Already on your watchlist" in resp.data
+
+    def test_both_searches_failing_shows_error_state(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db
+        from recommender.tmdb_client import DisambiguationResult
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = DisambiguationResult(
+                candidates=[], hinted_type_failed=True, alternate_type_failed=True,
+            )
+            resp = self._post(client)
+
+        assert resp.status_code == 200
+        assert b"TMDB lookup failed" in resp.data
+
+
 class TestHistoryTmdbOverview:
     """Archive/history page shows TMDB overview when enrichment text is absent."""
 
