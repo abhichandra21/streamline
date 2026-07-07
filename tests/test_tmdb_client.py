@@ -604,3 +604,42 @@ def test_load_cache_treats_corrupt_json_as_cache_miss(tmp_path):
     result = client._load_cache("movie", 42)
 
     assert result is None
+
+
+def test_search_candidates_or_error_reports_success_with_results():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = {"results": [_make_tv_search_result(1, "A Show")]}
+            results, ok = client._search_candidates_or_error("A Show", "tv")
+        assert ok is True
+        assert len(results) == 1
+
+
+def test_search_candidates_or_error_reports_success_with_zero_results():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = {"results": []}
+            results, ok = client._search_candidates_or_error("Nonexistent", "tv")
+        assert ok is True
+        assert results == []
+
+
+def test_search_candidates_or_error_reports_failure_on_exception():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get", side_effect=RuntimeError("boom")):
+            results, ok = client._search_candidates_or_error("A Show", "tv")
+        assert ok is False
+        assert results == []
+
+
+def test_search_candidates_still_returns_plain_list_after_refactor():
+    """_search_candidates keeps its original contract."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = {"results": [_make_tv_search_result(1, "A Show")]}
+            results = client._search_candidates("A Show", "tv")
+        assert results == [_make_tv_search_result(1, "A Show")]

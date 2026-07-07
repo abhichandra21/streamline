@@ -142,10 +142,13 @@ class TmdbClient:
         results = data.get("results", [])
         return results[0]["id"] if results else None
 
-    def _search_candidates(
+    def _search_candidates_or_error(
         self, title: str, content_type: str, hints: MatchHints | None = None,
-    ) -> list[dict]:
-        """Return up to 5 TMDB search results. Uses year hint when available."""
+    ) -> tuple[list[dict], bool]:
+        """Like _search_candidates, but reports whether the request itself
+        succeeded (True, even with zero results) or failed due to a
+        network/API error (False) - the two are otherwise indistinguishable.
+        """
         endpoint = "search/tv" if content_type == "tv" else "search/movie"
         params: dict = {"query": title}
 
@@ -157,17 +160,24 @@ class TmdbClient:
                 data = self._get(endpoint, hinted_params)
                 results = data.get("results", [])[:5]
                 if results:
-                    return results
+                    return results, True
             except Exception as exc:
                 log.debug("TMDB hinted search error for %r: %s", title, exc)
 
         # Fall back to unhinted search
         try:
             data = self._get(endpoint, params)
-            return data.get("results", [])[:5]
+            return data.get("results", [])[:5], True
         except Exception as exc:
             log.debug("TMDB search error for %r (%s): %s", title, content_type, exc)
-            return []
+            return [], False
+
+    def _search_candidates(
+        self, title: str, content_type: str, hints: MatchHints | None = None,
+    ) -> list[dict]:
+        """Return up to 5 TMDB search results. Uses year hint when available."""
+        results, _ = self._search_candidates_or_error(title, content_type, hints)
+        return results
 
     def _score_candidate(
         self, candidate: dict, title: str, content_type: str,
