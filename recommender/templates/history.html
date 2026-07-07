@@ -50,7 +50,7 @@
 
   <!-- Collapsible Add Title form -->
   <div id="add-form-wrapper" style="display:none; margin-top:0.5rem; padding:0.75rem 1rem; background:var(--surface); border:1px solid var(--border); border-radius:6px;">
-    <form hx-post="/archive/add" hx-target="#add-result" hx-swap="innerHTML" style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+    <form hx-post="/archive/resolve" hx-target="#archive-modal" hx-swap="innerHTML" style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
       <input type="text" name="title" placeholder="Title you watched..." id="add-title-input"
         class="input-field" style="padding:0.5rem 0.75rem; flex:1; min-width:180px;">
@@ -60,8 +60,8 @@
       </select>
       <button type="submit" class="btn-primary" style="padding:0.5rem 1rem;">Add</button>
       <button type="button" onclick="toggleAddForm()" class="btn-ghost" style="padding:0.5rem 0.75rem;">Cancel</button>
-      <span id="add-result" style="display:inline;"></span>
     </form>
+    <div id="archive-modal"></div>
   </div>
 
   <div style="display:flex; align-items:center; justify-content:space-between; margin-top:0.75rem;">
