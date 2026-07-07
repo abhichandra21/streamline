@@ -1161,6 +1161,193 @@ class TestArchiveAdd:
         mock_llm.assert_not_called()
 
 
+class TestArchiveResolve:
+    def _post(self, client, title="The Bear", content_type="tv"):
+        return client.post("/archive/resolve", data={
+            **_csrf_form(),
+            "title": title,
+            "content_type": content_type,
+        })
+
+    def test_missing_title_returns_400(self, client):
+        resp = self._post(client, title="")
+        assert resp.status_code == 400
+
+    def test_no_api_key_renders_unmatched_only_state(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "")
+
+        resp = self._post(client)
+        assert resp.status_code == 200
+        assert b"no API key configured" in resp.data
+
+    def test_renders_candidates_with_watchlist_conflict(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title
+        from recommender.tmdb_client import DisambiguationCandidate, DisambiguationResult
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "The Bear", "tv", tmdb_id=194583)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = DisambiguationResult(
+                candidates=[DisambiguationCandidate(
+                    tmdb_id=194583, content_type="tv", title="The Bear",
+                    year=2022, poster_path=None, score=90.0,
+                )],
+            )
+            resp = self._post(client)
+
+        assert resp.status_code == 200
+        assert b"Already on your watchlist" in resp.data
+
+    def test_renders_candidates_already_in_watch_history(self, client, tmp_path, monkeypatch):
+        """A title already present in the ingested watch_index (not the SQL
+        tables) must still be flagged, or the modal misses most real
+        already-watched titles from platform ingestion/rebuilds."""
+        from recommender.user_store import init_db
+        from recommender.tmdb_client import DisambiguationCandidate, DisambiguationResult
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+
+        mock_ctx = MagicMock()
+        mock_ctx.watch_index.entries = [
+            {"title": "1917", "content_type": "movie", "tmdb_id": 530915, "platforms": ["manual"]},
+        ]
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient, \
+             patch("recommender.web._get_context", return_value=mock_ctx):
+            MockClient.return_value.get_disambiguation_candidates.return_value = DisambiguationResult(
+                candidates=[DisambiguationCandidate(
+                    tmdb_id=530915, content_type="movie", title="1917",
+                    year=2019, poster_path=None, score=90.0,
+                )],
+            )
+            resp = self._post(client, title="1917", content_type="movie")
+
+        assert resp.status_code == 200
+        assert b"Already in your watch history" in resp.data
+        assert b"Add anyway" in resp.data
+
+    def test_both_searches_failing_shows_error_state(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db
+        from recommender.tmdb_client import DisambiguationResult
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = DisambiguationResult(
+                candidates=[], hinted_type_failed=True, alternate_type_failed=True,
+            )
+            resp = self._post(client)
+
+        assert resp.status_code == 200
+        assert b"TMDB lookup failed" in resp.data
+
+
+class TestArchiveConfirm:
+    def _post(self, client, **overrides):
+        data = {
+            **_csrf_form(),
+            "title": "The Bear",
+            "content_type": "tv",
+            "resolution": "add",
+            "tmdb_id": "194583",
+        }
+        data.update(overrides)
+        return client.post("/archive/confirm", data=data)
+
+    def test_missing_title_returns_400(self, client):
+        resp = self._post(client, title="")
+        assert resp.status_code == 400
+
+    def test_add_without_tmdb_id_returns_400(self, client):
+        resp = self._post(client, tmdb_id="")
+        assert resp.status_code == 400
+
+    def test_invalid_resolution_returns_400(self, client):
+        resp = self._post(client, resolution="bogus")
+        assert resp.status_code == 400
+
+    def test_unmatched_saves_with_no_tmdb_id(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / ".profile_stale"))
+
+        resp = self._post(client, resolution="unmatched", tmdb_id="")
+
+        assert resp.status_code == 200
+        entries = list_manual_archive(db)
+        assert len(entries) == 1
+        assert entries[0]["tmdb_id"] is None
+
+    def test_add_fetches_canonical_title_before_saving(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / ".profile_stale"))
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            instance = MockClient.return_value
+            instance._load_cache.return_value = None
+            instance._fetch_details.return_value = {"name": "The Bear (Canonical)"}
+            resp = self._post(client, title="the bear typo")
+
+        assert resp.status_code == 200
+        entries = list_manual_archive(db)
+        assert len(entries) == 1
+        assert entries[0]["title"] == "The Bear (Canonical)"
+
+    def test_mark_watched_moves_from_watchlist_to_archive(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title, list_saved_titles, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "The Bear", "tv", tmdb_id=194583)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / ".profile_stale"))
+
+        resp = self._post(client, resolution="mark_watched")
+
+        assert resp.status_code == 200
+        assert list_saved_titles(db) == []
+        assert len(list_manual_archive(db)) == 1
+
+    def test_stale_flag_touched_after_confirm(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        stale_flag = tmp_path / ".profile_stale"
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(stale_flag))
+
+        self._post(client, resolution="unmatched", tmdb_id="")
+
+        assert stale_flag.exists()
+
+
 class TestHistoryTmdbOverview:
     """Archive/history page shows TMDB overview when enrichment text is absent."""
 
@@ -1212,3 +1399,112 @@ class TestHistoryTmdbOverview:
 
         from recommender.web import _get_tmdb_overview
         assert _get_tmdb_overview(88888, "tv") is None
+
+
+class TestArchiveDisambiguatePartial:
+    def _render(self, **overrides):
+        from recommender.web import app
+        defaults = dict(
+            title="The Bear", content_type="tv",
+            api_key_missing=False, both_failed=False,
+            hinted_type_failed=False, alternate_type_failed=False,
+            candidates=[],
+        )
+        defaults.update(overrides)
+        with app.test_request_context():
+            from flask import render_template
+            return render_template("_archive_disambiguate.html", **defaults)
+
+    def test_renders_plain_candidate_with_add_button(self):
+        html = self._render(candidates=[{
+            "tmdb_id": 194583, "content_type": "tv", "title": "The Bear",
+            "year": 2022, "poster_path": None, "conflict": None,
+        }])
+        assert "The Bear" in html
+        assert "2022" in html
+        assert "value=\"add\"" in html
+
+    def test_only_top_ranked_candidate_gets_primary_emphasis(self):
+        """Candidates are already rank-ordered by score; only the top match
+        should read as the loud, primary action - the rest are secondary
+        so five equally emphasized buttons don't compete for attention."""
+        html = self._render(candidates=[
+            {"tmdb_id": 1, "content_type": "tv", "title": "First", "year": 2020,
+             "poster_path": None, "conflict": None},
+            {"tmdb_id": 2, "content_type": "tv", "title": "Second", "year": 2019,
+             "poster_path": None, "conflict": None},
+            {"tmdb_id": 3, "content_type": "tv", "title": "Third", "year": 2018,
+             "poster_path": None, "conflict": None},
+        ])
+        assert html.count('class="btn-primary"') == 1
+        assert html.count('class="btn-ghost"', html.index("candidate-list")) >= 2
+
+    def test_modal_has_scrollable_body_and_pinned_footer(self):
+        """Search-again/save-unmatched must live outside the scrollable
+        candidate region so they stay reachable in a long candidate list."""
+        html = self._render(candidates=[{
+            "tmdb_id": 194583, "content_type": "tv", "title": "The Bear",
+            "year": 2022, "poster_path": None, "conflict": None,
+        }])
+        assert "modal-scroll" in html
+        assert "modal-footer" in html
+        scroll_start = html.index("modal-scroll")
+        footer_start = html.index("modal-footer")
+        unmatched_start = html.index("save as unmatched")
+        assert scroll_start < footer_start < unmatched_start
+
+    def test_renders_watchlist_conflict_with_mark_watched_button(self):
+        html = self._render(candidates=[{
+            "tmdb_id": 194583, "content_type": "tv", "title": "The Bear",
+            "year": 2022, "poster_path": None,
+            "conflict": {"source": "watchlist", "title": "The Bear"},
+        }])
+        assert "Already on your watchlist" in html
+        assert "value=\"mark_watched\"" in html
+
+    def test_watchlist_conflict_does_not_offer_add_button(self):
+        """A watchlist conflict must only offer mark_watched, never a fresh add -
+        clicking Add would leave the same (content_type, tmdb_id) in both
+        saved_titles and manual_archive_entries."""
+        html = self._render(candidates=[{
+            "tmdb_id": 194583, "content_type": "tv", "title": "The Bear",
+            "year": 2022, "poster_path": None,
+            "conflict": {"source": "watchlist", "title": "The Bear"},
+        }])
+        assert "value=\"add\"" not in html
+
+    def test_renders_watch_history_conflict_with_add_anyway_label(self):
+        html = self._render(candidates=[{
+            "tmdb_id": 530915, "content_type": "movie", "title": "1917",
+            "year": 2019, "poster_path": None,
+            "conflict": {"source": "watched", "title": "1917"},
+        }])
+        assert "Already in your watch history" in html
+        assert "Add anyway" in html
+        assert "value=\"mark_watched\"" not in html
+
+    def test_renders_archive_conflict_with_update_watched_date_label(self):
+        html = self._render(candidates=[{
+            "tmdb_id": 194583, "content_type": "tv", "title": "The Bear",
+            "year": 2022, "poster_path": None,
+            "conflict": {"source": "archive", "title": "The Bear"},
+        }])
+        assert "Already in your archive" in html
+        assert "Update watched date" in html
+
+    def test_renders_no_api_key_message(self):
+        html = self._render(api_key_missing=True)
+        assert "no API key configured" in html
+
+    def test_renders_both_failed_message(self):
+        html = self._render(both_failed=True)
+        assert "TMDB lookup failed" in html
+
+    def test_renders_no_matches_message_when_search_succeeded_with_zero_results(self):
+        html = self._render(candidates=[])
+        assert "No matches found" in html
+
+    def test_unmatched_button_always_present(self):
+        html = self._render()
+        assert "value=\"unmatched\"" in html
+        assert "save as unmatched" in html

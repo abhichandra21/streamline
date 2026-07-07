@@ -604,3 +604,104 @@ def test_load_cache_treats_corrupt_json_as_cache_miss(tmp_path):
     result = client._load_cache("movie", 42)
 
     assert result is None
+
+
+def test_search_candidates_or_error_reports_success_with_results():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = {"results": [_make_tv_search_result(1, "A Show")]}
+            results, ok = client._search_candidates_or_error("A Show", "tv")
+        assert ok is True
+        assert len(results) == 1
+
+
+def test_search_candidates_or_error_reports_success_with_zero_results():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = {"results": []}
+            results, ok = client._search_candidates_or_error("Nonexistent", "tv")
+        assert ok is True
+        assert results == []
+
+
+def test_search_candidates_or_error_reports_failure_on_exception():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get", side_effect=RuntimeError("boom")):
+            results, ok = client._search_candidates_or_error("A Show", "tv")
+        assert ok is False
+        assert results == []
+
+
+def test_search_candidates_still_returns_plain_list_after_refactor():
+    """_search_candidates keeps its original contract."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = {"results": [_make_tv_search_result(1, "A Show")]}
+            results = client._search_candidates("A Show", "tv")
+        assert results == [_make_tv_search_result(1, "A Show")]
+
+
+def test_get_disambiguation_candidates_merges_both_types():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        tv_results = [_make_tv_search_result(1, "The Office", "2005-03-24")]
+        movie_results = [_make_search_result(2, "The Office (2001 Film)", "2001-01-01")]
+        with patch.object(client, "_search_candidates_or_error") as mock_search:
+            mock_search.side_effect = [(tv_results, True), (movie_results, True)]
+            result = client.get_disambiguation_candidates("The Office", "tv")
+        assert {c.tmdb_id for c in result.candidates} == {1, 2}
+        assert result.hinted_type_failed is False
+        assert result.alternate_type_failed is False
+
+
+def test_get_disambiguation_candidates_dedupes_by_type_and_id():
+    """A movie and a tv show can legitimately share the same numeric TMDB id."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        same_id_tv = [_make_tv_search_result(5, "Show A", "2010-01-01")]
+        same_id_movie = [_make_search_result(5, "Unrelated Movie", "1999-01-01")]
+        with patch.object(client, "_search_candidates_or_error") as mock_search:
+            mock_search.side_effect = [(same_id_tv, True), (same_id_movie, True)]
+            result = client.get_disambiguation_candidates("Show A", "tv")
+        assert len(result.candidates) == 2
+        types = {(c.content_type, c.tmdb_id) for c in result.candidates}
+        assert types == {("tv", 5), ("movie", 5)}
+
+
+def test_get_disambiguation_candidates_ranks_by_score():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        strong = _make_tv_search_result(1, "Kesari", "2019-03-21", vote_count=1000, popularity=50)
+        weak = _make_tv_search_result(2, "Kesar", "2019-01-01", vote_count=1, popularity=1)
+        with patch.object(client, "_search_candidates_or_error") as mock_search:
+            mock_search.side_effect = [([strong, weak], True), ([], True)]
+            result = client.get_disambiguation_candidates("Kesari", "tv")
+        assert result.candidates[0].tmdb_id == 1
+
+
+def test_get_disambiguation_candidates_reports_per_type_failure():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_search_candidates_or_error") as mock_search:
+            mock_search.side_effect = [([], True), ([], False)]
+            result = client.get_disambiguation_candidates("Kesari", "tv")
+        assert result.hinted_type_failed is False
+        assert result.alternate_type_failed is True
+        assert result.candidates == []
+
+
+def test_get_disambiguation_candidates_caps_at_five():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        many = [
+            _make_tv_search_result(i, f"Show {i}", "2010-01-01", vote_count=100 - i, popularity=10)
+            for i in range(6)
+        ]
+        with patch.object(client, "_search_candidates_or_error") as mock_search:
+            mock_search.side_effect = [(many, True), ([], True)]
+            result = client.get_disambiguation_candidates("Show", "tv")
+        assert len(result.candidates) == 5

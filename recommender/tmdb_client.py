@@ -56,6 +56,25 @@ class MatchHints:
     language: str | None = None  # TMDB original_language code, e.g. "hi"
 
 
+@dataclass
+class DisambiguationCandidate:
+    """A ranked TMDB search result offered to the user for manual-add disambiguation."""
+    tmdb_id: int
+    content_type: str       # "tv" or "movie"
+    title: str
+    year: int | None
+    poster_path: str | None
+    score: float
+
+
+@dataclass
+class DisambiguationResult:
+    """Result of searching both content types for a manual-add title."""
+    candidates: list[DisambiguationCandidate] = field(default_factory=list)
+    hinted_type_failed: bool = False
+    alternate_type_failed: bool = False
+
+
 def _normalize_for_match(s: str) -> str:
     """Lowercase, strip articles and punctuation for title comparison."""
     s = s.lower().strip()
@@ -142,10 +161,13 @@ class TmdbClient:
         results = data.get("results", [])
         return results[0]["id"] if results else None
 
-    def _search_candidates(
+    def _search_candidates_or_error(
         self, title: str, content_type: str, hints: MatchHints | None = None,
-    ) -> list[dict]:
-        """Return up to 5 TMDB search results. Uses year hint when available."""
+    ) -> tuple[list[dict], bool]:
+        """Like _search_candidates, but reports whether the request itself
+        succeeded (True, even with zero results) or failed due to a
+        network/API error (False) - the two are otherwise indistinguishable.
+        """
         endpoint = "search/tv" if content_type == "tv" else "search/movie"
         params: dict = {"query": title}
 
@@ -157,17 +179,63 @@ class TmdbClient:
                 data = self._get(endpoint, hinted_params)
                 results = data.get("results", [])[:5]
                 if results:
-                    return results
+                    return results, True
             except Exception as exc:
                 log.debug("TMDB hinted search error for %r: %s", title, exc)
 
         # Fall back to unhinted search
         try:
             data = self._get(endpoint, params)
-            return data.get("results", [])[:5]
+            return data.get("results", [])[:5], True
         except Exception as exc:
             log.debug("TMDB search error for %r (%s): %s", title, content_type, exc)
-            return []
+            return [], False
+
+    def _search_candidates(
+        self, title: str, content_type: str, hints: MatchHints | None = None,
+    ) -> list[dict]:
+        """Return up to 5 TMDB search results. Uses year hint when available."""
+        results, _ = self._search_candidates_or_error(title, content_type, hints)
+        return results
+
+    def get_disambiguation_candidates(
+        self, title: str, content_type_hint: str, hints: MatchHints | None = None,
+    ) -> DisambiguationResult:
+        """Search both content types for `title` and return a ranked, deduped
+        candidate list plus per-type search-failure flags.
+
+        Candidates are deduped by (content_type, tmdb_id) - the same identity
+        key the user store uses - since TMDB ids are a separate namespace per
+        content type and a movie/tv pair can collide on the same integer id.
+        """
+        alt_type = "movie" if content_type_hint == "tv" else "tv"
+
+        hinted_raw, hinted_ok = self._search_candidates_or_error(title, content_type_hint, hints)
+        alt_raw, alt_ok = self._search_candidates_or_error(title, alt_type, hints)
+
+        merged: dict[tuple[str, int], DisambiguationCandidate] = {}
+        for ct, raw_list in ((content_type_hint, hinted_raw), (alt_type, alt_raw)):
+            for raw in raw_list:
+                key = (ct, raw["id"])
+                if key in merged:
+                    continue
+                date_str = raw.get("first_air_date") or raw.get("release_date") or ""
+                year = int(date_str[:4]) if date_str and len(date_str) >= 4 else None
+                merged[key] = DisambiguationCandidate(
+                    tmdb_id=raw["id"],
+                    content_type=ct,
+                    title=raw.get("name") or raw.get("title") or "",
+                    year=year,
+                    poster_path=raw.get("poster_path"),
+                    score=self._score_candidate(raw, title, ct, hints),
+                )
+
+        ranked = sorted(merged.values(), key=lambda c: c.score, reverse=True)[:5]
+        return DisambiguationResult(
+            candidates=ranked,
+            hinted_type_failed=not hinted_ok,
+            alternate_type_failed=not alt_ok,
+        )
 
     def _score_candidate(
         self, candidate: dict, title: str, content_type: str,

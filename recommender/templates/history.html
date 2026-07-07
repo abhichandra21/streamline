@@ -3,8 +3,13 @@
 {% block content %}
 
 <div style="margin-bottom:2rem;">
-  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--teal);">Collection</span>
-  <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:1.25rem;">Archive</h1>
+  <div style="display:flex; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; gap:0.75rem; margin-bottom:1.25rem;">
+    <div>
+      <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--teal);">Collection</span>
+      <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem;">Archive</h1>
+    </div>
+    <button type="button" id="add-toggle" onclick="toggleAddForm()" class="btn-teal" style="padding:0.6rem 1rem; margin-bottom:0.35rem;">+ Add Watched</button>
+  </div>
 
   <!-- Filter row -->
   <form method="get" action="/history" id="filter-form" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
@@ -42,15 +47,11 @@
     {% if q or ct_filter or platform_filter or rating_filter or sort != 'az' %}
     <a href="/history" class="btn-ghost" style="padding:0.6rem 0.9rem;">Clear</a>
     {% endif %}
-    <!-- Add watched toggle — inline at end of filter row -->
-    <button type="button" id="add-toggle" onclick="toggleAddForm()"
-      class="btn-ghost"
-      style="padding:0.6rem 0.9rem; margin-left:auto;">+ Add watched</button>
   </form>
 
   <!-- Collapsible Add Title form -->
   <div id="add-form-wrapper" style="display:none; margin-top:0.5rem; padding:0.75rem 1rem; background:var(--surface); border:1px solid var(--border); border-radius:6px;">
-    <form hx-post="/archive/add" hx-target="#add-result" hx-swap="innerHTML" style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+    <form hx-post="/archive/resolve" hx-target="#archive-modal" hx-swap="innerHTML" style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
       <input type="text" name="title" placeholder="Title you watched..." id="add-title-input"
         class="input-field" style="padding:0.5rem 0.75rem; flex:1; min-width:180px;">
@@ -60,8 +61,8 @@
       </select>
       <button type="submit" class="btn-primary" style="padding:0.5rem 1rem;">Add</button>
       <button type="button" onclick="toggleAddForm()" class="btn-ghost" style="padding:0.5rem 0.75rem;">Cancel</button>
-      <span id="add-result" style="display:inline;"></span>
     </form>
+    <div id="archive-modal"></div>
   </div>
 
   <div style="display:flex; align-items:center; justify-content:space-between; margin-top:0.75rem;">
@@ -313,8 +314,7 @@ function toggleAddForm() {
   const btn = document.getElementById('add-toggle');
   const open = wrapper.style.display !== 'none';
   wrapper.style.display = open ? 'none' : '';
-  btn.style.color = open ? '' : 'var(--teal)';
-  btn.style.borderColor = open ? '' : 'var(--teal)';
+  btn.classList.toggle('is-active', !open);
   if (!open) {
     setTimeout(() => document.getElementById('add-title-input').focus(), 50);
   }

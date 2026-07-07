@@ -1285,6 +1285,102 @@ def archive_add() -> str:
                            tmdb_id=tmdb_id, uid=uid)
 
 
+@app.route("/archive/resolve", methods=["POST"])
+def archive_resolve() -> str:
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    if not title:
+        return "Missing title", 400
+    _ensure_user_store_once()
+
+    if not config.TMDB_API_KEY:
+        return render_template(
+            "_archive_disambiguate.html", title=title, content_type=ct,
+            api_key_missing=True, both_failed=False,
+            hinted_type_failed=False, alternate_type_failed=False, candidates=[],
+        )
+
+    from recommender.tmdb_client import TmdbClient
+    tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+    result = tmdb.get_disambiguation_candidates(title, ct)
+
+    watched_index: dict[tuple[str, int], str] = {}
+    try:
+        ctx = _get_context()
+        for e in ctx.watch_index.entries:
+            tid = e.get("tmdb_id")
+            if tid:
+                watched_index.setdefault((e.get("content_type", "tv"), tid), e.get("title", ""))
+    except Exception:
+        pass
+
+    candidates = []
+    for cand in result.candidates:
+        key = (cand.content_type, cand.tmdb_id)
+        conflict = user_store.find_conflict(config.EVENT_DB_PATH, cand.content_type, cand.tmdb_id)
+        if conflict is None and key in watched_index:
+            conflict = {"source": "watched", "title": watched_index[key]}
+        candidates.append({
+            "tmdb_id": cand.tmdb_id,
+            "content_type": cand.content_type,
+            "title": cand.title,
+            "year": cand.year,
+            "poster_path": cand.poster_path,
+            "conflict": conflict,
+        })
+
+    return render_template(
+        "_archive_disambiguate.html", title=title, content_type=ct,
+        api_key_missing=False,
+        both_failed=result.hinted_type_failed and result.alternate_type_failed,
+        hinted_type_failed=result.hinted_type_failed,
+        alternate_type_failed=result.alternate_type_failed,
+        candidates=candidates,
+    )
+
+
+@app.route("/archive/confirm", methods=["POST"])
+def archive_confirm() -> str:
+    resolution = request.form.get("resolution")
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    if not title:
+        return "Missing title", 400
+    _ensure_user_store_once()
+
+    if resolution == "unmatched":
+        user_store.add_to_archive(config.EVENT_DB_PATH, title, ct, tmdb_id=None, source="web")
+        final_title = title
+    elif resolution in ("add", "mark_watched"):
+        if tmdb_id is None:
+            return "Missing tmdb_id", 400
+        final_title = title
+        if config.TMDB_API_KEY:
+            from recommender.tmdb_client import TmdbClient
+            tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+            data = tmdb._load_cache(ct, tmdb_id)
+            if not data:
+                try:
+                    data = tmdb._fetch_details(tmdb_id, ct)
+                    tmdb._save_cache(ct, tmdb_id, data)
+                except Exception:
+                    data = None
+            if data:
+                final_title = data.get("name") or data.get("title") or title
+        if resolution == "mark_watched":
+            user_store.mark_watched_from_watchlist(config.EVENT_DB_PATH, final_title, ct, tmdb_id=tmdb_id)
+        else:
+            user_store.add_to_archive(config.EVENT_DB_PATH, final_title, ct, tmdb_id=tmdb_id, source="web")
+    else:
+        return "Invalid resolution", 400
+
+    Path(config.PROFILE_STALE_FLAG).touch()
+    uid = f"aa-{hash(final_title) & 0xFFFFFF:06x}"
+    return render_template("_rating_prompt.html", title=final_title, content_type=ct,
+                           tmdb_id=tmdb_id, uid=uid)
+
+
 @app.route("/archive/rate", methods=["POST"])
 def archive_rate() -> str:
     title = (request.form.get("title") or "").strip()

@@ -171,6 +171,58 @@
     }
     .btn-ghost:hover { border-color: var(--accent); color: var(--text); text-decoration: none; }
 
+    .btn-teal {
+      background: transparent;
+      border: 1px solid var(--teal);
+      color: var(--teal);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 500;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, transform 0.1s;
+    }
+    .btn-teal:hover { background: rgba(58,184,160,0.12); transform: translateY(-1px); }
+    .btn-teal.is-active { background: var(--teal); color: var(--bg); }
+    .btn-teal.is-active:hover { opacity: 0.9; transform: none; }
+
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 1000;
+    }
+    .modal-box {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      padding: 1.25rem; max-width: 480px; width: 90%; max-height: 80vh;
+      display: flex; flex-direction: column;
+    }
+    .modal-header {
+      display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;
+      flex-shrink: 0;
+    }
+    .modal-close { font-size: 1.1rem; line-height: 1; padding: 0.2rem 0.5rem; }
+    .modal-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+    .modal-scroll-fade {
+      position: sticky; bottom: 0; left: 0; right: 0; height: 18px; margin-top: -18px;
+      background: linear-gradient(to bottom, transparent, var(--surface));
+      pointer-events: none;
+    }
+    .modal-footer { flex-shrink: 0; }
+    .candidate-list { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.5rem 0; }
+    .candidate-card {
+      display: flex; gap: 0.6rem; align-items: center; padding: 0.5rem;
+      border: 1px solid var(--border); border-radius: 6px;
+    }
+    .candidate-poster { width: 40px; height: 60px; object-fit: cover; border-radius: 3px; flex-shrink: 0; }
+    .candidate-poster--empty { background: var(--surface2); }
+    .candidate-info { flex: 1; min-width: 0; }
+    .conflict-badge { color: var(--teal); font-size: 0.6rem; margin-top: 0.15rem; }
+    .candidate-actions { display: flex; flex-direction: column; gap: 0.3rem; }
+    .retry-form { display: flex; gap: 0.4rem; margin-top: 0.75rem; flex-wrap: wrap; }
+    .unmatched-form { margin-top: 0.5rem; }
+
     /* Thumb rating buttons */
     .btn-thumb {
       background: none;
