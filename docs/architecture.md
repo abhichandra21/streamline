@@ -46,6 +46,8 @@ flowchart TD
 
 All parsers emit `WatchEvent` dataclasses (defined in `base.py`). Manual entries use `datetime.now()` as timestamp so they score competitively with platform data. Each file type deduplicates independently (TV and movie lists use separate seen sets).
 
+`base.py` also provides a shared `is_bonus_content()` filter, wired into all four parsers, that drops clips/trailers/featurettes/sing-alongs/deleted-scene rows before they ever reach TMDB matching.
+
 ### Signals (`recommender/signals.py`)
 
 Computes a score per unique title from raw watch events:
@@ -56,13 +58,15 @@ Computes a score per unique title from raw watch events:
 
 ### TMDB Client (`recommender/tmdb_client.py`)
 
-Three roles:
+Four roles:
 
-1. **Metadata lookup** (`get_metadata`) — text search by title + content type, returns `TmdbMetadata`. On miss, tries cleaned title variants (strips parenthetical suffixes, edition markers, episode prefixes, season markers) and falls back to alternate content type. Cached at `recommender/cache/tmdb/`.
+1. **Metadata lookup** (`get_metadata`) — text search by title + content type, returns `TmdbMetadata`. On miss, tries cleaned title variants (strips parenthetical suffixes, edition markers, episode prefixes, season markers) and falls back to alternate content type. A post-search validator rejects a top-scoring candidate that isn't plausibly related to the source title (title-similarity check, boosted by an original-language bonus) rather than trusting vote/popularity weight alone — this stops generic/short titles like "Don" from matching an unrelated, more popular result. Distinguishes an outright API/search failure from a genuine zero-results response. Cached at `recommender/cache/tmdb/`.
 
 2. **Candidate discovery** (`search_by_filters`) — calls TMDB Discover endpoint with genre IDs, origin countries, languages, and year range. Page-limited to `MAX_DISCOVER_PAGES` (20). Failed fetches are logged, not silently swallowed.
 
-3. **Watch providers** (`get_watch_providers`) — looks up flatrate streaming availability by region. Cached at `recommender/cache/providers/`.
+3. **Disambiguation candidates** (`get_disambiguation_candidates`) — cross-type ranked candidate search (checks both the hinted content type and the alternate one) used when a manually-added title can't be resolved to a single confident match. Backs the manual-add disambiguation modal (see below).
+
+4. **Watch providers** (`get_watch_providers`) — looks up flatrate streaming availability by region. Cached at `recommender/cache/providers/`.
 
 Genre name -> TMDB ID mappings are stored as module-level dicts. TV has no "thriller" genre; it maps to Mystery (9648).
 
@@ -75,6 +79,8 @@ Content-type-aware dual-key lookup:
 - **Fallback key** — `(normalized_title, content_type)` tuple
 
 This prevents cross-media false matches (watching the TV show "Fargo" won't block the movie "Fargo" from recommendations).
+
+Each entry also aggregates provenance across all its watch events: `platforms` (sorted source list, merged on dedup) and `last_watched` (latest ISO timestamp). This backs the `/history` source-provider filter and "Recently watched" sort; manual additions carry their own `manual` source.
 
 ### Enricher (`recommender/enricher.py`)
 
@@ -90,6 +96,8 @@ Previous profiles are auto-backed up with timestamps before rebuild.
 
 Negative preferences from the feedback system are included in the prompt, generating a "What you don't enjoy" section.
 
+The merged output is capped at 15 clusters. Family/kids/seasonal clusters (Disney, Pixar, Christmas, holiday, children's content, etc.) are sorted after personal-taste clusters so a cap never silently drops a genre the user actually cares about in favor of shared/family viewing. Markdown section headings are renumbered sequentially after merging so a dropped or reordered cluster doesn't leave gaps.
+
 ### User Store (`recommender/user_store.py`)
 
 SQLite storage (`events.db`) for user-managed state:
@@ -102,7 +110,17 @@ SQLite storage (`events.db`) for user-managed state:
 
 All lookups use TMDB-ID-first matching with normalized-title fallback. `UserStateIndex` (in `user_state.py`) provides a read-only snapshot for fast matching in query filtering and UI rendering.
 
+`find_conflict(content_type, tmdb_id)` checks the watchlist and manual archive for an existing record of a title, used by the manual-add disambiguation flow to warn before a duplicate add. `mark_watched_from_watchlist()` promotes a watchlist entry straight to the archive.
+
 Note: `recommender/feedback.py` is deprecated. The original JSON-based feedback was migrated to the SQLite tables above.
+
+### Manual-Add Disambiguation (`/archive/resolve`, `/archive/confirm` in `web.py`)
+
+Manually adding a title from the web UI can be ambiguous (multiple TMDB matches, wrong content type, or a title the user already has recorded). The flow:
+
+1. `/archive/resolve` — runs `TmdbClient.get_disambiguation_candidates()` (cross-type ranked search) and renders `_archive_disambiguate.html` with the candidates.
+2. Each candidate is checked for a conflict two ways: `user_store.find_conflict()` against the watchlist/manual-archive tables, then — if that finds nothing — a lookup against the loaded `watch_index` by `(content_type, tmdb_id)`, so titles that only exist in ingested platform history (not the SQL tables) still surface as "Already in your watch history" rather than being silently re-added.
+3. `/archive/confirm` — commits the user's choice: add to archive, mark watched, or keep as an unmatched manual entry with no TMDB id.
 
 ### Query Engine (`recommender/query_engine.py`)
 
@@ -146,12 +164,15 @@ The flow is a hybrid of deterministic and LLM-led turns:
 Flask app serving:
 - `/` — Home: search bar (HTMX-powered), taste profile clusters (expandable, markdown-rendered), archive poster wall
 - `/wizard` — Mood Match guided wizard (see the wizard section above)
-- `/history` — Watch archive with switchable views (list, poster grid, compact). Search + type filter + A-Z/Z-A sort.
+- `/history` — Watch archive with switchable views (list, poster grid, compact). Search + type filter + source-provider filter + rating filter + A-Z/Z-A/recently-watched sort.
 - `/title/:id` — Title detail with poster, TMDB overview, AI analysis, credits, keywords, TMDB link
 - `/recommend` — Standalone discover page
-- `/watchlist` — Saved titles with TMDB ratings, CSV export via `/watchlist/export`
-- `/watchlist/save`, `/watchlist/unsave` — HTMX toggle endpoints for inline save/unsave from any page
-- `/searches` — Query history with user state badges (watchlist, archived, dismissed) per result
+- `/watchlist` — Saved titles rendered as rich cards (cached poster, rating, genres, streaming availability, TMDB/IMDB links), CSV export via `/watchlist/export`
+- `/watchlist/save`, `/watchlist/unsave`, `/watchlist/dismiss`, `/watchlist/remove`, `/watchlist/watched` — HTMX toggle/transition endpoints for inline management from any page
+- `/archive/add` — Manual add; `/archive/resolve` and `/archive/confirm` handle disambiguation when the added title is ambiguous or already recorded (see above)
+- `/searches` — Query history with user state badges (watchlist, archived, dismissed) per result; recent searches are also surfaced inline in the home search suggestion row
+
+Streaming provider names are consolidated server-side (`_consolidate_providers()`, mirrored client-side for filter dropdowns) so ad-tier variants and channel resells display under one canonical brand.
 
 ### LLM Abstraction (`recommender/llm.py`)
 
@@ -181,6 +202,10 @@ Token usage and cost tracking via `UsageStats` — accumulated per query, printe
 ### CLI (`recommender/main.py`)
 
 Rich-powered output with spinners during API calls and panel-formatted results. Stderr/stdout separation for pipe-friendly usage. Interactive REPL with conversational context and inline feedback commands (`+liked`, `+disliked`, `+add`). Token usage and cost printed after each query.
+
+### Deploy Tooling (`tools/merge_user_state.py`)
+
+Streamline runs on more than one machine (local + home server), each accumulating its own watchlist/rating/history changes. This tool merges user-generated state — the `db` form merges `saved_titles`/`title_ratings`/`manual_archive_entries` between two copies of the app's SQLite user-store DB (`data/streamline.db`, i.e. `config.EVENT_DB_PATH` — not `recommender/cache/events.db`, which is unrelated and always empty); the `history` form merges two `query_history.json` files. Both merge "other" into "local" in place, so a deploy never silently clobbers changes made on the other side. Derived/cache data (TMDB metadata, enrichments, provider availability) is untouched since it's rebuilt from setup, not user input.
 
 ## Cache Layout
 
