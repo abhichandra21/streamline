@@ -47,24 +47,9 @@ Streamline ingests your real watch history from Netflix, Prime Video, Apple TV, 
 
 ## How It Works
 
-```
-                    OFFLINE (setup)                              ONLINE (query)
-  ┌──────────────────────────────────────┐   ┌─────────────────────────────────────────────┐
-  │                                      │   │                                             │
-  │  Watch History ──> TMDB Metadata     │   │  "spy thriller" ──> Parse Intent             │
-  │       │                │             │   │        │                  │                  │
-  │       └──> Watch Index │             │   │        ├── TMDB Discover ─┤                  │
-  │              │         │             │   │        └── LLM Suggest ───┤                  │
-  │              v         v             │   │                          v                   │
-  │         LLM Enrichment (fast)        │   │                Watch Filter + Quality Filter │
-  │              │                       │   │                          │                   │
-  │              v                       │   │              Streaming Availability           │
-  │         Taste Profile (reason)       │   │                          │                   │
-  │         [15 genre clusters]          │   │              Rank vs Taste Profile            │
-  │                                      │   │                          │                   │
-  └──────────────────────────────────────┘   │              Personalized Results             │
-                                             └─────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="docs/how-it-works.png" width="800" alt="Streamline offline setup and online query pipeline">
+</p>
 
 1. **Setup (run once)** — parses your watch history, fetches metadata from TMDB, enriches each title with a semantic description (fast model), and builds a full taste profile (reasoning model) from all enriched titles in batches.
 2. **Query (any time)** — ask anything in natural language. The reasoning model parses your intent, finds candidates via TMDB Discover + semantic suggestions, filters out what you've already watched, annotates streaming availability, and ranks results against your taste profile.
