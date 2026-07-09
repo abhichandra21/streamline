@@ -4,53 +4,33 @@
 
 Two-phase LLM pipeline. The offline phase runs once (or on demand) to build persistent artifacts. The online phase runs on every query.
 
+### Offline (setup)
+
+```mermaid
+flowchart TD
+    A["Watch History CSVs"] --> B["Ingestion<br/>Netflix / Prime / Apple TV / Manual"]
+    B --> C["TMDB Metadata Fetch<br/>cached, title-cleanup fallback"]
+    C --> D["Watch Index<br/>TMDB ID + normalized title"]
+    D --> E["Claude Haiku Enrichment<br/>only cached on success"]
+    E --> F["Engagement Scoring<br/>completion + rewatch + recency"]
+    F --> G["Taste Profile - Claude Sonnet<br/>batched, merged prose"]
 ```
-OFFLINE                                      ONLINE
-────────────────────────────────────         ─────────────────────────────────────
-Watch history CSVs                           User query (natural language)
-      |                                            |
-      v                                            v
-  Ingestion                               parse_intent()  <- Claude Sonnet
-  (netflix/prime/manual parsers)                |
-      |                                     QueryIntent
-      v                                     (genres, countries, languages,
-  TMDB metadata fetch                        year range, content_type, top_n,
-  (with title cleanup fallback;              platforms, similar_to, moods...)
-   cached to disk)                                 |
-      |                                            v
-      v                                   +-------------------+
-  Watch index                             | TMDB Discover API |  <- structured filter
-  (tmdb_ids + normalized titles           | (filtered by       |
-   with content type)                     |  intent fields)    |
-      |                                   +--------+----------+
-      v                                            |
-  Claude Haiku enrichment                          |     +---------------------+
-  (2-3 sentence descriptions,                      +---->| Claude suggestions   | <- semantic
-   only cached on success)                         |     | (always-on, uses     |
-      |                                            |     |  taste profile +     |
-      v                                            |     |  similar_to context) |
-  Engagement scoring                               |     +--------+------------+
-  (completion + rewatch + recency;                 |              |
-   true half-life decay)                           v              v
-      |                                     Merge + deduplicate candidates
-      v                                            |
-  Taste profile                                    v
-  (Claude Sonnet processes ALL                Filter watched titles
-   enriched titles in batches,              (content-type-aware)
-   merges into multi-cluster                       |
-   prose summary)                                  v
-                                            Annotate streaming availability
-                                            (TMDB watch providers API, cached)
-                                                   |
-                                                   v
-                                            enrich_batch()  <- Claude Haiku
-                                            (cached descriptions)
-                                                   |
-                                                   v
-                                            rank_candidates()  <- Claude Sonnet
-                                            (query relevance primary,
-                                             taste profile secondary,
-                                             returns top_n with explanations)
+
+### Online (query)
+
+```mermaid
+flowchart TD
+    A["User Query - natural language"] --> B["parse_intent - Claude Sonnet<br/>QueryIntent: genres, moods, similar_to, platforms..."]
+    B --> C1["TMDB Discover<br/>structured filter"]
+    B --> C2["Claude Suggestions<br/>semantic, taste-aware"]
+    C1 --> D["Merge + Deduplicate Candidates"]
+    C2 --> D
+    D --> E["Filter Watched Titles<br/>content-type-aware"]
+    E --> F["Annotate Streaming Availability<br/>TMDB watch providers, cached"]
+    F --> G["enrich_batch - Claude Haiku<br/>cached descriptions"]
+    G --> H["rank_candidates - Claude Sonnet<br/>query relevance primary, taste profile secondary"]
+    WI[("Watch Index")] -. watch history .-> E
+    TP[("Taste Profile")] -. secondary signal .-> H
 ```
 
 ## Components
