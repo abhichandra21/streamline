@@ -42,6 +42,22 @@ CREATE TABLE IF NOT EXISTS manual_archive_entries (
     source           TEXT NOT NULL CHECK (source IN ('web', 'cli', 'feedback_migration'))
 );
 
+CREATE TABLE IF NOT EXISTS show_tracking (
+    tmdb_id               INTEGER PRIMARY KEY,
+    title                 TEXT NOT NULL,
+    state                 TEXT NOT NULL CHECK (state IN ('following', 'ignored')),
+    tracking_from_season  INTEGER,
+    caught_up_season      INTEGER,
+    caught_up_episode     INTEGER,
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL,
+    CHECK (tracking_from_season IS NULL OR tracking_from_season > 0),
+    CHECK (
+        (caught_up_season IS NULL AND caught_up_episode IS NULL)
+        OR (caught_up_season > 0 AND caught_up_episode > 0)
+    )
+);
+
 CREATE TABLE IF NOT EXISTS user_store_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -532,6 +548,123 @@ def list_manual_archive(db_path: str) -> list[dict]:
         conn.close()
 
 
+def follow_show(
+    db_path: str,
+    title: str,
+    tmdb_id: int,
+    tracking_from_season: int,
+) -> None:
+    """Follow a TMDB show from a specific returning season."""
+    if tmdb_id <= 0:
+        raise ValueError("tmdb_id must be positive")
+    if tracking_from_season <= 0:
+        raise ValueError("tracking_from_season must be positive")
+
+    now = _now_iso()
+    conn = _connect(db_path)
+    try:
+        with conn:
+            existing = conn.execute(
+                "SELECT state FROM show_tracking WHERE tmdb_id = ?",
+                (tmdb_id,),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    "INSERT INTO show_tracking "
+                    "(tmdb_id, title, state, tracking_from_season, "
+                    "caught_up_season, caught_up_episode, created_at, updated_at) "
+                    "VALUES (?, ?, 'following', ?, NULL, NULL, ?, ?)",
+                    (tmdb_id, title, tracking_from_season, now, now),
+                )
+            elif existing["state"] == "ignored":
+                conn.execute(
+                    "UPDATE show_tracking SET title = ?, state = 'following', "
+                    "tracking_from_season = ?, caught_up_season = NULL, "
+                    "caught_up_episode = NULL, updated_at = ? WHERE tmdb_id = ?",
+                    (title, tracking_from_season, now, tmdb_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE show_tracking SET title = ?, updated_at = ? WHERE tmdb_id = ?",
+                    (title, now, tmdb_id),
+                )
+    finally:
+        conn.close()
+
+
+def ignore_show(
+    db_path: str,
+    title: str,
+    tmdb_id: int,
+    tracking_from_season: int | None = None,
+) -> None:
+    """Remember an ignored show and its last useful regular season."""
+    if tmdb_id <= 0:
+        raise ValueError("tmdb_id must be positive")
+    if tracking_from_season is not None and tracking_from_season <= 0:
+        raise ValueError("tracking_from_season must be positive")
+
+    now = _now_iso()
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO show_tracking "
+                "(tmdb_id, title, state, tracking_from_season, "
+                "caught_up_season, caught_up_episode, created_at, updated_at) "
+                "VALUES (?, ?, 'ignored', ?, NULL, NULL, ?, ?) "
+                "ON CONFLICT (tmdb_id) DO UPDATE SET "
+                "title = excluded.title, state = 'ignored', "
+                "tracking_from_season = COALESCE("
+                "excluded.tracking_from_season, show_tracking.tracking_from_season), "
+                "caught_up_season = NULL, caught_up_episode = NULL, "
+                "updated_at = excluded.updated_at",
+                (tmdb_id, title, tracking_from_season, now, now),
+            )
+    finally:
+        conn.close()
+
+
+def mark_show_caught_up(
+    db_path: str,
+    tmdb_id: int,
+    season_number: int,
+    episode_number: int,
+) -> None:
+    """Record the latest aired regular episode covered by a caught-up action."""
+    if tmdb_id <= 0 or season_number <= 0 or episode_number <= 0:
+        raise ValueError("tmdb_id, season_number, and episode_number must be positive")
+
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cursor = conn.execute(
+                "UPDATE show_tracking SET caught_up_season = ?, caught_up_episode = ?, "
+                "updated_at = ? WHERE tmdb_id = ? AND state = 'following'",
+                (season_number, episode_number, _now_iso(), tmdb_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"show {tmdb_id} is not followed")
+    finally:
+        conn.close()
+
+
+def list_show_tracking(db_path: str) -> list[dict]:
+    """Return all durable following and ignored choices."""
+    if not Path(db_path).exists():
+        return []
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT tmdb_id, title, state, tracking_from_season, "
+            "caught_up_season, caught_up_episode, created_at, updated_at "
+            "FROM show_tracking ORDER BY title COLLATE NOCASE",
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
 def ensure_user_store(db_path: str, feedback_path: str) -> None:
     """Create tables/indexes and run one-time migration from feedback.json if needed."""
     init_db(db_path)
@@ -555,7 +688,9 @@ def ensure_user_store(db_path: str, feedback_path: str) -> None:
 
         # Check for existing rows (conflict guard)
         row_count = 0
-        for table in ("saved_titles", "title_ratings", "manual_archive_entries"):
+        for table in (
+            "saved_titles", "title_ratings", "manual_archive_entries", "show_tracking",
+        ):
             row_count += conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
         if row_count > 0:

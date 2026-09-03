@@ -457,6 +457,7 @@
         Watchlist
         {% if watchlist_count %}<span class="nav-badge">{{ watchlist_count }}</span>{% endif %}
       </a>
+      <a href="/shows" class="nav-link {% if request.path.startswith('/shows') %}active{% endif %}">Your Shows</a>
       <a href="/history" class="nav-link {% if request.path.startswith('/history') or request.path.startswith('/title') %}active{% endif %}">Archive</a>
     </div>
     <div class="nav-group-system">

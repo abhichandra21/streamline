@@ -107,6 +107,14 @@ def _title_similarity(query: str, candidate: str) -> float:
 _PLAUSIBLE_TITLE_THRESHOLD = 0.5
 
 
+class TmdbRateLimitError(requests.HTTPError):
+    """TMDB rejected a request because its rate limit was reached."""
+
+    def __init__(self, retry_after_seconds: float | None, response=None):
+        super().__init__("TMDB rate limit exceeded", response=response)
+        self.retry_after_seconds = retry_after_seconds
+
+
 def _is_plausible_title_match(source_title: str, candidate: dict) -> bool:
     """Return True if candidate's title or original title plausibly matches
     the source title (checked separately, since the localized title and the
@@ -130,7 +138,17 @@ class TmdbClient:
         if params:
             p.update(params)
         resp = requests.get(f"{TMDB_BASE}/{endpoint}", params=p, timeout=10)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            if resp.status_code != 429:
+                raise
+            retry_after = resp.headers.get("Retry-After")
+            try:
+                retry_after_seconds = max(0.0, float(retry_after))
+            except (TypeError, ValueError):
+                retry_after_seconds = None
+            raise TmdbRateLimitError(retry_after_seconds, response=resp) from exc
         return resp.json()
 
     def _cache_path(self, content_type: str, tmdb_id: int) -> Path:
@@ -398,6 +416,14 @@ class TmdbClient:
     def _fetch_details(self, tmdb_id: int, content_type: str) -> dict:
         endpoint = f"tv/{tmdb_id}" if content_type == "tv" else f"movie/{tmdb_id}"
         return self._get(endpoint, {"append_to_response": "keywords,credits"})
+
+    def fetch_tv_series_details(self, tmdb_id: int) -> dict:
+        """Fetch raw TV-series release data without using the metadata cache."""
+        return self._get(f"tv/{tmdb_id}")
+
+    def fetch_tv_season_details(self, tmdb_id: int, season_number: int) -> dict:
+        """Fetch raw episode release data without using the metadata cache."""
+        return self._get(f"tv/{tmdb_id}/season/{season_number}")
 
     def get_related_titles(
         self,

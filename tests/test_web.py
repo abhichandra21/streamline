@@ -37,6 +37,31 @@ def _csrf_headers():
     return {"X-CSRF-Token": "test-csrf-token"}
 
 
+def _show_sections():
+    return {
+        "ready_now": [{
+            "tmdb_id": 10,
+            "title": "Ready Show",
+            "season_number": 3,
+            "available_episode_count": 2,
+            "latest_aired_episode": 4,
+            "next_air_date": None,
+            "next_episode_number": None,
+            "poster_path": "/ready.jpg",
+        }],
+        "coming_soon": [],
+        "might_be_back": [{
+            "tmdb_id": 20,
+            "title": "Returning Show",
+            "season_number": 2,
+            "air_date": "2026-10-01",
+            "poster_path": "/returning.jpg",
+            "reason": "A new season was announced",
+        }],
+        "finished": [],
+    }
+
+
 # ── Job registry tests ────────────────────────────────────────────────────────
 
 class TestJobRegistry:
@@ -85,6 +110,160 @@ class TestJobRegistry:
     def test_unknown_job_returns_none(self):
         registry = JobRegistry()
         assert registry.get("nonexistent") is None
+
+
+class TestYourShows:
+    def test_page_renders_cached_sections_without_starting_fresh_refresh(self, client, monkeypatch):
+        archive = [{"tmdb_id": 10, "title": "Ready Show", "content_type": "tv"}]
+        monkeypatch.setattr(web, "_show_page_data", lambda: (archive, [], _show_sections()))
+        monkeypatch.setattr(web.show_tracker, "refresh_is_due", lambda *_args: False)
+        monkeypatch.setattr(web, "_shows_job_id", None)
+
+        response = client.get("/shows")
+
+        assert response.status_code == 200
+        assert b"Your Shows" in response.data
+        assert b"Ready Show" in response.data
+        assert b"Returning Show" in response.data
+        assert b"Mark caught up" in response.data
+        assert b"Follow" in response.data
+        assert b'href="/shows"' in response.data
+
+    def test_page_reuses_one_running_refresh_job(self, client, monkeypatch):
+        archive = [{"tmdb_id": 10, "title": "Ready Show", "content_type": "tv"}]
+        monkeypatch.setattr(web, "_show_page_data", lambda: (archive, [], _show_sections()))
+        monkeypatch.setattr(web.show_tracker, "refresh_is_due", lambda *_args: True)
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "tmdb-key")
+        monkeypatch.setattr(web, "_shows_job_id", None)
+        mock_registry = MagicMock()
+        mock_registry.submit.return_value = "shows-job"
+        mock_registry.get.return_value = MagicMock(status="running")
+        monkeypatch.setattr(web, "job_registry", mock_registry)
+
+        first = client.get("/shows")
+        second = client.get("/shows")
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        mock_registry.submit.assert_called_once()
+        assert b"Checking your shows" in second.data
+
+    def test_page_renders_announced_season_and_quiet_caught_up_state(self, client, monkeypatch):
+        sections = _show_sections()
+        sections["coming_soon"] = [{
+            "tmdb_id": 40,
+            "title": "Announced Show",
+            "season_number": 3,
+            "next_air_date": "2026-10-12",
+            "next_episode_number": None,
+            "poster_path": None,
+        }]
+        sections["caught_up"] = [{
+            "tmdb_id": 50,
+            "title": "Caught Up Show",
+            "poster_path": None,
+        }]
+        monkeypatch.setattr(web, "_show_page_data", lambda: ([], [], sections))
+        monkeypatch.setattr(web.show_tracker, "refresh_is_due", lambda *_args: False)
+
+        response = client.get("/shows")
+
+        assert b"Season 3" in response.data
+        assert b"S3ENone" not in response.data
+        assert b"Caught Up Show" in response.data
+        assert b"Caught up" in response.data
+
+    def test_completed_job_is_not_replaced_after_cache_becomes_fresh(self, monkeypatch):
+        archive = [{"tmdb_id": 10, "title": "Ready Show", "content_type": "tv"}]
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "tmdb-key")
+        monkeypatch.setattr(web, "_shows_job_id", "completed-job")
+        refresh_due = MagicMock(side_effect=[True, False])
+        monkeypatch.setattr(web.show_tracker, "refresh_is_due", refresh_due)
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = MagicMock(status="done")
+        monkeypatch.setattr(web, "job_registry", mock_registry)
+
+        job_id = web._ensure_show_refresh(archive, [])
+
+        assert job_id is None
+        mock_registry.submit.assert_not_called()
+
+    def test_follow_derives_title_and_season_from_cached_candidate(self, client, monkeypatch):
+        archive = [{"tmdb_id": 20, "title": "Returning Show", "content_type": "tv"}]
+        monkeypatch.setattr(web, "_show_page_data", lambda: (archive, [], _show_sections()))
+        follow = MagicMock()
+        monkeypatch.setattr(web.user_store, "follow_show", follow)
+
+        response = client.post("/shows/follow", data=_csrf_form(
+            tmdb_id="20", title="Untrusted", tracking_from_season="99",
+        ))
+
+        assert response.status_code == 303
+        follow.assert_called_once_with(
+            web.config.EVENT_DB_PATH, "Returning Show", 20, tracking_from_season=2,
+        )
+
+    def test_ignore_candidate_prevents_future_suggestions(self, client, monkeypatch):
+        archive = [{"tmdb_id": 20, "title": "Returning Show", "content_type": "tv"}]
+        monkeypatch.setattr(web, "_show_page_data", lambda: (archive, [], _show_sections()))
+        ignore = MagicMock()
+        monkeypatch.setattr(web.user_store, "ignore_show", ignore)
+
+        response = client.post("/shows/ignore", data=_csrf_form(tmdb_id="20"))
+
+        assert response.status_code == 303
+        ignore.assert_called_once_with(
+            web.config.EVENT_DB_PATH,
+            "Returning Show",
+            20,
+            tracking_from_season=2,
+        )
+
+    def test_mark_caught_up_uses_latest_aired_episode_from_cache(self, client, monkeypatch):
+        archive = [{"tmdb_id": 10, "title": "Ready Show", "content_type": "tv"}]
+        monkeypatch.setattr(web, "_show_page_data", lambda: (archive, [], _show_sections()))
+        mark = MagicMock()
+        monkeypatch.setattr(web.user_store, "mark_show_caught_up", mark)
+
+        response = client.post("/shows/caught-up", data=_csrf_form(
+            tmdb_id="10", season_number="99", episode_number="99",
+        ))
+
+        assert response.status_code == 303
+        mark.assert_called_once_with(web.config.EVENT_DB_PATH, 10, 3, 4)
+
+    def test_unfollow_derives_title_from_durable_tracking_row(self, client, monkeypatch):
+        tracking = [{"tmdb_id": 10, "title": "Ready Show", "state": "following"}]
+        monkeypatch.setattr(web, "_show_page_data", lambda: ([], tracking, _show_sections()))
+        unfollow = MagicMock()
+        monkeypatch.setattr(web.user_store, "ignore_show", unfollow)
+
+        response = client.post("/shows/unfollow", data=_csrf_form(tmdb_id="10"))
+
+        assert response.status_code == 303
+        unfollow.assert_called_once_with(web.config.EVENT_DB_PATH, "Ready Show", 10)
+
+    def test_ignored_show_can_be_manually_followed_again(self, client, monkeypatch):
+        sections = _show_sections()
+        sections["ignored"] = [{
+            "tmdb_id": 30,
+            "title": "Ignored Show",
+            "season_number": 4,
+            "poster_path": None,
+        }]
+        monkeypatch.setattr(web, "_show_page_data", lambda: ([], [], sections))
+        monkeypatch.setattr(web.show_tracker, "refresh_is_due", lambda *_args: False)
+        follow = MagicMock()
+        monkeypatch.setattr(web.user_store, "follow_show", follow)
+
+        page = client.get("/shows")
+        response = client.post("/shows/refollow", data=_csrf_form(tmdb_id="30"))
+
+        assert b"Follow again" in page.data
+        assert response.status_code == 303
+        follow.assert_called_once_with(
+            web.config.EVENT_DB_PATH, "Ignored Show", 30, tracking_from_season=4,
+        )
 
 
 class TestDeferredConfigReload:
