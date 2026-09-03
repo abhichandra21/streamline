@@ -1,50 +1,112 @@
+{% import "_show_counts.html" as counts %}
+{% macro decision_row(show, csrf_token) -%}
+<article class="show-row show-decision-row">
+  {% if show.poster_path %}
+  <img class="show-poster show-poster--sm" src="https://image.tmdb.org/t/p/w185{{ show.poster_path }}" alt="">
+  {% else %}
+  <div class="show-poster-empty show-poster--sm display">{{ show.title[:1] }}</div>
+  {% endif %}
+  <div class="show-row-body">
+    <h3>{{ show.title }}</h3>
+    <p class="show-card-copy">
+      <span class="show-card-detail">Season {{ show.season_number }}</span> · {{ show.reason }}{% if show.air_date %} {{ show.air_date }}{% endif %}
+    </p>
+  </div>
+  <div class="show-actions">
+    <form class="show-inline-form" action="/shows/follow" method="post"
+          hx-post="/shows/follow" hx-target="closest .show-row" hx-swap="outerHTML">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
+      <button class="btn-teal" type="submit">Follow</button>
+    </form>
+    <form class="show-inline-form" action="/shows/ignore" method="post"
+          hx-post="/shows/ignore" hx-target="closest .show-row" hx-swap="outerHTML">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
+      <button class="btn-quiet" type="submit">Ignore</button>
+    </form>
+  </div>
+</article>
+{%- endmacro %}
 <div id="shows-content"
   {% if refreshing and job_id %}
   hx-get="/shows/jobs/{{ job_id }}/poll"
   hx-trigger="every 2s"
   hx-swap="outerHTML"
   {% endif %}>
-  {% if refreshing %}
-  <div class="shows-status mono">
-    <span class="shows-spinner"></span>
-    <span>Checking your shows. Cached results stay available.</span>
+
+  {# ── State bar: answers "is there anything for me?" before any scroll ── #}
+  <div class="shows-statebar">
+    {{ counts.tally(sections, checked_label) }}
+    {% if refreshing %}
+    <span class="shows-status mono">
+      <span class="shows-spinner"></span>
+      {% if progress %}
+      <span>Checking {{ progress[0] }} of {{ progress[1] }}</span>
+      {% else %}
+      <span>Checking your shows</span>
+      {% endif %}
+    </span>
+    {% endif %}
   </div>
+
+  {% if refreshing %}
+  <div class="shows-progress" role="progressbar"
+       {% if progress %}
+       aria-valuenow="{{ progress[0] }}" aria-valuemin="0" aria-valuemax="{{ progress[1] }}"
+       {% endif %}
+       aria-label="Refreshing show releases">
+    {% if progress %}
+    <span class="shows-progress-fill"
+          style="width: {{ (progress[0] / progress[1] * 100)|round(1) }}%"></span>
+    {% else %}
+    <span class="shows-progress-fill shows-progress-fill--indeterminate"></span>
+    {% endif %}
+  </div>
+  <p class="shows-progress-note mono">Cached results stay available while this runs.</p>
   {% elif refresh_error %}
-  <div class="shows-status mono"><span>{{ refresh_error }}</span></div>
+  <div class="shows-status shows-status--error mono"><span>{{ refresh_error }}</span></div>
   {% endif %}
 
+  {# ── 1. Ready now: the payoff. Heaviest cards on the page. ── #}
   <section class="shows-section" aria-labelledby="ready-now-heading">
     <div class="shows-section-heading">
       <h2 id="ready-now-heading">Ready now</h2>
-      <span class="shows-count mono">{{ sections.ready_now|length }} {{ "show" if sections.ready_now|length == 1 else "shows" }}</span>
+      {{ counts.ready(sections) }}
     </div>
     {% if sections.ready_now %}
     <div class="shows-list">
       {% for show in sections.ready_now %}
-      <article class="show-card">
+      <article class="show-row show-card show-card--ready">
         {% if show.poster_path %}
         <img class="show-poster" src="https://image.tmdb.org/t/p/w185{{ show.poster_path }}" alt="">
         {% else %}
         <div class="show-poster-empty display">{{ show.title[:1] }}</div>
         {% endif %}
-        <div>
+        <div class="show-row-body">
           <h3>{{ show.title }}</h3>
+          <p class="show-ready-count mono">
+            {{ show.available_episode_count }} {{ "episode" if show.available_episode_count == 1 else "episodes" }} ready
+          </p>
           <p class="show-card-copy">
-            <span class="show-card-detail">{{ show.available_episode_count }} {{ "episode" if show.available_episode_count == 1 else "episodes" }} ready</span>
             through S{{ show.season_number }}E{{ show.latest_aired_episode }}
             {% if show.next_air_date %} · Next episode {{ show.next_air_date }}{% endif %}
           </p>
         </div>
         <div class="show-actions">
-          <form class="show-inline-form" action="/shows/caught-up" method="post">
+          <form class="show-inline-form" action="/shows/caught-up" method="post"
+                hx-post="/shows/caught-up" hx-target="closest .show-row" hx-swap="outerHTML">
+            <input type="hidden" name="variant" value="card-lg">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
             <button class="btn-teal" type="submit">Mark caught up</button>
           </form>
-          <form class="show-inline-form" action="/shows/unfollow" method="post">
+          <form class="show-inline-form" action="/shows/unfollow" method="post"
+                hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML">
+            <input type="hidden" name="variant" value="card-lg">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
-            <button class="btn-ghost" type="submit">Unfollow</button>
+            <button class="btn-quiet" type="submit">Unfollow</button>
           </form>
         </div>
       </article>
@@ -55,41 +117,75 @@
     {% endif %}
   </section>
 
-  <section class="shows-section" aria-labelledby="coming-soon-heading">
+  {# ── 2. The decision queue: finite, blocking, drains in place. ── #}
+  {% if sections.might_be_back %}
+  <section class="shows-decisions" aria-labelledby="might-be-back-heading">
+    <div class="shows-decisions-heading">
+      <h2 id="might-be-back-heading">Worth following?</h2>
+      {{ counts.decisions(sections) }}
+    </div>
+    {# A backlog of dozens is paralysing and would bury everything below it,
+       so only a completable batch is open at a time. #}
+    {% set batch = 8 %}
+    <div class="shows-decisions-list">
+      {% for show in sections.might_be_back[:batch] %}
+      {{ decision_row(show, csrf_token) }}
+      {% endfor %}
+    </div>
+    {% if sections.might_be_back|length > batch %}
+    <details class="shows-decisions-rest">
+      <summary class="mono">
+        Show the remaining {{ sections.might_be_back|length - batch }}
+      </summary>
+      <div class="shows-decisions-list">
+        {% for show in sections.might_be_back[batch:] %}
+        {{ decision_row(show, csrf_token) }}
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+  </section>
+  {% else %}
+  <p class="shows-decisions-clear mono">No returning shows to decide on right now.</p>
+  {% endif %}
+
+  {# ── 3. Coming soon: a calendar, not an inbox. Dense dated lines. ── #}
+  <section class="shows-section shows-section--soon" aria-labelledby="coming-soon-heading">
     <div class="shows-section-heading">
       <h2 id="coming-soon-heading">Coming soon</h2>
       <span class="shows-count mono">{{ sections.coming_soon|length }} {{ "show" if sections.coming_soon|length == 1 else "shows" }}</span>
     </div>
     {% if sections.coming_soon %}
-    <div class="shows-list">
-      {% for show in sections.coming_soon %}
-      <article class="show-card">
-        {% if show.poster_path %}
-        <img class="show-poster" src="https://image.tmdb.org/t/p/w185{{ show.poster_path }}" alt="">
-        {% else %}
-        <div class="show-poster-empty display">{{ show.title[:1] }}</div>
-        {% endif %}
-        <div>
-          <h3>{{ show.title }}</h3>
-          <p class="show-card-copy">
-            {% if show.next_air_date %}
-            {% if show.next_episode_number %}
-            <span class="show-card-detail">S{{ show.season_number }}E{{ show.next_episode_number }}</span> arrives {{ show.next_air_date }}
-            {% else %}
-            <span class="show-card-detail">Season {{ show.season_number }}</span> arrives {{ show.next_air_date }}
-            {% endif %}
-            {% else %}
-            <span class="show-card-detail">Season {{ show.season_number }}</span> is in the works. No date yet.
-            {% endif %}
-          </p>
-        </div>
-        <div class="show-actions">
-          <form class="show-inline-form" action="/shows/unfollow" method="post">
-            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-            <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
-            <button class="btn-ghost" type="submit">Unfollow</button>
-          </form>
-        </div>
+    <div class="soon-list">
+      {% for show in sections.coming_soon|selectattr("next_air_date")|sort(attribute="next_air_date") %}
+      <article class="show-row soon-row">
+        <span class="soon-date mono">{{ show.next_air_date }}</span>
+        <span class="soon-title">{{ show.title }}</span>
+        <span class="soon-slug mono">
+          {% if show.next_episode_number %}S{{ show.season_number }}E{{ show.next_episode_number }}
+          {% else %}Season {{ show.season_number }}{% endif %}
+        </span>
+        <form class="show-inline-form" action="/shows/unfollow" method="post"
+              hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML">
+          <input type="hidden" name="variant" value="line">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
+          <button class="btn-quiet btn-quiet--bare" type="submit" title="Unfollow {{ show.title }}">Unfollow</button>
+        </form>
+      </article>
+      {% endfor %}
+      {% for show in sections.coming_soon|rejectattr("next_air_date") %}
+      <article class="show-row soon-row soon-row--undated">
+        <span class="soon-date mono">no date</span>
+        <span class="soon-title">{{ show.title }}</span>
+        <span class="soon-slug mono">Season {{ show.season_number }}</span>
+        <form class="show-inline-form" action="/shows/unfollow" method="post"
+              hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML">
+          <input type="hidden" name="variant" value="line">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
+          <button class="btn-quiet btn-quiet--bare" type="submit" title="Unfollow {{ show.title }}">Unfollow</button>
+        </form>
       </article>
       {% endfor %}
     </div>
@@ -98,94 +194,61 @@
     {% endif %}
   </section>
 
-  <section class="shows-section" aria-labelledby="might-be-back-heading">
-    <div class="shows-section-heading">
-      <h2 id="might-be-back-heading">Might be back</h2>
-      <span class="shows-count mono">{{ sections.might_be_back|length }} {{ "show" if sections.might_be_back|length == 1 else "shows" }}</span>
-    </div>
-    {% if sections.might_be_back %}
-    <div class="shows-list">
-      {% for show in sections.might_be_back %}
-      <article class="show-card">
-        {% if show.poster_path %}
-        <img class="show-poster" src="https://image.tmdb.org/t/p/w185{{ show.poster_path }}" alt="">
-        {% else %}
-        <div class="show-poster-empty display">{{ show.title[:1] }}</div>
-        {% endif %}
-        <div>
-          <h3>{{ show.title }}</h3>
-          <p class="show-card-copy">
-            <span class="show-card-detail">Season {{ show.season_number }}</span> · {{ show.reason }}{% if show.air_date %} {{ show.air_date }}{% endif %}
-          </p>
-        </div>
-        <div class="show-actions">
-          <form class="show-inline-form" action="/shows/follow" method="post">
-            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-            <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
-            <button class="btn-teal" type="submit">Follow</button>
-          </form>
-          <form class="show-inline-form" action="/shows/ignore" method="post">
-            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-            <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
-            <button class="btn-ghost" type="submit">Ignore</button>
-          </form>
-        </div>
-      </article>
-      {% endfor %}
-    </div>
-    {% else %}
-    <div class="shows-empty">No returning shows found in the current lookback window.</div>
-    {% endif %}
-  </section>
-
+  {# ── 4. Housekeeping, out of the way. ── #}
   {% if sections.finished or sections.get("caught_up") or sections.get("ignored") %}
   <details class="shows-management">
     <summary class="mono">Manage finished and ignored shows</summary>
     <div class="shows-list">
       {% for show in sections.finished %}
-      <article class="show-card">
+      <article class="show-row show-card">
         <div class="show-poster-empty display">{{ show.title[:1] }}</div>
-        <div><h3>{{ show.title }}</h3><p class="show-card-copy">Finished</p></div>
+        <div class="show-row-body"><h3>{{ show.title }}</h3><p class="show-card-copy">Finished</p></div>
         <div class="show-actions">
-          <form class="show-inline-form" action="/shows/unfollow" method="post">
+          <form class="show-inline-form" action="/shows/unfollow" method="post"
+                hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML">
+            <input type="hidden" name="variant" value="card">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
-            <button class="btn-ghost" type="submit">Unfollow</button>
+            <button class="btn-quiet" type="submit">Unfollow</button>
           </form>
         </div>
       </article>
       {% endfor %}
       {% for show in sections.get("caught_up", []) %}
-      <article class="show-card">
+      <article class="show-row show-card">
         {% if show.poster_path %}
         <img class="show-poster" src="https://image.tmdb.org/t/p/w185{{ show.poster_path }}" alt="">
         {% else %}
         <div class="show-poster-empty display">{{ show.title[:1] }}</div>
         {% endif %}
-        <div><h3>{{ show.title }}</h3><p class="show-card-copy">Caught up</p></div>
+        <div class="show-row-body"><h3>{{ show.title }}</h3><p class="show-card-copy">Caught up</p></div>
         <div class="show-actions">
-          <form class="show-inline-form" action="/shows/unfollow" method="post">
+          <form class="show-inline-form" action="/shows/unfollow" method="post"
+                hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML">
+            <input type="hidden" name="variant" value="card">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
-            <button class="btn-ghost" type="submit">Unfollow</button>
+            <button class="btn-quiet" type="submit">Unfollow</button>
           </form>
         </div>
       </article>
       {% endfor %}
       {% for show in sections.get("ignored", []) %}
-      <article class="show-card">
+      <article class="show-row show-card">
         {% if show.poster_path %}
         <img class="show-poster" src="https://image.tmdb.org/t/p/w185{{ show.poster_path }}" alt="">
         {% else %}
         <div class="show-poster-empty display">{{ show.title[:1] }}</div>
         {% endif %}
-        <div><h3>{{ show.title }}</h3><p class="show-card-copy">Ignored</p></div>
+        <div class="show-row-body"><h3>{{ show.title }}</h3><p class="show-card-copy">Ignored</p></div>
         <div class="show-actions">
           {% if show.season_number %}
-          <form class="show-inline-form" action="/shows/refollow" method="post">
+          <form class="show-inline-form" action="/shows/refollow" method="post"
+                hx-post="/shows/refollow" hx-target="closest .show-row" hx-swap="outerHTML">
+            <input type="hidden" name="variant" value="card">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
-            <button class="btn-ghost" type="submit">Follow again</button>
+            <button class="btn-quiet" type="submit">Follow again</button>
           </form>
           {% else %}
           <span class="show-card-copy">No cached season</span>

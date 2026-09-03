@@ -266,6 +266,163 @@ class TestYourShows:
         )
 
 
+class TestYourShowsInPlaceActions:
+    """Actions swap the acted-on row in place so the page never moves."""
+
+    def _client(self, client, monkeypatch, sections=None):
+        sections = sections or _show_sections()
+        archive = [
+            {"tmdb_id": 10, "title": "Ready Show", "content_type": "tv"},
+            {"tmdb_id": 20, "title": "Returning Show", "content_type": "tv"},
+        ]
+        tracking = [{"tmdb_id": 10, "title": "Ready Show", "state": "following"}]
+        monkeypatch.setattr(web, "_show_page_data", lambda: (archive, tracking, sections))
+        monkeypatch.setattr(web.show_tracker, "refresh_is_due", lambda *_args: False)
+        return sections
+
+    def test_sections_are_ordered_by_how_much_they_need_from_you(self, client, monkeypatch):
+        self._client(client, monkeypatch)
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert body.index("Ready now") < body.index("Worth following?") < body.index("Coming soon")
+
+    def test_state_bar_reports_totals_before_any_scrolling(self, client, monkeypatch):
+        self._client(client, monkeypatch)
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert 'id="shows-tally"' in body
+        assert "<strong>1</strong> ready" in body
+        assert "<strong>1</strong> decision" in body
+
+    def test_htmx_follow_returns_settled_row_instead_of_redirect(self, client, monkeypatch):
+        self._client(client, monkeypatch)
+        monkeypatch.setattr(web.user_store, "follow_show", MagicMock())
+
+        response = client.post(
+            "/shows/follow",
+            data=_csrf_form(tmdb_id="20"),
+            headers={"HX-Request": "true"},
+        )
+        body = response.get_data(as_text=True)
+
+        assert response.status_code == 200
+        assert "show-row--settled" in body
+        assert "Following from S2" in body
+        # The opposite action stays reachable without a page load.
+        assert 'hx-post="/shows/unfollow"' in body
+
+    def test_htmx_ignore_offers_the_reverse_action(self, client, monkeypatch):
+        self._client(client, monkeypatch)
+        monkeypatch.setattr(web.user_store, "ignore_show", MagicMock())
+
+        body = client.post(
+            "/shows/ignore",
+            data=_csrf_form(tmdb_id="20"),
+            headers={"HX-Request": "true"},
+        ).get_data(as_text=True)
+
+        assert "Ignored" in body
+        assert 'hx-post="/shows/refollow"' in body
+
+    def test_settled_row_resends_counts_out_of_band(self, client, monkeypatch):
+        self._client(client, monkeypatch)
+        monkeypatch.setattr(web.user_store, "follow_show", MagicMock())
+
+        body = client.post(
+            "/shows/follow",
+            data=_csrf_form(tmdb_id="20"),
+            headers={"HX-Request": "true"},
+        ).get_data(as_text=True)
+
+        assert body.count('hx-swap-oob="true"') == 3
+        assert 'id="count-decisions"' in body
+
+    def test_plain_post_still_redirects_for_the_no_javascript_path(self, client, monkeypatch):
+        self._client(client, monkeypatch)
+        monkeypatch.setattr(web.user_store, "follow_show", MagicMock())
+
+        response = client.post("/shows/follow", data=_csrf_form(tmdb_id="20"))
+
+        assert response.status_code == 303
+
+    def test_coming_soon_is_dated_and_undated_shows_sort_last(self, client, monkeypatch):
+        sections = _show_sections()
+        sections["coming_soon"] = [
+            {"tmdb_id": 41, "title": "Later Show", "season_number": 2,
+             "next_air_date": "2026-11-02", "next_episode_number": 1, "poster_path": None},
+            {"tmdb_id": 42, "title": "Undated Show", "season_number": 4,
+             "next_air_date": None, "next_episode_number": None, "poster_path": None},
+            {"tmdb_id": 40, "title": "Sooner Show", "season_number": 5,
+             "next_air_date": "2026-09-24", "next_episode_number": 1, "poster_path": None},
+        ]
+        self._client(client, monkeypatch, sections)
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert body.index("Sooner Show") < body.index("Later Show") < body.index("Undated Show")
+
+    def test_empty_decision_queue_collapses_to_one_line(self, client, monkeypatch):
+        sections = _show_sections()
+        sections["might_be_back"] = []
+        self._client(client, monkeypatch, sections)
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert "shows-decisions-clear" in body
+        assert '<div class="shows-decisions-list">' not in body
+
+
+class TestYourShowsRefreshProgress:
+    def test_running_refresh_renders_a_determinate_bar(self, client, monkeypatch):
+        monkeypatch.setattr(web, "_show_page_data", lambda: ([], [], _show_sections()))
+        job = MagicMock(status="running", progress=(4, 12))
+        registry = MagicMock()
+        registry.get.return_value = job
+        monkeypatch.setattr(web, "job_registry", registry)
+
+        body = client.get("/shows/jobs/some-job/poll").get_data(as_text=True)
+
+        assert "Checking 4 of 12" in body
+        assert 'aria-valuenow="4"' in body
+        assert 'aria-valuemax="12"' in body
+        assert "width: 33.3%" in body
+
+    def test_refresh_without_a_count_falls_back_to_an_indeterminate_bar(self, client, monkeypatch):
+        monkeypatch.setattr(web, "_show_page_data", lambda: ([], [], _show_sections()))
+        job = MagicMock(status="running", progress=None)
+        registry = MagicMock()
+        registry.get.return_value = job
+        monkeypatch.setattr(web, "job_registry", registry)
+
+        body = client.get("/shows/jobs/some-job/poll").get_data(as_text=True)
+
+        assert "Checking your shows" in body
+        assert "shows-progress-fill--indeterminate" in body
+
+    @pytest.mark.parametrize("value", [None, (1,), "4/12", (4, 0), ("a", "b"), MagicMock()])
+    def test_unusable_progress_values_are_ignored(self, value):
+        assert web._normalize_progress(value) is None
+
+    def test_progress_is_clamped_to_the_reported_total(self):
+        assert web._normalize_progress((99, 12)) == (12, 12)
+
+    def test_refresh_job_reports_progress_onto_the_job(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(web, "TmdbClient", MagicMock())
+        monkeypatch.setattr(
+            web.show_tracker,
+            "refresh_release_cache",
+            lambda *a, progress=None, **kw: (progress(3, 7), captured.update(done=True))[1],
+        )
+        job = Job(id="j", label="refresh", status="running", started_at=0.0)
+
+        web._run_show_refresh([], [], job=job)
+
+        assert job.progress == (3, 7)
+
+
 class TestDeferredConfigReload:
     @patch("recommender.web.importlib.reload")
     @patch("recommender.web.job_registry.running_jobs")

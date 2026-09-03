@@ -1,0 +1,14 @@
+{# Counter fragments. Rendered inline on page load, and re-sent out-of-band after
+   an in-place action so a settled row never leaves a stale number beside it. #}
+
+{% macro ready(sections, oob=false) -%}
+<span id="count-ready" class="shows-count mono"{% if oob %} hx-swap-oob="true"{% endif %}>{{ sections.ready_now|length }} {{ "show" if sections.ready_now|length == 1 else "shows" }}</span>
+{%- endmacro %}
+
+{% macro decisions(sections, oob=false) -%}
+<span id="count-decisions" class="shows-count mono"{% if oob %} hx-swap-oob="true"{% endif %}>{% if sections.might_be_back %}{{ sections.might_be_back|length }} left{% else %}all clear{% endif %}</span>
+{%- endmacro %}
+
+{% macro tally(sections, checked_label, oob=false) -%}
+<span id="shows-tally" class="shows-tally mono"{% if oob %} hx-swap-oob="true"{% endif %}><strong>{{ sections.ready_now|length }}</strong> ready<span class="shows-tally-sep">·</span><strong>{{ sections.might_be_back|length }}</strong> {{ "decision" if sections.might_be_back|length == 1 else "decisions" }}{% if checked_label %}<span class="shows-tally-sep">·</span><span class="shows-tally-quiet">{{ checked_label }}</span>{% endif %}</span>
+{%- endmacro %}

@@ -144,6 +144,12 @@ def _eligible_archive(archive_entries: list[dict], tracking_rows: list[dict]) ->
     }
 
 
+def last_refresh_at(cache_dir: str | Path) -> datetime | None:
+    """Return when the last full discovery refresh completed, if ever."""
+    manifest = _read_json(_manifest_path(cache_dir)) or {}
+    return _parse_datetime(manifest.get("full_refresh_at"))
+
+
 def refresh_is_due(
     archive_entries: list[dict],
     tracking_rows: list[dict],
@@ -309,8 +315,13 @@ def refresh_release_cache(
     now: datetime | None = None,
     sleep=time.sleep,
     lookback_days: int = 730,
+    progress=None,
 ) -> dict:
-    """Refresh due release snapshots, preserving cached data on failures."""
+    """Refresh due release snapshots, preserving cached data on failures.
+
+    progress, when given, is called with (completed, total) after each show so
+    callers can surface how far along the refresh is.
+    """
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     manifest = _read_json(_manifest_path(cache_dir)) or {}
     last_full_refresh = _parse_datetime(manifest.get("full_refresh_at"))
@@ -351,7 +362,10 @@ def refresh_release_cache(
     result = {"refreshed": 0, "failed": 0, "aborted": False, "full_scan": full_scan}
     failed_ids = set() if full_scan else set(previous_failed_ids)
     paced = _PacedRequests(sleep)
-    for tmdb_id in targets:
+    total = len(targets)
+    if progress:
+        progress(0, total)
+    for completed, tmdb_id in enumerate(targets, start=1):
         try:
             snapshot = _build_snapshot(
                 eligible[tmdb_id],
@@ -370,11 +384,15 @@ def refresh_release_cache(
             log.warning("Release refresh failed for TMDB TV %d: %s", tmdb_id, exc)
             result["failed"] += 1
             failed_ids.add(tmdb_id)
+            if progress:
+                progress(completed, total)
             continue
         _write_json(_snapshot_path(cache_dir, tmdb_id), snapshot)
         snapshots[tmdb_id] = snapshot
         result["refreshed"] += 1
         failed_ids.discard(tmdb_id)
+        if progress:
+            progress(completed, total)
 
     if full_scan or failed_retry_due or result["failed"]:
         updated_manifest = dict(manifest)

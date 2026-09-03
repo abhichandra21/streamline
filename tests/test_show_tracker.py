@@ -5,6 +5,7 @@ from recommender.tmdb_client import TmdbRateLimitError
 
 from recommender.show_tracker import (
     build_sections,
+    last_refresh_at,
     load_snapshots,
     merge_archive_entries,
     refresh_is_due,
@@ -747,3 +748,75 @@ def test_release_requests_are_spaced_by_half_a_second(tmp_path):
     )
 
     assert waits == [0.5]
+
+
+def test_refresh_reports_progress_for_every_target_including_failures(tmp_path):
+    archive = [
+        {"tmdb_id": 1, "title": "One", "content_type": "tv", "last_watched": "2024-01-01"},
+        {"tmdb_id": 2, "title": "Two", "content_type": "tv", "last_watched": "2024-01-01"},
+        {"tmdb_id": 3, "title": "Three", "content_type": "tv", "last_watched": "2024-01-01"},
+    ]
+
+    class _PartlyBrokenClient(_ReleaseClient):
+        def fetch_tv_series_details(self, tmdb_id):
+            if tmdb_id == 2:
+                raise RuntimeError("upstream is unhappy")
+            return super().fetch_tv_series_details(tmdb_id)
+
+    client = _PartlyBrokenClient({
+        1: _series(1, "One"),
+        3: _series(3, "Three"),
+    })
+    seen = []
+
+    result = refresh_release_cache(
+        archive,
+        [],
+        client,
+        tmp_path,
+        now=datetime(2026, 9, 3, tzinfo=timezone.utc),
+        sleep=lambda _seconds: None,
+        progress=lambda completed, total: seen.append((completed, total)),
+    )
+
+    assert result["refreshed"] == 2
+    assert result["failed"] == 1
+    # Starts at zero so the bar can render before the first request returns,
+    # then advances once per show whether it succeeded or failed.
+    assert seen == [(0, 3), (1, 3), (2, 3), (3, 3)]
+
+
+def test_refresh_progress_is_optional(tmp_path):
+    archive = [{"tmdb_id": 1, "title": "One", "content_type": "tv", "last_watched": "2024-01-01"}]
+    client = _ReleaseClient({1: _series(1, "One")})
+
+    result = refresh_release_cache(
+        archive,
+        [],
+        client,
+        tmp_path,
+        now=datetime(2026, 9, 3, tzinfo=timezone.utc),
+        sleep=lambda _seconds: None,
+    )
+
+    assert result["refreshed"] == 1
+
+
+def test_last_refresh_at_reads_the_recorded_full_scan_time(tmp_path):
+    archive = [{"tmdb_id": 1, "title": "One", "content_type": "tv", "last_watched": "2024-01-01"}]
+    client = _ReleaseClient({1: _series(1, "One")})
+    now = datetime(2026, 9, 3, 12, 30, tzinfo=timezone.utc)
+
+    assert last_refresh_at(tmp_path) is None
+
+    refresh_release_cache(
+        archive, [], client, tmp_path, now=now, sleep=lambda _seconds: None,
+    )
+
+    assert last_refresh_at(tmp_path) == now
+
+
+def test_last_refresh_at_survives_a_missing_or_unreadable_manifest(tmp_path):
+    assert last_refresh_at(tmp_path / "nope") is None
+    (tmp_path / "manifest.json").write_text("{not json")
+    assert last_refresh_at(tmp_path) is None

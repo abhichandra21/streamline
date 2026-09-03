@@ -326,13 +326,23 @@ def _show_page_data() -> tuple[list[dict], list[dict], dict[str, list[dict]]]:
     return archive_entries, tracking_rows, sections
 
 
-def _run_show_refresh(archive_entries: list[dict], tracking_rows: list[dict]) -> dict:
+def _run_show_refresh(
+    archive_entries: list[dict],
+    tracking_rows: list[dict],
+    job=None,
+) -> dict:
     client = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+
+    def report(completed: int, total: int) -> None:
+        if job is not None:
+            job.progress = (completed, total)
+
     return show_tracker.refresh_release_cache(
         archive_entries,
         tracking_rows,
         client,
         config.RELEASE_CACHE_DIR,
+        progress=report,
         lookback_days=config.RETURNING_SHOWS_LOOKBACK_DAYS,
     )
 
@@ -366,12 +376,112 @@ def _ensure_show_refresh(archive_entries: list[dict], tracking_rows: list[dict])
             archive_entries,
             tracking_rows,
             label="refreshing show releases",
+            pass_job=True,
         )
         return _shows_job_id
 
 
+def _shows_checked_label() -> str | None:
+    """Human phrasing for when the release cache was last fully refreshed."""
+    checked_at = show_tracker.last_refresh_at(config.RELEASE_CACHE_DIR)
+    if not checked_at:
+        return None
+    minutes = int((datetime.now(timezone.utc) - checked_at).total_seconds() // 60)
+    if minutes < 1:
+        return "checked just now"
+    if minutes < 60:
+        return f"checked {minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"checked {hours}h ago"
+    days = hours // 24
+    return "checked yesterday" if days == 1 else f"checked {days}d ago"
+
+
+def _normalize_progress(progress) -> tuple[int, int] | None:
+    """Accept only a usable (completed, total) pair so templates can trust it."""
+    if not isinstance(progress, (tuple, list)) or len(progress) != 2:
+        return None
+    completed, total = progress
+    if not isinstance(completed, int) or not isinstance(total, int) or total <= 0:
+        return None
+    return min(completed, total), total
+
+
+def _render_shows_content(
+    sections: dict[str, list[dict]],
+    job_id: str | None,
+    refreshing: bool,
+    refresh_error: str | None,
+    progress=None,
+    template: str = "_shows_content.html",
+) -> str:
+    return render_template(
+        template,
+        sections=sections,
+        job_id=job_id,
+        refreshing=refreshing,
+        refresh_error=refresh_error,
+        progress=_normalize_progress(progress),
+        checked_label=_shows_checked_label(),
+    )
+
+
+_SETTLED_VARIANTS = ("card", "card-lg", "row", "line")
+
+
+def _settled_variant() -> str:
+    """Which shape the settled row must match to avoid reflowing the list.
+
+    The browser knows which surface the action came from, so the form declares
+    it. Values are whitelisted because this arrives as form input.
+    """
+    variant = request.form.get("variant", "row")
+    return variant if variant in _SETTLED_VARIANTS else "row"
+
+
+def _settled_show_row(
+    card: dict,
+    state_label: str,
+    tone: str,
+    flip_action: str | None = None,
+    flip_label: str | None = None,
+) -> str:
+    """Render an acted-on show as a same-height settled row.
+
+    Keeping the row in place means the list never reflows under the pointer, so
+    a run of follow/ignore decisions does not move the page. Counters are sent
+    out-of-band from freshly read state so they never disagree with the rows.
+    """
+    _, _, sections = _show_page_data()
+    return render_template(
+        "_show_row_settled.html",
+        show=card,
+        state_label=state_label,
+        tone=tone,
+        flip_action=flip_action,
+        flip_label=flip_label,
+        variant=_settled_variant(),
+        sections=sections,
+        checked_label=_shows_checked_label(),
+    )
+
+
+def _is_htmx() -> bool:
+    return request.headers.get("HX-Request") == "true"
+
+
 def _find_show_card(sections: dict[str, list[dict]], section: str, tmdb_id: int) -> dict | None:
     return next((card for card in sections[section] if card["tmdb_id"] == tmdb_id), None)
+
+
+def _show_poster(sections: dict[str, list[dict]], tmdb_id: int) -> str | None:
+    """Find cached artwork for a show in whichever section still lists it."""
+    for cards in sections.values():
+        for card in cards:
+            if card.get("tmdb_id") == tmdb_id and card.get("poster_path"):
+                return card["poster_path"]
+    return None
 
 
 def _show_action_id() -> int:
@@ -673,12 +783,14 @@ def history() -> str:
 def shows_page() -> str:
     archive_entries, tracking_rows, sections = _show_page_data()
     job_id = _ensure_show_refresh(archive_entries, tracking_rows)
-    return render_template(
-        "shows.html",
-        sections=sections,
+    job = job_registry.get(job_id) if job_id else None
+    return _render_shows_content(
+        sections,
         job_id=job_id,
         refreshing=bool(job_id),
         refresh_error=None,
+        progress=job.progress if job else None,
+        template="shows.html",
     )
 
 
@@ -687,12 +799,12 @@ def poll_shows_job(job_id: str) -> str:
     job = job_registry.get(job_id)
     _, _, sections = _show_page_data()
     if job and job.status in ("pending", "running"):
-        return render_template(
-            "_shows_content.html",
-            sections=sections,
+        return _render_shows_content(
+            sections,
             job_id=job_id,
             refreshing=True,
             refresh_error=None,
+            progress=job.progress,
         )
 
     refresh_error = None
@@ -702,9 +814,8 @@ def poll_shows_job(job_id: str) -> str:
         refresh_error = "The refresh failed. Cached results are still available."
     elif job.result and job.result.get("aborted"):
         refresh_error = "TMDB asked us to slow down. Cached results are shown."
-    return render_template(
-        "_shows_content.html",
-        sections=sections,
+    return _render_shows_content(
+        sections,
         job_id=None,
         refreshing=False,
         refresh_error=refresh_error,
@@ -727,6 +838,14 @@ def follow_show() -> Response:
         tmdb_id,
         tracking_from_season=card["season_number"],
     )
+    if _is_htmx():
+        return _settled_show_row(
+            card,
+            f"Following from S{card['season_number']}",
+            tone="teal",
+            flip_action="/shows/unfollow",
+            flip_label="Ignore instead",
+        )
     return redirect(url_for("shows_page"), code=303)
 
 
@@ -746,6 +865,14 @@ def ignore_show() -> Response:
         tmdb_id,
         tracking_from_season=card["season_number"],
     )
+    if _is_htmx():
+        return _settled_show_row(
+            card,
+            "Ignored",
+            tone="muted",
+            flip_action="/shows/refollow",
+            flip_label="Follow instead",
+        )
     return redirect(url_for("shows_page"), code=303)
 
 
@@ -765,6 +892,14 @@ def refollow_show() -> Response:
         tmdb_id,
         tracking_from_season=card["season_number"],
     )
+    if _is_htmx():
+        return _settled_show_row(
+            card,
+            f"Following from S{card['season_number']}",
+            tone="teal",
+            flip_action="/shows/unfollow",
+            flip_label="Ignore instead",
+        )
     return redirect(url_for("shows_page"), code=303)
 
 
@@ -784,6 +919,14 @@ def catch_up_show() -> Response:
         card["season_number"],
         card["latest_aired_episode"],
     )
+    if _is_htmx():
+        return _settled_show_row(
+            card,
+            f"Caught up through S{card['season_number']}E{card['latest_aired_episode']}",
+            tone="teal",
+            flip_action="/shows/unfollow",
+            flip_label="Unfollow",
+        )
     return redirect(url_for("shows_page"), code=303)
 
 
@@ -793,7 +936,7 @@ def unfollow_show() -> Response:
         tmdb_id = _show_action_id()
     except ValueError as exc:
         return Response(str(exc), status=400)
-    _, tracking_rows, _ = _show_page_data()
+    _, tracking_rows, sections = _show_page_data()
     row = next(
         (
             tracked
@@ -805,6 +948,14 @@ def unfollow_show() -> Response:
     if row is None:
         return Response("Show is not followed", status=404)
     user_store.ignore_show(config.EVENT_DB_PATH, row["title"], tmdb_id)
+    if _is_htmx():
+        return _settled_show_row(
+            {**row, "poster_path": _show_poster(sections, tmdb_id)},
+            "No longer following",
+            tone="muted",
+            flip_action="/shows/refollow",
+            flip_label="Follow again",
+        )
     return redirect(url_for("shows_page"), code=303)
 
 

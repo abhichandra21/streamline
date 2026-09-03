@@ -24,6 +24,8 @@ class Job:
     finished_at: float | None = None
     result: Any = None
     error: str | None = None
+    # (completed, total) for jobs that report progress; None when unknown.
+    progress: tuple[int, int] | None = None
 
     @property
     def elapsed_seconds(self) -> float:
@@ -45,12 +47,26 @@ class JobRegistry:
         self._lock = threading.Lock()
         self._completion_callbacks: list[Callable[[Job], None]] = []
 
-    def submit(self, fn: Callable[..., Any], *args: Any, label: str = "job", **kwargs: Any) -> str:
+    def submit(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        label: str = "job",
+        pass_job: bool = False,
+        **kwargs: Any,
+    ) -> str:
+        """Run fn on a background thread.
+
+        Set pass_job to hand the Job to fn as a `job` keyword so it can report
+        progress back to pollers.
+        """
         job_id = str(uuid.uuid4())
         job = Job(id=job_id, label=label, status="pending", started_at=time.time())
         with self._lock:
             self._jobs[job_id] = job
             self._trim()
+        if pass_job:
+            kwargs["job"] = job
 
         def _run() -> None:
             job.status = "running"
