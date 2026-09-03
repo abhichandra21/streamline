@@ -1,13 +1,10 @@
 {% import "_show_counts.html" as counts %}
+{% import "_show_links.html" as link %}
 {% macro decision_row(show, csrf_token) -%}
 <article class="show-row show-decision-row">
-  {% if show.poster_path %}
-  <img class="show-poster show-poster--sm" src="https://image.tmdb.org/t/p/w185{{ show.poster_path }}" alt="">
-  {% else %}
-  <div class="show-poster-empty show-poster--sm display">{{ show.title[:1] }}</div>
-  {% endif %}
+  {{ link.poster(show, small=true) }}
   <div class="show-row-body">
-    <h3>{{ show.title }}</h3>
+    <h3>{{ link.name(show) }}</h3>
     <p class="show-card-copy">
       <span class="show-card-detail">Season {{ show.season_number }}</span> · {{ show.reason }}{% if show.air_date %} {{ show.air_date }}{% endif %}
     </p>
@@ -78,13 +75,9 @@
     <div class="shows-list">
       {% for show in sections.ready_now %}
       <article class="show-row show-card show-card--ready">
-        {% if show.poster_path %}
-        <img class="show-poster" src="https://image.tmdb.org/t/p/w185{{ show.poster_path }}" alt="">
-        {% else %}
-        <div class="show-poster-empty display">{{ show.title[:1] }}</div>
-        {% endif %}
+        {{ link.poster(show) }}
         <div class="show-row-body">
-          <h3>{{ show.title }}</h3>
+          <h3>{{ link.name(show) }}</h3>
           <p class="show-ready-count mono">
             {{ show.available_episode_count }} {{ "episode" if show.available_episode_count == 1 else "episodes" }} ready
           </p>
@@ -160,7 +153,7 @@
       {% for show in sections.coming_soon|selectattr("next_air_date")|sort(attribute="next_air_date") %}
       <article class="show-row soon-row">
         <span class="soon-date mono">{{ show.next_air_date }}</span>
-        <span class="soon-title">{{ show.title }}</span>
+        <span class="soon-title">{{ link.name(show) }}</span>
         <span class="soon-slug mono">
           {% if show.next_episode_number %}S{{ show.season_number }}E{{ show.next_episode_number }}
           {% else %}Season {{ show.season_number }}{% endif %}
@@ -177,7 +170,7 @@
       {% for show in sections.coming_soon|rejectattr("next_air_date") %}
       <article class="show-row soon-row soon-row--undated">
         <span class="soon-date mono">no date</span>
-        <span class="soon-title">{{ show.title }}</span>
+        <span class="soon-title">{{ link.name(show) }}</span>
         <span class="soon-slug mono">Season {{ show.season_number }}</span>
         <form class="show-inline-form" action="/shows/unfollow" method="post"
               hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML">
@@ -201,8 +194,8 @@
     <div class="shows-list">
       {% for show in sections.finished %}
       <article class="show-row show-card">
-        <div class="show-poster-empty display">{{ show.title[:1] }}</div>
-        <div class="show-row-body"><h3>{{ show.title }}</h3><p class="show-card-copy">Finished</p></div>
+        {{ link.poster(show) }}
+        <div class="show-row-body"><h3>{{ link.name(show) }}</h3><p class="show-card-copy">Finished</p></div>
         <div class="show-actions">
           <form class="show-inline-form" action="/shows/unfollow" method="post"
                 hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML">
@@ -216,12 +209,8 @@
       {% endfor %}
       {% for show in sections.get("caught_up", []) %}
       <article class="show-row show-card">
-        {% if show.poster_path %}
-        <img class="show-poster" src="https://image.tmdb.org/t/p/w185{{ show.poster_path }}" alt="">
-        {% else %}
-        <div class="show-poster-empty display">{{ show.title[:1] }}</div>
-        {% endif %}
-        <div class="show-row-body"><h3>{{ show.title }}</h3><p class="show-card-copy">Caught up</p></div>
+        {{ link.poster(show) }}
+        <div class="show-row-body"><h3>{{ link.name(show) }}</h3><p class="show-card-copy">Caught up</p></div>
         <div class="show-actions">
           <form class="show-inline-form" action="/shows/unfollow" method="post"
                 hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML">
@@ -235,12 +224,8 @@
       {% endfor %}
       {% for show in sections.get("ignored", []) %}
       <article class="show-row show-card">
-        {% if show.poster_path %}
-        <img class="show-poster" src="https://image.tmdb.org/t/p/w185{{ show.poster_path }}" alt="">
-        {% else %}
-        <div class="show-poster-empty display">{{ show.title[:1] }}</div>
-        {% endif %}
-        <div class="show-row-body"><h3>{{ show.title }}</h3><p class="show-card-copy">Ignored</p></div>
+        {{ link.poster(show) }}
+        <div class="show-row-body"><h3>{{ link.name(show) }}</h3><p class="show-card-copy">Ignored</p></div>
         <div class="show-actions">
           {% if show.season_number %}
           <form class="show-inline-form" action="/shows/refollow" method="post"

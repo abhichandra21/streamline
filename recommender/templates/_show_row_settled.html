@@ -1,13 +1,10 @@
 {% import "_show_counts.html" as counts %}
+{% import "_show_links.html" as link %}
 {# An acted-on show, kept at the same height so the list never reflows. #}
 <article class="show-row show-row--settled show-row--{{ variant }} show-row--{{ tone }}">
-  {% if show.poster_path %}
-  <img class="show-poster {% if variant == "row" %}show-poster--sm{% endif %}" src="https://image.tmdb.org/t/p/w185{{ show.poster_path }}" alt="">
-  {% else %}
-  <div class="show-poster-empty {% if variant == "row" %}show-poster--sm{% endif %} display">{{ show.title[:1] }}</div>
-  {% endif %}
+  {{ link.poster(show, small=(variant == "row")) }}
   <div class="show-row-body">
-    <h3>{{ show.title }}</h3>
+    <h3>{{ link.name(show) }}</h3>
     <p class="show-card-copy">
       <span class="show-settled-mark mono">{{ "✓" if tone == "teal" else "—" }}</span>
       {{ state_label }}
