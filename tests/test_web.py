@@ -122,7 +122,7 @@ class TestYourShows:
         response = client.get("/shows")
 
         assert response.status_code == 200
-        assert b"Your Shows" in response.data
+        assert b"On Deck" in response.data
         assert b"Ready Show" in response.data
         assert b"Returning Show" in response.data
         assert b"Mark caught up" in response.data
@@ -168,7 +168,8 @@ class TestYourShows:
 
         response = client.get("/shows")
 
-        assert b"Season 3" in response.data
+        # Season-level, with no episode number invented for it.
+        assert b"S3" in response.data
         assert b"S3ENone" not in response.data
         assert b"Caught Up Show" in response.data
         assert b"Caught up" in response.data
@@ -295,6 +296,8 @@ class TestYourShowsInPlaceActions:
         assert 'id="shows-tally"' in body
         assert "<strong>1</strong> ready" in body
         assert "<strong>1</strong> decision" in body
+        # Stated once, in the state bar, not repeated in the section heading.
+        assert body.count('id="count-ready"') == 0
 
     def test_htmx_follow_removes_the_row_rather_than_settling_it(self, client, monkeypatch):
         self._client(client, monkeypatch)
@@ -334,7 +337,7 @@ class TestYourShowsInPlaceActions:
 
         assert 'hx-swap="outerHTML swap:340ms"' in body
 
-    def test_settled_row_resends_counts_out_of_band(self, client, monkeypatch):
+    def test_action_resends_counts_out_of_band(self, client, monkeypatch):
         self._client(client, monkeypatch)
         monkeypatch.setattr(web.user_store, "follow_show", MagicMock())
 
@@ -344,8 +347,11 @@ class TestYourShowsInPlaceActions:
             headers={"HX-Request": "true"},
         ).get_data(as_text=True)
 
-        assert body.count('hx-swap-oob="true"') == 3
+        # The queue counter and the state bar. Ready now no longer carries its
+        # own count, since the state bar already states it.
+        assert body.count('hx-swap-oob="true"') == 2
         assert 'id="count-decisions"' in body
+        assert 'id="shows-tally"' in body
 
     def test_plain_post_still_redirects_for_the_no_javascript_path(self, client, monkeypatch):
         self._client(client, monkeypatch)
@@ -380,6 +386,42 @@ class TestYourShowsInPlaceActions:
 
         assert "shows-decisions-clear" in body
         assert '<div class="shows-decisions-list">' not in body
+
+
+class TestHumanDates:
+    """Prose gets readable dates; the calendar column keeps ISO."""
+
+    @pytest.mark.parametrize("value,expected", [
+        ("2026-01-14", "14 Jan 2026"),
+        ("2026-12-04T00:00:00", "4 Dec 2026"),
+        ("", ""),
+        (None, ""),
+        ("not-a-date", "not-a-date"),
+    ])
+    def test_human_date(self, value, expected):
+        assert web._human_date(value) == expected
+
+    def test_calendar_column_stays_iso_for_alignment(self, client, monkeypatch):
+        sections = _show_sections()
+        sections["coming_soon"] = [{
+            "tmdb_id": 40, "title": "Dated Show", "season_number": 5,
+            "next_air_date": "2026-09-24", "next_episode_number": 1, "poster_path": None,
+        }]
+        monkeypatch.setattr(web, "_show_page_data", lambda: ([], [], sections))
+        monkeypatch.setattr(web.show_tracker, "refresh_is_due", lambda *_args: False)
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert '<span class="soon-date mono">2026-09-24</span>' in body
+
+    def test_decision_reason_uses_a_readable_date(self, client, monkeypatch):
+        monkeypatch.setattr(web, "_show_page_data", lambda: ([], [], _show_sections()))
+        monkeypatch.setattr(web.show_tracker, "refresh_is_due", lambda *_args: False)
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert "1 Oct 2026" in body
+        assert "2026-10-01" not in body
 
 
 class TestComingSoonGroupingAndSort:

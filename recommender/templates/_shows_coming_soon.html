@@ -5,7 +5,7 @@
   <span class="soon-title">{{ link.name(show) }}</span>
   <span class="soon-slug mono">
     {%- if show.next_episode_number %}S{{ show.season_number }}E{{ show.next_episode_number }}
-    {%- else %}Season {{ show.season_number }}{% endif %}
+    {%- else %}S{{ show.season_number }}{% endif %}
   </span>
   <form class="show-inline-form" action="/shows/unfollow" method="post"
         hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">

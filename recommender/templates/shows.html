@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Streamline — Your Shows{% endblock %}
+{% block title %}Streamline — On Deck{% endblock %}
 {% block content %}
 <div class="shows-heading">
-  <span class="mono shows-kicker">Release inbox</span>
-  <h1>Your Shows</h1>
+  <span class="mono shows-kicker">Your library</span>
+  <h1>On Deck</h1>
 </div>
 
 {% include "_shows_content.html" %}
@@ -107,6 +107,7 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
+    min-height: 1.9rem;
     gap: 1rem;
     border-bottom: 1px solid var(--border);
     padding-bottom: 0.55rem;
@@ -127,20 +128,29 @@
     border: 1px solid var(--border);
     border-radius: 7px;
   }
-  /* Ready now is the payoff, so it carries the most weight on the page. */
+  /* Ready now leads the page, but through colour and a teal edge rather than
+     bulk. Seventeen 156px cards read as a wall, which undercut the emphasis
+     instead of creating it. */
   .show-card--ready {
-    grid-template-columns: 72px minmax(0, 1fr) auto;
-    padding: 1rem;
+    grid-template-columns: 52px minmax(0, 1fr) auto;
+    padding: 0.7rem 0.85rem;
     border-color: rgba(58,184,160,0.28);
   }
   .show-card--ready .show-poster,
-  .show-card--ready .show-poster-empty { width: 72px; }
+  .show-card--ready .show-poster-empty { width: 52px; }
+  .show-ready-line {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
   .show-ready-count {
     color: var(--teal);
-    font-size: 0.64rem;
+    font-size: 0.62rem;
     letter-spacing: 0.09em;
     text-transform: uppercase;
-    margin-bottom: 0.1rem;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .show-poster,
@@ -178,7 +188,7 @@
   .show-poster-empty { display: grid; place-items: center; color: var(--border); font-size: 1.4rem; }
   .show-row-body { min-width: 0; }
   .show-card h3, .show-row h3 { font-size: 1.15rem; line-height: 1.2; margin-bottom: 0.2rem; }
-  .show-card--ready h3 { font-size: 1.3rem; }
+  .show-card--ready h3 { font-size: 1.12rem; }
   .show-card-copy { color: var(--muted); font-size: 0.8rem; }
   .show-card-detail { color: var(--body); }
   .show-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.4rem; flex-wrap: wrap; }
@@ -207,7 +217,7 @@
     border: 1px solid rgba(232,93,74,0.3);
     border-radius: 8px;
     background:
-      linear-gradient(180deg, rgba(232,93,74,0.05), transparent 55%),
+      linear-gradient(180deg, rgba(232,93,74,0.11), transparent 62%),
       var(--surface);
     padding: 0.95rem 1rem 1rem;
   }
@@ -261,7 +271,7 @@
      is set per row shape because height:auto cannot be transitioned; each
      value sits just above the real height so almost none of the timeline is
      spent on invisible space. */
-  .show-card--ready { max-height: 175px; }
+  .show-card--ready { max-height: 120px; }
   .show-card        { max-height: 150px; }
   .show-decision-row { max-height: 105px; }
   .soon-row         { max-height: 58px; }
@@ -355,6 +365,16 @@
   .soon-title { color: var(--text); font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .soon-slug { color: var(--muted); font-size: 0.6rem; letter-spacing: 0.06em; }
   .soon-row--undated .soon-date { color: var(--muted); }
+  .soon-row .show-inline-form {
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+  .soon-row:hover .show-inline-form,
+  .soon-row:focus-within .show-inline-form { opacity: 1; }
+  /* Touch devices have no hover, so keep it permanently visible there. */
+  @media (hover: none) {
+    .soon-row .show-inline-form { opacity: 1; }
+  }
   /* A settled row landing in the calendar keeps the calendar's own rhythm. */
   .soon-list .show-row--settled { grid-template-columns: 44px minmax(0, 1fr) auto; }
 
@@ -377,10 +397,10 @@
 
   @media (max-width: 640px) {
     .show-card { grid-template-columns: 48px minmax(0, 1fr); }
-    .show-card--ready { grid-template-columns: 56px minmax(0, 1fr); }
+    .show-card--ready { grid-template-columns: 48px minmax(0, 1fr); }
     .show-poster, .show-poster-empty { width: 48px; }
     .show-card--ready .show-poster,
-    .show-card--ready .show-poster-empty { width: 56px; }
+    .show-card--ready .show-poster-empty { width: 48px; }
     .show-card .show-actions { grid-column: 1 / -1; justify-content: flex-start; padding-left: 3.55rem; }
     .show-decision-row,
     .show-row--settled { grid-template-columns: 44px minmax(0, 1fr); }

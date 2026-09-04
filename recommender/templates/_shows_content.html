@@ -6,7 +6,7 @@
   <div class="show-row-body">
     <h3>{{ link.name(show) }}</h3>
     <p class="show-card-copy">
-      <span class="show-card-detail">Season {{ show.season_number }}</span> · {{ show.reason }}{% if show.air_date %} {{ show.air_date }}{% endif %}
+      <span class="show-card-detail mono">S{{ show.season_number }}</span> · {{ show.reason }}{% if show.air_date %} {{ show.air_date|human_date }}{% endif %}
     </p>
   </div>
   <div class="show-actions">
@@ -69,7 +69,6 @@
   <section class="shows-section" aria-labelledby="ready-now-heading">
     <div class="shows-section-heading">
       <h2 id="ready-now-heading">Ready now</h2>
-      {{ counts.ready(sections) }}
     </div>
     {% if sections.ready_now %}
     <div class="shows-list">
@@ -77,13 +76,17 @@
       <article class="show-row show-card show-card--ready">
         {{ link.poster(show) }}
         <div class="show-row-body">
-          <h3>{{ link.name(show) }}</h3>
-          <p class="show-ready-count mono">
-            {{ show.available_episode_count }} {{ "episode" if show.available_episode_count == 1 else "episodes" }} ready
-          </p>
+          {# Title and count share a line: the count is the reason the card
+             exists, so it belongs beside the name, not stacked under it. #}
+          <div class="show-ready-line">
+            <h3>{{ link.name(show) }}</h3>
+            <span class="show-ready-count mono">
+              {{ show.available_episode_count }} {{ "episode" if show.available_episode_count == 1 else "episodes" }}
+            </span>
+          </div>
           <p class="show-card-copy">
             through S{{ show.season_number }}E{{ show.latest_aired_episode }}
-            {% if show.next_air_date %} · Next episode {{ show.next_air_date }}{% endif %}
+            {% if show.next_air_date %} · next {{ show.next_air_date|human_date }}{% endif %}
           </p>
         </div>
         <div class="show-actions">

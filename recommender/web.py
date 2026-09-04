@@ -308,7 +308,7 @@ def _get_recent_posters(entries: list[dict], limit: int = 24) -> list[dict]:
 
 
 def _show_page_data() -> tuple[list[dict], list[dict], dict[str, list[dict]]]:
-    """Build the Your Shows view model entirely from local state."""
+    """Build the On Deck view model entirely from local state."""
     ctx = _get_context()
     _ensure_user_store_once()
     archive_entries = show_tracker.merge_archive_entries(
@@ -379,6 +379,18 @@ def _ensure_show_refresh(archive_entries: list[dict], tracking_rows: list[dict])
             pass_job=True,
         )
         return _shows_job_id
+
+
+@app.template_filter("human_date")
+def _human_date(value: str | None) -> str:
+    """Render an ISO date as "14 Jan 2026" for use in running text."""
+    if not value:
+        return ""
+    try:
+        parsed = datetime.strptime(value[:10], "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return value
+    return f"{parsed.day} {parsed.strftime('%b %Y')}"
 
 
 def _shows_checked_label() -> str | None:
