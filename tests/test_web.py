@@ -332,7 +332,7 @@ class TestYourShowsInPlaceActions:
 
         body = client.get("/shows").get_data(as_text=True)
 
-        assert 'hx-swap="outerHTML swap:180ms"' in body
+        assert 'hx-swap="outerHTML swap:340ms"' in body
 
     def test_settled_row_resends_counts_out_of_band(self, client, monkeypatch):
         self._client(client, monkeypatch)

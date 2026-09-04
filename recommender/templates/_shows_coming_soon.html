@@ -8,7 +8,7 @@
     {%- else %}Season {{ show.season_number }}{% endif %}
   </span>
   <form class="show-inline-form" action="/shows/unfollow" method="post"
-        hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML swap:180ms">
+        hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
     <button class="btn-quiet btn-quiet--bare" type="submit" title="Unfollow {{ show.title }}">Unfollow</button>

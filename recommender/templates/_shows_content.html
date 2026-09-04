@@ -11,13 +11,13 @@
   </div>
   <div class="show-actions">
     <form class="show-inline-form" action="/shows/follow" method="post"
-          hx-post="/shows/follow" hx-target="closest .show-row" hx-swap="outerHTML swap:180ms">
+          hx-post="/shows/follow" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
       <button class="btn-teal" type="submit">Follow</button>
     </form>
     <form class="show-inline-form" action="/shows/ignore" method="post"
-          hx-post="/shows/ignore" hx-target="closest .show-row" hx-swap="outerHTML swap:180ms">
+          hx-post="/shows/ignore" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
       <button class="btn-quiet" type="submit">Ignore</button>
@@ -88,13 +88,13 @@
         </div>
         <div class="show-actions">
           <form class="show-inline-form" action="/shows/caught-up" method="post"
-                hx-post="/shows/caught-up" hx-target="closest .show-row" hx-swap="outerHTML swap:180ms">
+                hx-post="/shows/caught-up" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
             <button class="btn-teal" type="submit">Mark caught up</button>
           </form>
           <form class="show-inline-form" action="/shows/unfollow" method="post"
-                hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML swap:180ms">
+                hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
             <button class="btn-quiet" type="submit">Unfollow</button>
@@ -153,7 +153,7 @@
         <div class="show-row-body"><h3>{{ link.name(show) }}</h3><p class="show-card-copy">Finished</p></div>
         <div class="show-actions">
           <form class="show-inline-form" action="/shows/unfollow" method="post"
-                hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML swap:180ms">
+                hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
             <button class="btn-quiet" type="submit">Unfollow</button>
@@ -167,7 +167,7 @@
         <div class="show-row-body"><h3>{{ link.name(show) }}</h3><p class="show-card-copy">Caught up</p></div>
         <div class="show-actions">
           <form class="show-inline-form" action="/shows/unfollow" method="post"
-                hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML swap:180ms">
+                hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
             <button class="btn-quiet" type="submit">Unfollow</button>
@@ -182,7 +182,7 @@
         <div class="show-actions">
           {% if show.season_number %}
           <form class="show-inline-form" action="/shows/refollow" method="post"
-                hx-post="/shows/refollow" hx-target="closest .show-row" hx-swap="outerHTML swap:180ms">
+                hx-post="/shows/refollow" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
             <button class="btn-quiet" type="submit">Follow again</button>

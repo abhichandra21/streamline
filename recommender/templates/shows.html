@@ -256,11 +256,42 @@
   /* ── Leaving rows ──
      An acted-on row is done with, so it fades out and the list closes up
      over it rather than lingering with an undo. */
-  .show-row.htmx-swapping {
-    opacity: 0;
-    transform: translateX(-6px);
-    transition: opacity 0.18s ease, transform 0.18s ease;
+  /* A leaving row collapses its own height as it fades, so the list closes
+     up smoothly instead of snapping shut once the row is gone. max-height
+     is set per row shape because height:auto cannot be transitioned; each
+     value sits just above the real height so almost none of the timeline is
+     spent on invisible space. */
+  .show-card--ready { max-height: 175px; }
+  .show-card        { max-height: 150px; }
+  .show-decision-row { max-height: 105px; }
+  .soon-row         { max-height: 58px; }
+
+  /* Acknowledge the click straight away: the request is in flight before the
+     collapse can start, and without this the row sits inert for ~200ms. */
+  .show-row.htmx-request {
+    opacity: 0.45;
+    transition: opacity 0.1s ease-out;
   }
+  .show-row.htmx-request button { pointer-events: none; }
+
+  .show-row.htmx-swapping {
+    max-height: 0 !important;
+    opacity: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+    border-top-color: transparent;
+    overflow: hidden;
+    transition:
+      max-height 0.34s cubic-bezier(0.4, 0, 0.2, 1),
+      opacity 0.2s ease-out,
+      padding 0.34s cubic-bezier(0.4, 0, 0.2, 1),
+      margin 0.34s cubic-bezier(0.4, 0, 0.2, 1),
+      border-color 0.15s linear;
+  }
+  /* The flex gap between cards would otherwise hold the space open. */
+  .shows-list { transition: gap 0.34s cubic-bezier(0.4, 0, 0.2, 1); }
 
   /* ── Coming soon: a calendar. Dense dated lines, not cards. ── */
   .shows-section--soon .shows-section-heading h2 {
