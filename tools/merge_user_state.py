@@ -1,5 +1,5 @@
-"""Merge user-generated state (watchlist, ratings, manual archive, search
-history) between two copies of the same Streamline install.
+"""Merge user-generated state (watchlist, ratings, manual archive, show
+tracking, and search history) between two copies of the same Streamline install.
 
 Used by the streamline-deploy skill so that deploying never silently
 overwrites watchlist/rating/history changes made on the other side (local
@@ -31,6 +31,21 @@ sys.path.insert(0, str(PROJECT_ROOT))
 MERGE_TABLES = {
     "saved_titles": "updated_at",
     "title_ratings": "updated_at",
+    "show_tracking": "updated_at",
+}
+PRIMARY_KEY_COLUMNS = {"show_tracking": "tmdb_id"}
+OPTIONAL_SOURCE_TABLES = {"show_tracking"}
+REQUIRED_SOURCE_COLUMNS = {
+    "show_tracking": {
+        "tmdb_id",
+        "title",
+        "state",
+        "tracking_from_season",
+        "caught_up_season",
+        "caught_up_episode",
+        "created_at",
+        "updated_at",
+    },
 }
 APPEND_ONLY_TABLES = ["manual_archive_entries"]
 
@@ -43,7 +58,9 @@ def _normalize(title: str) -> str:
     return title.strip()
 
 
-def _row_key(row: sqlite3.Row) -> tuple:
+def _row_key(table: str, row: sqlite3.Row) -> tuple:
+    if table == "show_tracking":
+        return ("tmdb", row["tmdb_id"])
     if row["tmdb_id"] is not None:
         return ("tmdb", row["content_type"], row["tmdb_id"])
     return ("title", row["content_type"], row["normalized_title"] or _normalize(row["title"]))
@@ -55,6 +72,37 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _validate_source_schema(conn: sqlite3.Connection, table: str) -> None:
+    expected = REQUIRED_SOURCE_COLUMNS.get(table)
+    if expected is None:
+        return
+    column_info = {
+        row["name"]: row
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    actual = set(column_info)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise sqlite3.OperationalError(
+            f"incompatible {table} schema: missing={missing}, extra={extra}"
+        )
+    primary_key = PRIMARY_KEY_COLUMNS.get(table)
+    primary_key_columns = [
+        row["name"]
+        for row in sorted(column_info.values(), key=lambda row: row["pk"])
+        if row["pk"] > 0
+    ]
+    if primary_key is not None and primary_key not in primary_key_columns:
+        raise sqlite3.OperationalError(
+            f"incompatible {table} schema: {primary_key} must be the primary key"
+        )
+    if primary_key is not None and primary_key_columns != [primary_key]:
+        raise sqlite3.OperationalError(
+            f"incompatible {table} schema: {primary_key} must be the only primary key"
+        )
+
+
 def merge_db(local_path: str, other_path: str) -> None:
     from recommender.user_store import init_db
 
@@ -62,11 +110,26 @@ def merge_db(local_path: str, other_path: str) -> None:
     local = _connect(local_path)
     other = _connect(other_path)
     try:
+        other_tables = {
+            row[0]
+            for row in other.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        for table in REQUIRED_SOURCE_COLUMNS:
+            if table in other_tables:
+                _validate_source_schema(other, table)
         for table, ts_col in MERGE_TABLES.items():
-            local_rows = {_row_key(r): dict(r) for r in local.execute(f"SELECT * FROM {table}")}
+            if table in OPTIONAL_SOURCE_TABLES and table not in other_tables:
+                continue
+            primary_key = PRIMARY_KEY_COLUMNS.get(table, "id")
+            local_rows = {
+                _row_key(table, r): dict(r)
+                for r in local.execute(f"SELECT * FROM {table}")
+            }
             other_rows = other.execute(f"SELECT * FROM {table}").fetchall()
             for orow in other_rows:
-                key = _row_key(orow)
+                key = _row_key(table, orow)
                 lrow = local_rows.get(key)
                 if lrow is None:
                     cols = [c for c in orow.keys() if c != "id"]
@@ -77,17 +140,21 @@ def merge_db(local_path: str, other_path: str) -> None:
                     )
                     continue
                 if orow[ts_col] > lrow[ts_col]:
-                    cols = [c for c in orow.keys() if c not in ("id", "saved_at", "rated_at")]
+                    immutable_cols = {"id", "saved_at", "rated_at", "created_at", primary_key}
+                    cols = [c for c in orow.keys() if c not in immutable_cols]
                     set_clause = ", ".join(f"{c} = ?" for c in cols)
                     local.execute(
-                        f"UPDATE {table} SET {set_clause} WHERE id = ?",
-                        [orow[c] for c in cols] + [lrow["id"]],
+                        f"UPDATE {table} SET {set_clause} WHERE {primary_key} = ?",
+                        [orow[c] for c in cols] + [lrow[primary_key]],
                     )
 
         for table in APPEND_ONLY_TABLES:
-            local_keys = {_row_key(r) for r in local.execute(f"SELECT * FROM {table}")}
+            local_keys = {
+                _row_key(table, r)
+                for r in local.execute(f"SELECT * FROM {table}")
+            }
             for orow in other.execute(f"SELECT * FROM {table}").fetchall():
-                if _row_key(orow) in local_keys:
+                if _row_key(table, orow) in local_keys:
                     continue
                 cols = [c for c in orow.keys() if c != "id"]
                 placeholders = ", ".join("?" for _ in cols)

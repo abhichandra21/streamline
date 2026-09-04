@@ -1,0 +1,29 @@
+{% import "_show_counts.html" as counts %}
+{% import "_show_links.html" as link %}
+{# An acted-on show, kept at the same height so the list never reflows. #}
+<article class="show-row show-row--settled show-row--{{ variant }} show-row--{{ tone }}">
+  {{ link.poster(show, small=(variant == "row")) }}
+  <div class="show-row-body">
+    <h3>{{ link.name(show) }}</h3>
+    <p class="show-card-copy">
+      <span class="show-settled-mark mono">{{ "✓" if tone == "teal" else "—" }}</span>
+      {{ state_label }}
+    </p>
+  </div>
+  <div class="show-actions">
+    {% if flip_action %}
+    <form class="show-inline-form"
+          hx-post="{{ flip_action }}"
+          hx-target="closest .show-row"
+          hx-swap="outerHTML">
+      <input type="hidden" name="variant" value="{{ variant }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
+      <button class="btn-quiet" type="submit">{{ flip_label }}</button>
+    </form>
+    {% endif %}
+  </div>
+</article>
+{{ counts.ready(sections, true) }}
+{{ counts.decisions(sections, true) }}
+{{ counts.tally(sections, checked_label, true) }}

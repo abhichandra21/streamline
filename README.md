@@ -18,8 +18,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10+-blue?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/LLM-Claude%20%7C%20Gemini%20%7C%20OpenAI-blueviolet" alt="LLM Support">
-  <img src="https://img.shields.io/badge/tests-473%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/LLM-Claude%20%7C%20Gemini%20%7C%20OpenAI%20%7C%20Local-blueviolet" alt="LLM Support">
+  <img src="https://img.shields.io/badge/tests-657%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
 </p>
 
@@ -37,7 +37,7 @@ Streamline ingests your real watch history from Netflix, Prime Video, Apple TV, 
 - **Mood Match wizard** — a guided alternative to free-text search: an instant content-type tap, then a short adaptive question loop grounded in your taste profile that narrows tone, pace, and intensity before recommending. Refine results in place ("shorter", "lighter", "surprise me") without restarting.
 - **Taste profile** — built from your entire watch history (2000+ titles), organized into 15+ genre clusters with deep analysis
 - **Hybrid candidate generation** — TMDB Discover (structured filters) + LLM semantic suggestions (creative matches)
-- **Multi-provider LLM** — Anthropic (Claude), Google (Gemini), and OpenAI with role-based model dispatch (fast/reason)
+- **Multi-provider LLM** — Anthropic (Claude), Google (Gemini), OpenAI, and any local/self-hosted OpenAI-compatible endpoint (e.g. Ollama) with role-based model dispatch (fast/reason)
 - **Web UI** — Flask + HTMX with editorial design: search, taste profile dashboard, poster archive, watchlist management, search history, settings
 - **Rich CLI** — interactive REPL, conversational context ("more like that"), feedback system, usage/cost tracking
 - **Streaming availability** — annotated results with platform filtering (Netflix, Prime, etc.)
@@ -101,16 +101,24 @@ Everything goes through `./recommend`:
 ./recommend --liked "Tinker Tailor Soldier Spy"
 ./recommend --disliked "The Long Season"
 ./recommend --add "Shetland" --type tv
+./recommend --history                           # show recent query history
 
 # Options
 ./recommend --debug "spy thriller"              # full pipeline trace
 ./recommend -n 5 "dark thriller"                # override result count
-./recommend --provider gemini "spy thriller"     # use Gemini instead of default
+./recommend --provider gemini "spy thriller"     # use Gemini, OpenAI, or a local model instead of default
 ```
 
 The built-in Help page is the canonical query guide. After starting the web UI, see `/help#query-guide` for supported recommendation queries, abandoned-watch queries, conversational refinements, and command-style inputs.
 
 Each query prints token usage and estimated cost at the end.
+
+Bash and zsh completions for `./recommend` and `./recommend-web` are in `completions/`:
+
+```bash
+source completions/recommend.bash    # bash
+source completions/_recommend.zsh    # zsh
+```
 
 ## Web UI
 
@@ -130,8 +138,20 @@ The web UI includes:
 - **Watchlist** — save/unsave titles from any page, CSV export
 - **Settings** — edit all configuration from the browser with live reload
 - **Help** — built-in usage guide
+- **Logs & status** — `/logs` tails the app log from the browser; `/status` and `/healthz` report provider, cache, and last-run state for monitoring
 
 Port and host are configurable via `STREAMLINE_PORT` and `STREAMLINE_HOST` environment variables.
+
+### Running as a service
+
+For an always-on deployment (e.g. a homeserver), run behind gunicorn via the provided systemd unit instead of `./recommend-web start`:
+
+```bash
+sudo cp streamline-web.service /etc/systemd/system/
+sudo systemctl enable --now streamline-web
+```
+
+Edit the `User`, `WorkingDirectory`, and venv paths in `streamline-web.service` to match your install first.
 
 ## Configuration
 
@@ -146,7 +166,7 @@ Settings live in a few places:
 
 ```yaml
 # config.yaml
-provider: anthropic                    # or "gemini" or "openai"
+provider: anthropic                    # or "gemini", "openai", or "local"
 
 models:
   anthropic:
@@ -158,6 +178,11 @@ models:
   openai:
     fast: gpt-4.1-mini
     reason: gpt-4.1
+  local:
+    fast: gpt-oss:120b                 # any OpenAI-compatible endpoint (e.g. Ollama)
+    reason: gpt-oss:120b
+    base_url: http://localhost:11434/v1
+    timeout_scale: 5                   # local inference is slower; scales llm.timeout_*
 ```
 
 Switch providers by changing `provider:` in config or per-query with `--provider gemini`.
@@ -167,6 +192,7 @@ By default, each provider reads its API key from the standard environment variab
 - Anthropic: `ANTHROPIC_API_KEY`
 - Gemini: `GEMINI_API_KEY`
 - OpenAI / compatible: `OPENAI_API_KEY`
+- Local: uses the `openai` client against `models.local.base_url`; no key needed for most self-hosted servers
 
 Only add `models.<provider>.api_key_env` in config when you need a non-standard variable name.
 
@@ -199,7 +225,7 @@ All shared settings in `config.yaml`:
 **LLM:**
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `provider` | anthropic | LLM provider ("anthropic", "gemini", or "openai") |
+| `provider` | anthropic | LLM provider ("anthropic", "gemini", "openai", or "local") |
 | `models.*` | (see above) | Model assignments per provider (fast/reason roles) |
 | `llm.timeout_*` | 30-300s | Per-call-type timeouts |
 | `llm.tokens_*` | 200-16000 | Per-call-type max output tokens |
@@ -259,7 +285,7 @@ Two-phase LLM pipeline with role-based model dispatch:
 
 | Module | Purpose |
 |--------|---------|
-| `recommender/llm.py` | Provider abstraction (Anthropic/Gemini), token tracking, rate limit retry |
+| `recommender/llm.py` | Provider abstraction (Anthropic/Gemini/OpenAI/local), token tracking, rate limit retry |
 | `recommender/query_engine.py` | Online pipeline: intent parsing, hybrid candidates, ranking |
 | `recommender/wizard.py` / `wizard_flow.py` | Mood Match: deterministic content-type tap + LLM-led adaptive question loop, synthesizes a `QueryIntent` |
 | `recommender/taste_profile_builder.py` | Batched profile build with cache, truncation detection |
@@ -277,9 +303,14 @@ See [`docs/architecture.md`](docs/architecture.md) for the full design document.
 python3 -m pytest tests/ -v
 ```
 
+## Utility Scripts
+
+- `tools/compare_providers.py` — runs a fixed query set against two LLM providers (e.g. `anthropic` vs `local`) and writes a side-by-side comparison
+- `tools/merge_user_state.py` — merges watchlist/ratings/history between two copies of the same install (e.g. local machine and a homeserver deployment) without overwriting either side
+
 ## Contributing
 
-Contributions are welcome! Please open an issue first to discuss what you'd like to change.
+Contributions are welcome! Please open an issue first to discuss what you'd like to change. See [`docs/roadmap.md`](docs/roadmap.md) for planned work.
 
 ## License
 

@@ -21,6 +21,7 @@ def test_init_creates_tables(tmp_path):
     assert "saved_titles" in tables
     assert "title_ratings" in tables
     assert "manual_archive_entries" in tables
+    assert "show_tracking" in tables
     assert "user_store_meta" in tables
 
 
@@ -30,6 +31,86 @@ def test_init_is_idempotent(tmp_path):
 
     init_db(db)
     init_db(db)  # should not raise
+
+
+def test_follow_show_starts_at_returning_season(tmp_path):
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import follow_show, init_db, list_show_tracking
+
+    init_db(db)
+    follow_show(db, "Slow Horses", 95480, tracking_from_season=5)
+
+    tracked = list_show_tracking(db)
+    assert tracked == [{
+        "tmdb_id": 95480,
+        "title": "Slow Horses",
+        "state": "following",
+        "tracking_from_season": 5,
+        "caught_up_season": None,
+        "caught_up_episode": None,
+        "created_at": tracked[0]["created_at"],
+        "updated_at": tracked[0]["updated_at"],
+    }]
+
+
+def test_mark_show_caught_up_records_latest_aired_episode(tmp_path):
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import (
+        follow_show,
+        init_db,
+        list_show_tracking,
+        mark_show_caught_up,
+    )
+
+    init_db(db)
+    follow_show(db, "Slow Horses", 95480, tracking_from_season=5)
+    mark_show_caught_up(db, 95480, season_number=5, episode_number=3)
+
+    tracked = list_show_tracking(db)[0]
+    assert (tracked["caught_up_season"], tracked["caught_up_episode"]) == (5, 3)
+
+
+def test_ignore_show_is_remembered_for_future_discovery(tmp_path):
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import (
+        follow_show,
+        init_db,
+        list_show_tracking,
+        ignore_show,
+    )
+
+    init_db(db)
+    follow_show(db, "Slow Horses", 95480, tracking_from_season=5)
+    ignore_show(db, "Slow Horses", 95480)
+
+    tracked = list_show_tracking(db)[0]
+    assert tracked["state"] == "ignored"
+    assert tracked["tracking_from_season"] == 5
+    assert tracked["caught_up_season"] is None
+    assert tracked["caught_up_episode"] is None
+
+
+def test_refollow_show_resets_progress_to_selected_season(tmp_path):
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import (
+        follow_show,
+        init_db,
+        list_show_tracking,
+        mark_show_caught_up,
+        ignore_show,
+    )
+
+    init_db(db)
+    follow_show(db, "Slow Horses", 95480, tracking_from_season=5)
+    mark_show_caught_up(db, 95480, season_number=5, episode_number=6)
+    ignore_show(db, "Slow Horses", 95480)
+    follow_show(db, "Slow Horses", 95480, tracking_from_season=6)
+
+    tracked = list_show_tracking(db)[0]
+    assert tracked["state"] == "following"
+    assert tracked["tracking_from_season"] == 6
+    assert tracked["caught_up_season"] is None
+    assert tracked["caught_up_episode"] is None
 
 
 def test_save_title_creates_watchlist_entry(tmp_path):

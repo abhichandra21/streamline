@@ -1,0 +1,19 @@
+{# Poster and title both link to the local title page. Two targets for the same
+   destination, so the artwork is a large easy target and the name still reads
+   as a link. Everything on Your Shows is watched TV with a TMDB id. #}
+
+{% macro poster(show, small=false) -%}
+<a class="show-poster-link" href="/title/{{ show.tmdb_id }}?type=tv"
+   title="{{ show.title }}" tabindex="-1" aria-hidden="true">
+  {%- if show.poster_path %}
+  <img class="show-poster{% if small %} show-poster--sm{% endif %}"
+       src="https://image.tmdb.org/t/p/w185{{ show.poster_path }}" alt="">
+  {%- else %}
+  <span class="show-poster-empty{% if small %} show-poster--sm{% endif %} display">{{ show.title[:1] }}</span>
+  {%- endif %}
+</a>
+{%- endmacro %}
+
+{% macro name(show) -%}
+<a class="show-link" href="/title/{{ show.tmdb_id }}?type=tv">{{ show.title }}</a>
+{%- endmacro %}

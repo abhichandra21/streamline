@@ -2,8 +2,16 @@ import json
 import os
 import tempfile
 from unittest.mock import patch, MagicMock
+
+import pytest
+
 from recommender.tmdb_client import (
-    TmdbClient, TmdbMetadata, MatchHints, _is_plausible_title_match, _title_similarity,
+    MatchHints,
+    TmdbClient,
+    TmdbMetadata,
+    TmdbRateLimitError,
+    _is_plausible_title_match,
+    _title_similarity,
 )
 
 
@@ -101,6 +109,38 @@ def test_clear_cache():
         assert client._cache_path("tv", 42).exists()
         client.clear_cache()
         assert not client._cache_path("tv", 42).exists()
+
+
+def test_fetch_tv_series_details_uses_raw_details_endpoint_without_metadata_cache(tmp_path):
+    client = make_client(tmp_path)
+    with patch.object(client, "_get", return_value={"id": 42}) as mock_get:
+        result = client.fetch_tv_series_details(42)
+
+    assert result == {"id": 42}
+    mock_get.assert_called_once_with("tv/42")
+    assert not client._cache_path("tv", 42).exists()
+
+
+def test_fetch_tv_season_details_uses_raw_season_endpoint_without_metadata_cache(tmp_path):
+    client = make_client(tmp_path)
+    with patch.object(client, "_get", return_value={"season_number": 3}) as mock_get:
+        result = client.fetch_tv_season_details(42, 3)
+
+    assert result == {"season_number": 3}
+    mock_get.assert_called_once_with("tv/42/season/3")
+    assert not client._cache_path("tv", 42).exists()
+
+
+def test_get_translates_429_with_optional_retry_after(tmp_path):
+    client = make_client(tmp_path)
+    response = MagicMock(status_code=429, headers={"Retry-After": "7"})
+    response.raise_for_status.side_effect = __import__("requests").HTTPError(response=response)
+
+    with patch("recommender.tmdb_client.requests.get", return_value=response):
+        with pytest.raises(TmdbRateLimitError) as exc_info:
+            client._get("tv/42")
+
+    assert exc_info.value.retry_after_seconds == 7.0
 
 
 def test_genre_maps_have_crime():

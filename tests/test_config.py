@@ -130,3 +130,12 @@ class TestPlatformPathsAttribute:
         # All should be lists (type check), truthiness depends on config.
         for value in enabled:
             assert isinstance(value, list)
+
+
+def test_returning_shows_lookback_days_defaults_to_two_years():
+    assert config.RETURNING_SHOWS_LOOKBACK_DAYS == 730
+
+
+def test_release_cache_is_separate_from_tmdb_metadata_cache():
+    assert config.RELEASE_CACHE_DIR.endswith("recommender/cache/releases")
+    assert config.RELEASE_CACHE_DIR != config.CACHE_DIR

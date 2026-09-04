@@ -42,6 +42,7 @@ min_vote_count: 20
 min_rating: 6.5
 min_year: 2000
 recency_half_life_days: 90
+returning_shows_lookback_days: 730
 wizard:
   max_questions: 5
   min_questions: 4

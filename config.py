@@ -124,6 +124,9 @@ MIN_RATING = float(_cfg.get("min_rating", 0))
 MIN_YEAR = int(_cfg.get("min_year", 0))
 RECENCY_HALF_LIFE_DAYS = _cfg.get("recency_half_life_days", 90)
 
+# ── Returning shows ──
+RETURNING_SHOWS_LOOKBACK_DAYS = int(_cfg.get("returning_shows_lookback_days", 730))
+
 # ── Mood Match wizard ──
 _wizard = _cfg.get("wizard", {})
 WIZARD_MAX_QUESTIONS = int(_wizard.get("max_questions", 4))
@@ -197,6 +200,7 @@ EVENT_DB_PATH = str(_ROOT / _cfg.get("event_db_path", "data/streamline.db"))
 CACHE_DIR = str(_ROOT / "recommender/cache/tmdb")
 ENRICHMENT_CACHE_DIR = str(_ROOT / "recommender/cache/enrichments")
 PROVIDERS_CACHE_DIR = str(_ROOT / "recommender/cache/providers")
+RELEASE_CACHE_DIR = str(_ROOT / "recommender/cache/releases")
 TASTE_PROFILE_PATH = str(_ROOT / "recommender/cache/taste_profile.txt")
 STRUCTURED_TASTE_PROFILE_PATH = str(_ROOT / "recommender/cache/taste_profile_structured.json")
 WATCH_INDEX_PATH = str(_ROOT / "recommender/cache/watch_index.json")
