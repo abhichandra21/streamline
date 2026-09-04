@@ -308,7 +308,7 @@ def _get_recent_posters(entries: list[dict], limit: int = 24) -> list[dict]:
 
 
 def _show_page_data() -> tuple[list[dict], list[dict], dict[str, list[dict]]]:
-    """Build the Your Shows view model entirely from local state."""
+    """Build the On Deck view model entirely from local state."""
     ctx = _get_context()
     _ensure_user_store_once()
     archive_entries = show_tracker.merge_archive_entries(
@@ -381,6 +381,18 @@ def _ensure_show_refresh(archive_entries: list[dict], tracking_rows: list[dict])
         return _shows_job_id
 
 
+@app.template_filter("human_date")
+def _human_date(value: str | None) -> str:
+    """Render an ISO date as "14 Jan 2026" for use in running text."""
+    if not value:
+        return ""
+    try:
+        parsed = datetime.strptime(value[:10], "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return value
+    return f"{parsed.day} {parsed.strftime('%b %Y')}"
+
+
 def _shows_checked_label() -> str | None:
     """Human phrasing for when the release cache was last fully refreshed."""
     checked_at = show_tracker.last_refresh_at(config.RELEASE_CACHE_DIR)
@@ -408,6 +420,28 @@ def _normalize_progress(progress) -> tuple[int, int] | None:
     return min(completed, total), total
 
 
+_SOON_SORTS = ("soonest", "latest")
+
+
+def _soon_sort() -> str:
+    """Which direction Coming soon is sorted. Whitelisted; soonest by default."""
+    requested = request.args.get("soon", "soonest")
+    return requested if requested in _SOON_SORTS else "soonest"
+
+
+def _split_coming_soon(coming_soon: list[dict], sort: str) -> tuple[list[dict], list[dict]]:
+    """Separate dated from undated shows, sorting only the dated ones.
+
+    An undated show carries no schedule to sort by, so it is grouped
+    separately rather than sorted into the calendar under a blank date.
+    """
+    dated = [show for show in coming_soon if show.get("next_air_date")]
+    undated = [show for show in coming_soon if not show.get("next_air_date")]
+    dated.sort(key=lambda show: show["next_air_date"], reverse=(sort == "latest"))
+    undated.sort(key=lambda show: (show.get("title") or "").lower())
+    return dated, undated
+
+
 def _render_shows_content(
     sections: dict[str, list[dict]],
     job_id: str | None,
@@ -416,6 +450,8 @@ def _render_shows_content(
     progress=None,
     template: str = "_shows_content.html",
 ) -> str:
+    soon_sort = _soon_sort()
+    soon_dated, soon_undated = _split_coming_soon(sections["coming_soon"], soon_sort)
     return render_template(
         template,
         sections=sections,
@@ -424,44 +460,20 @@ def _render_shows_content(
         refresh_error=refresh_error,
         progress=_normalize_progress(progress),
         checked_label=_shows_checked_label(),
+        soon_sort=soon_sort,
+        soon_dated=soon_dated,
+        soon_undated=soon_undated,
     )
 
 
-_SETTLED_VARIANTS = ("card", "card-lg", "row", "line")
+def _row_removed(sections: dict[str, list[dict]]) -> str:
+    """Drop the acted-on row and let the list close up over it.
 
-
-def _settled_variant() -> str:
-    """Which shape the settled row must match to avoid reflowing the list.
-
-    The browser knows which surface the action came from, so the form declares
-    it. Values are whitelisted because this arrives as form input.
+    The response carries no replacement row, so HTMX removes the target. Only
+    the out-of-band counters come back, rendered from freshly read state.
     """
-    variant = request.form.get("variant", "row")
-    return variant if variant in _SETTLED_VARIANTS else "row"
-
-
-def _settled_show_row(
-    card: dict,
-    state_label: str,
-    tone: str,
-    flip_action: str | None = None,
-    flip_label: str | None = None,
-) -> str:
-    """Render an acted-on show as a same-height settled row.
-
-    Keeping the row in place means the list never reflows under the pointer, so
-    a run of follow/ignore decisions does not move the page. Counters are sent
-    out-of-band from freshly read state so they never disagree with the rows.
-    """
-    _, _, sections = _show_page_data()
     return render_template(
-        "_show_row_settled.html",
-        show=card,
-        state_label=state_label,
-        tone=tone,
-        flip_action=flip_action,
-        flip_label=flip_label,
-        variant=_settled_variant(),
+        "_show_counts_oob.html",
         sections=sections,
         checked_label=_shows_checked_label(),
     )
@@ -473,15 +485,6 @@ def _is_htmx() -> bool:
 
 def _find_show_card(sections: dict[str, list[dict]], section: str, tmdb_id: int) -> dict | None:
     return next((card for card in sections[section] if card["tmdb_id"] == tmdb_id), None)
-
-
-def _show_poster(sections: dict[str, list[dict]], tmdb_id: int) -> str | None:
-    """Find cached artwork for a show in whichever section still lists it."""
-    for cards in sections.values():
-        for card in cards:
-            if card.get("tmdb_id") == tmdb_id and card.get("poster_path"):
-                return card["poster_path"]
-    return None
 
 
 def _show_action_id() -> int:
@@ -794,6 +797,21 @@ def shows_page() -> str:
     )
 
 
+@app.route("/shows/coming-soon")
+def coming_soon_section() -> str:
+    """Re-render just the Coming soon section, for the sort control."""
+    _, _, sections = _show_page_data()
+    soon_sort = _soon_sort()
+    soon_dated, soon_undated = _split_coming_soon(sections["coming_soon"], soon_sort)
+    return render_template(
+        "_shows_coming_soon.html",
+        sections=sections,
+        soon_sort=soon_sort,
+        soon_dated=soon_dated,
+        soon_undated=soon_undated,
+    )
+
+
 @app.route("/shows/jobs/<job_id>/poll")
 def poll_shows_job(job_id: str) -> str:
     job = job_registry.get(job_id)
@@ -839,13 +857,7 @@ def follow_show() -> Response:
         tracking_from_season=card["season_number"],
     )
     if _is_htmx():
-        return _settled_show_row(
-            card,
-            f"Following from S{card['season_number']}",
-            tone="teal",
-            flip_action="/shows/unfollow",
-            flip_label="Ignore instead",
-        )
+        return _row_removed(_show_page_data()[2])
     return redirect(url_for("shows_page"), code=303)
 
 
@@ -866,13 +878,7 @@ def ignore_show() -> Response:
         tracking_from_season=card["season_number"],
     )
     if _is_htmx():
-        return _settled_show_row(
-            card,
-            "Ignored",
-            tone="muted",
-            flip_action="/shows/refollow",
-            flip_label="Follow instead",
-        )
+        return _row_removed(_show_page_data()[2])
     return redirect(url_for("shows_page"), code=303)
 
 
@@ -893,13 +899,7 @@ def refollow_show() -> Response:
         tracking_from_season=card["season_number"],
     )
     if _is_htmx():
-        return _settled_show_row(
-            card,
-            f"Following from S{card['season_number']}",
-            tone="teal",
-            flip_action="/shows/unfollow",
-            flip_label="Ignore instead",
-        )
+        return _row_removed(_show_page_data()[2])
     return redirect(url_for("shows_page"), code=303)
 
 
@@ -920,13 +920,7 @@ def catch_up_show() -> Response:
         card["latest_aired_episode"],
     )
     if _is_htmx():
-        return _settled_show_row(
-            card,
-            f"Caught up through S{card['season_number']}E{card['latest_aired_episode']}",
-            tone="teal",
-            flip_action="/shows/unfollow",
-            flip_label="Unfollow",
-        )
+        return _row_removed(_show_page_data()[2])
     return redirect(url_for("shows_page"), code=303)
 
 
@@ -936,7 +930,7 @@ def unfollow_show() -> Response:
         tmdb_id = _show_action_id()
     except ValueError as exc:
         return Response(str(exc), status=400)
-    _, tracking_rows, sections = _show_page_data()
+    _, tracking_rows, _ = _show_page_data()
     row = next(
         (
             tracked
@@ -949,13 +943,7 @@ def unfollow_show() -> Response:
         return Response("Show is not followed", status=404)
     user_store.ignore_show(config.EVENT_DB_PATH, row["title"], tmdb_id)
     if _is_htmx():
-        return _settled_show_row(
-            {**row, "poster_path": _show_poster(sections, tmdb_id)},
-            "No longer following",
-            tone="muted",
-            flip_action="/shows/refollow",
-            flip_label="Follow again",
-        )
+        return _row_removed(_show_page_data()[2])
     return redirect(url_for("shows_page"), code=303)
 
 

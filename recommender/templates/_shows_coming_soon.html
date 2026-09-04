@@ -1,0 +1,77 @@
+{% import "_show_links.html" as link %}
+{% macro soon_row(show, csrf_token, undated=false) -%}
+<article class="show-row soon-row{% if undated %} soon-row--undated{% endif %}">
+  <span class="soon-date mono">{{ show.next_air_date if show.next_air_date else "—" }}</span>
+  <span class="soon-title">{{ link.name(show) }}</span>
+  <span class="soon-slug mono">
+    {%- if show.next_episode_number %}S{{ show.season_number }}E{{ show.next_episode_number }}
+    {%- else %}S{{ show.season_number }}{% endif %}
+  </span>
+  <form class="show-inline-form" action="/shows/unfollow" method="post"
+        hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
+    <button class="btn-quiet btn-quiet--bare" type="submit" title="Unfollow {{ show.title }}">Unfollow</button>
+  </form>
+</article>
+{%- endmacro %}
+
+  {# ── 3. Coming soon: a calendar, not an inbox. Dense dated lines. ── #}
+  <section class="shows-section shows-section--soon" aria-labelledby="coming-soon-heading">
+    <div class="shows-section-heading">
+      <h2 id="coming-soon-heading">Coming soon</h2>
+      <div class="soon-controls">
+        {% if soon_dated|length > 1 %}
+        {# Sort flips through a plain link, so it still works without HTMX. #}
+        <a class="soon-sort mono"
+           href="/shows?soon={{ 'latest' if soon_sort == 'soonest' else 'soonest' }}"
+           hx-get="/shows/coming-soon?soon={{ 'latest' if soon_sort == 'soonest' else 'soonest' }}"
+           hx-target="closest .shows-section--soon"
+           hx-swap="outerHTML">
+          {{ "Soonest first" if soon_sort == "soonest" else "Latest first" }}
+          <span class="soon-sort-arrow">{{ "\u2193" if soon_sort == "soonest" else "\u2191" }}</span>
+        </a>
+        {% endif %}
+        <span class="shows-count mono">{{ sections.coming_soon|length }} {{ "show" if sections.coming_soon|length == 1 else "shows" }}</span>
+      </div>
+    </div>
+
+    {% if sections.coming_soon %}
+    {% if soon_dated %}
+    <div class="soon-list">
+      {% for show in soon_dated %}
+      {{ soon_row(show, csrf_token) }}
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {# Undated shows are a separate group: nothing to schedule around, so they
+       do not belong interleaved with real dates. Five open, rest on demand. #}
+    {% if soon_undated %}
+    {% set undated_batch = 5 %}
+    <div class="soon-undated">
+      <div class="soon-undated-heading">
+        <span class="mono">No date announced</span>
+        <span class="shows-count mono">{{ soon_undated|length }}</span>
+      </div>
+      <div class="soon-list">
+        {% for show in soon_undated[:undated_batch] %}
+        {{ soon_row(show, csrf_token, undated=true) }}
+        {% endfor %}
+      </div>
+      {% if soon_undated|length > undated_batch %}
+      <details class="soon-undated-rest">
+        <summary class="mono">Show the remaining {{ soon_undated|length - undated_batch }}</summary>
+        <div class="soon-list">
+          {% for show in soon_undated[undated_batch:] %}
+          {{ soon_row(show, csrf_token, undated=true) }}
+          {% endfor %}
+        </div>
+      </details>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="shows-empty">No followed shows have announced what comes next.</div>
+    {% endif %}
+  </section>

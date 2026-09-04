@@ -28,7 +28,7 @@
       --lavender:  #a78bfa;
       --text:      #f2eff6;
       --body:      #c8c2d0;
-      --muted:     #7e7690;
+      --muted:     #8d84a1;  /* AA on both --bg (5.30:1) and --surface (4.91:1) */
     }
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -457,7 +457,7 @@
         Watchlist
         {% if watchlist_count %}<span class="nav-badge">{{ watchlist_count }}</span>{% endif %}
       </a>
-      <a href="/shows" class="nav-link {% if request.path.startswith('/shows') %}active{% endif %}">Your Shows</a>
+      <a href="/shows" class="nav-link {% if request.path.startswith('/shows') %}active{% endif %}">On Deck</a>
       <a href="/history" class="nav-link {% if request.path.startswith('/history') or request.path.startswith('/title') %}active{% endif %}">Archive</a>
     </div>
     <div class="nav-group-system">

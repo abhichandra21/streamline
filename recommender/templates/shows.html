@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Streamline — Your Shows{% endblock %}
+{% block title %}Streamline — On Deck{% endblock %}
 {% block content %}
 <div class="shows-heading">
-  <span class="mono shows-kicker">Release inbox</span>
-  <h1>Your Shows</h1>
+  <span class="mono shows-kicker">Your library</span>
+  <h1>On Deck</h1>
 </div>
 
 {% include "_shows_content.html" %}
@@ -107,6 +107,7 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
+    min-height: 1.9rem;
     gap: 1rem;
     border-bottom: 1px solid var(--border);
     padding-bottom: 0.55rem;
@@ -127,20 +128,29 @@
     border: 1px solid var(--border);
     border-radius: 7px;
   }
-  /* Ready now is the payoff, so it carries the most weight on the page. */
+  /* Ready now leads the page, but through colour and a teal edge rather than
+     bulk. Seventeen 156px cards read as a wall, which undercut the emphasis
+     instead of creating it. */
   .show-card--ready {
-    grid-template-columns: 72px minmax(0, 1fr) auto;
-    padding: 1rem;
+    grid-template-columns: 52px minmax(0, 1fr) auto;
+    padding: 0.7rem 0.85rem;
     border-color: rgba(58,184,160,0.28);
   }
   .show-card--ready .show-poster,
-  .show-card--ready .show-poster-empty { width: 72px; }
+  .show-card--ready .show-poster-empty { width: 52px; }
+  .show-ready-line {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
   .show-ready-count {
     color: var(--teal);
-    font-size: 0.64rem;
+    font-size: 0.62rem;
     letter-spacing: 0.09em;
     text-transform: uppercase;
-    margin-bottom: 0.1rem;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .show-poster,
@@ -178,7 +188,7 @@
   .show-poster-empty { display: grid; place-items: center; color: var(--border); font-size: 1.4rem; }
   .show-row-body { min-width: 0; }
   .show-card h3, .show-row h3 { font-size: 1.15rem; line-height: 1.2; margin-bottom: 0.2rem; }
-  .show-card--ready h3 { font-size: 1.3rem; }
+  .show-card--ready h3 { font-size: 1.12rem; }
   .show-card-copy { color: var(--muted); font-size: 0.8rem; }
   .show-card-detail { color: var(--body); }
   .show-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.4rem; flex-wrap: wrap; }
@@ -207,7 +217,7 @@
     border: 1px solid rgba(232,93,74,0.3);
     border-radius: 8px;
     background:
-      linear-gradient(180deg, rgba(232,93,74,0.05), transparent 55%),
+      linear-gradient(180deg, rgba(232,93,74,0.11), transparent 62%),
       var(--surface);
     padding: 0.95rem 1rem 1rem;
   }
@@ -253,75 +263,45 @@
     text-transform: uppercase;
   }
 
-  /* ── Settled state ──
-     Each variant matches the shape it replaced, so acting on a row changes
-     its contents without changing its height. Nothing below it moves. */
-  .show-row--settled { animation: settleIn 0.22s ease both; }
+  /* ── Leaving rows ──
+     An acted-on row is done with, so it fades out and the list closes up
+     over it rather than lingering with an undo. */
+  /* A leaving row collapses its own height as it fades, so the list closes
+     up smoothly instead of snapping shut once the row is gone. max-height
+     is set per row shape because height:auto cannot be transitioned; each
+     value sits just above the real height so almost none of the timeline is
+     spent on invisible space. */
+  .show-card--ready { max-height: 120px; }
+  .show-card        { max-height: 150px; }
+  .show-decision-row { max-height: 105px; }
+  .soon-row         { max-height: 58px; }
 
-  /* Replaces a poster card. Two sizes, matching the two card sizes in use. */
-  .show-row--settled.show-row--card,
-  .show-row--settled.show-row--card-lg {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 7px;
+  /* Acknowledge the click straight away: the request is in flight before the
+     collapse can start, and without this the row sits inert for ~200ms. */
+  .show-row.htmx-request {
+    opacity: 0.45;
+    transition: opacity 0.1s ease-out;
   }
-  .show-row--settled.show-row--card {
-    grid-template-columns: 58px minmax(0, 1fr) auto;
-    gap: 0.9rem;
-    padding: 0.85rem;
-  }
-  .show-row--settled.show-row--card-lg {
-    grid-template-columns: 72px minmax(0, 1fr) auto;
-    gap: 0.9rem;
-    padding: 1rem;
-  }
-  .show-row--settled.show-row--card-lg .show-poster,
-  .show-row--settled.show-row--card-lg .show-poster-empty { width: 72px; }
-  .show-row--settled.show-row--card-lg h3 { font-size: 1.3rem; }
+  .show-row.htmx-request button { pointer-events: none; }
 
-  /* Replaces a compact calendar line, so it stays a single line. */
-  .show-row--settled.show-row--line {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: baseline;
-    gap: 0.9rem;
-    padding: 0.42rem 0;
-    border-top: 1px solid rgba(53,47,64,0.55);
-  }
-  .show-row--settled.show-row--line .show-poster-link { display: none; }
-  .show-row--settled.show-row--line h3 {
-    display: inline;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 0.92rem;
-    margin: 0;
-  }
-  .show-row--settled.show-row--line .show-row-body {
-    display: flex;
-    gap: 0.6rem;
-    align-items: baseline;
-    white-space: nowrap;
+  .show-row.htmx-swapping {
+    max-height: 0 !important;
+    opacity: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+    border-top-color: transparent;
     overflow: hidden;
+    transition:
+      max-height 0.34s cubic-bezier(0.4, 0, 0.2, 1),
+      opacity 0.2s ease-out,
+      padding 0.34s cubic-bezier(0.4, 0, 0.2, 1),
+      margin 0.34s cubic-bezier(0.4, 0, 0.2, 1),
+      border-color 0.15s linear;
   }
-  .show-row--settled.show-row--line .show-card-copy { font-size: 0.68rem; }
-  /* Match the calendar's bare button metrics, or the line grows taller. */
-  .show-row--settled.show-row--line .show-actions { flex-wrap: nowrap; }
-  .show-row--settled.show-row--line .show-actions button {
-    padding: 0.2rem 0.3rem;
-    font-size: 0.55rem;
-  }
-
-  .show-row--teal .show-settled-mark { color: var(--teal); }
-  .show-row--muted { opacity: 0.55; }
-  .show-row--muted .show-settled-mark { color: var(--muted); }
-  .show-settled-mark { margin-right: 0.3rem; }
-  @keyframes settleIn {
-    from { opacity: 0.3; }
-    to   { opacity: 1; }
-  }
-  .show-row--muted { animation: settleInMuted 0.22s ease both; }
-  @keyframes settleInMuted {
-    from { opacity: 0.2; }
-    to   { opacity: 0.55; }
-  }
+  /* The flex gap between cards would otherwise hold the space open. */
+  .shows-list { transition: gap 0.34s cubic-bezier(0.4, 0, 0.2, 1); }
 
   /* ── Coming soon: a calendar. Dense dated lines, not cards. ── */
   .shows-section--soon .shows-section-heading h2 {
@@ -341,10 +321,60 @@
     border-top: 1px solid rgba(53,47,64,0.55);
   }
   .soon-row:first-child { border-top: none; }
+  .soon-controls { display: flex; align-items: baseline; gap: 0.9rem; }
+  .soon-sort {
+    color: var(--muted);
+    font-size: 0.58rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    cursor: pointer;
+    transition: color 0.15s;
+  }
+  .soon-sort:hover { color: var(--text); text-decoration: none; }
+  .soon-sort-arrow { color: var(--teal); font-size: 0.7rem; line-height: 1; }
+
+  /* Undated shows carry no schedule, so they sit below the calendar in their
+     own group rather than under a blank date inside it. */
+  .soon-undated { margin-top: 1.4rem; }
+  .soon-undated-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-bottom: 0.4rem;
+    color: var(--muted);
+    font-size: 0.58rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .soon-undated .soon-date { color: var(--border); }
+  .soon-undated-rest summary {
+    padding: 0.5rem 0 0;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.58rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+  .soon-undated-rest summary:hover { color: var(--text); }
   .soon-date { color: var(--body); font-size: 0.68rem; letter-spacing: 0.03em; }
   .soon-title { color: var(--text); font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .soon-slug { color: var(--muted); font-size: 0.6rem; letter-spacing: 0.06em; }
   .soon-row--undated .soon-date { color: var(--muted); }
+  .soon-row .show-inline-form {
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+  .soon-row:hover .show-inline-form,
+  .soon-row:focus-within .show-inline-form { opacity: 1; }
+  /* Touch devices have no hover, so keep it permanently visible there. */
+  @media (hover: none) {
+    .soon-row .show-inline-form { opacity: 1; }
+  }
   /* A settled row landing in the calendar keeps the calendar's own rhythm. */
   .soon-list .show-row--settled { grid-template-columns: 44px minmax(0, 1fr) auto; }
 
@@ -367,10 +397,10 @@
 
   @media (max-width: 640px) {
     .show-card { grid-template-columns: 48px minmax(0, 1fr); }
-    .show-card--ready { grid-template-columns: 56px minmax(0, 1fr); }
+    .show-card--ready { grid-template-columns: 48px minmax(0, 1fr); }
     .show-poster, .show-poster-empty { width: 48px; }
     .show-card--ready .show-poster,
-    .show-card--ready .show-poster-empty { width: 56px; }
+    .show-card--ready .show-poster-empty { width: 48px; }
     .show-card .show-actions { grid-column: 1 / -1; justify-content: flex-start; padding-left: 3.55rem; }
     .show-decision-row,
     .show-row--settled { grid-template-columns: 44px minmax(0, 1fr); }
