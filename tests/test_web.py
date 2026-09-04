@@ -296,7 +296,7 @@ class TestYourShowsInPlaceActions:
         assert "<strong>1</strong> ready" in body
         assert "<strong>1</strong> decision" in body
 
-    def test_htmx_follow_returns_settled_row_instead_of_redirect(self, client, monkeypatch):
+    def test_htmx_follow_removes_the_row_rather_than_settling_it(self, client, monkeypatch):
         self._client(client, monkeypatch)
         monkeypatch.setattr(web.user_store, "follow_show", MagicMock())
 
@@ -308,12 +308,13 @@ class TestYourShowsInPlaceActions:
         body = response.get_data(as_text=True)
 
         assert response.status_code == 200
-        assert "show-row--settled" in body
-        assert "Following from S2" in body
-        # The opposite action stays reachable without a page load.
-        assert 'hx-post="/shows/unfollow"' in body
+        # No replacement row comes back, so HTMX drops the target and the
+        # list closes up. Only the counters return.
+        assert "<article" not in body
+        assert "Returning Show" not in body
+        assert 'id="count-decisions"' in body
 
-    def test_htmx_ignore_offers_the_reverse_action(self, client, monkeypatch):
+    def test_htmx_ignore_also_removes_the_row(self, client, monkeypatch):
         self._client(client, monkeypatch)
         monkeypatch.setattr(web.user_store, "ignore_show", MagicMock())
 
@@ -323,8 +324,15 @@ class TestYourShowsInPlaceActions:
             headers={"HX-Request": "true"},
         ).get_data(as_text=True)
 
-        assert "Ignored" in body
-        assert 'hx-post="/shows/refollow"' in body
+        assert "<article" not in body
+        assert 'hx-swap-oob="true"' in body
+
+    def test_rows_fade_before_they_are_removed(self, client, monkeypatch):
+        self._client(client, monkeypatch)
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert 'hx-swap="outerHTML swap:180ms"' in body
 
     def test_settled_row_resends_counts_out_of_band(self, client, monkeypatch):
         self._client(client, monkeypatch)
@@ -372,6 +380,110 @@ class TestYourShowsInPlaceActions:
 
         assert "shows-decisions-clear" in body
         assert '<div class="shows-decisions-list">' not in body
+
+
+class TestComingSoonGroupingAndSort:
+    """Dated shows form a sortable calendar; undated ones are grouped apart."""
+
+    def _sections(self, dated=3, undated=0):
+        sections = _show_sections()
+        sections["coming_soon"] = [
+            {"tmdb_id": 400 + i, "title": f"Dated {i}", "season_number": 2,
+             "next_air_date": f"2026-1{i}-05", "next_episode_number": 1, "poster_path": None}
+            for i in range(1, dated + 1)
+        ] + [
+            {"tmdb_id": 500 + i, "title": f"Undated {i}", "season_number": 3,
+             "next_air_date": None, "next_episode_number": None, "poster_path": None}
+            for i in range(1, undated + 1)
+        ]
+        return sections
+
+    def _install(self, monkeypatch, sections):
+        monkeypatch.setattr(web, "_show_page_data", lambda: ([], [], sections))
+        monkeypatch.setattr(web.show_tracker, "refresh_is_due", lambda *_args: False)
+
+    def test_split_puts_undated_in_its_own_group(self):
+        rows = [
+            {"title": "B", "next_air_date": "2026-10-02"},
+            {"title": "A", "next_air_date": None},
+            {"title": "C", "next_air_date": "2026-09-24"},
+        ]
+        dated, undated = web._split_coming_soon(rows, "soonest")
+        assert [r["title"] for r in dated] == ["C", "B"]
+        assert [r["title"] for r in undated] == ["A"]
+
+    def test_latest_sort_reverses_only_the_dated_shows(self):
+        rows = [
+            {"title": "B", "next_air_date": "2026-10-02"},
+            {"title": "C", "next_air_date": "2026-09-24"},
+            {"title": "A", "next_air_date": None},
+        ]
+        dated, undated = web._split_coming_soon(rows, "latest")
+        assert [r["title"] for r in dated] == ["B", "C"]
+        assert [r["title"] for r in undated] == ["A"]
+
+    def test_undated_shows_sort_by_title_for_a_stable_order(self):
+        rows = [{"title": "zeta", "next_air_date": None}, {"title": "Alpha", "next_air_date": None}]
+        _, undated = web._split_coming_soon(rows, "soonest")
+        assert [r["title"] for r in undated] == ["Alpha", "zeta"]
+
+    def test_unknown_sort_value_falls_back_to_soonest(self, client, monkeypatch):
+        self._install(monkeypatch, self._sections(dated=2))
+
+        body = client.get("/shows?soon=sideways").get_data(as_text=True)
+
+        assert body.index("Dated 1") < body.index("Dated 2")
+        assert "Soonest first" in body
+
+    def test_sort_control_offers_the_other_direction(self, client, monkeypatch):
+        self._install(monkeypatch, self._sections(dated=2))
+
+        soonest = client.get("/shows?soon=soonest").get_data(as_text=True)
+        latest = client.get("/shows?soon=latest").get_data(as_text=True)
+
+        assert "soon=latest" in soonest
+        assert "soon=soonest" in latest
+        assert latest.index("Dated 2") < latest.index("Dated 1")
+
+    def test_sort_control_is_hidden_when_there_is_nothing_to_reorder(self, client, monkeypatch):
+        self._install(monkeypatch, self._sections(dated=1, undated=4))
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert 'class="soon-sort mono"' not in body
+
+    def test_undated_group_shows_five_and_collapses_the_rest(self, client, monkeypatch):
+        self._install(monkeypatch, self._sections(dated=1, undated=8))
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert "No date announced" in body
+        assert "Show the remaining 3" in body
+        assert body.count("Undated") >= 8
+
+    def test_small_undated_group_needs_no_expander(self, client, monkeypatch):
+        self._install(monkeypatch, self._sections(dated=1, undated=3))
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert "No date announced" in body
+        assert '<details class="soon-undated-rest">' not in body
+
+    def test_undated_group_is_absent_when_every_show_has_a_date(self, client, monkeypatch):
+        self._install(monkeypatch, self._sections(dated=3))
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert "No date announced" not in body
+
+    def test_partial_route_returns_only_the_section(self, client, monkeypatch):
+        self._install(monkeypatch, self._sections(dated=2, undated=1))
+
+        body = client.get("/shows/coming-soon?soon=latest").get_data(as_text=True)
+
+        assert "shows-section--soon" in body
+        assert "Ready now" not in body
+        assert body.index("Dated 2") < body.index("Dated 1")
 
 
 class TestYourShowsRefreshProgress:

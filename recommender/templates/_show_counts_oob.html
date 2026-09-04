@@ -1,0 +1,6 @@
+{% import "_show_counts.html" as counts %}
+{#- Sent on its own after an action: no replacement row, so the target is
+    removed and the list closes up. Only the counters come back. -#}
+{{ counts.ready(sections, true) }}
+{{ counts.decisions(sections, true) }}
+{{ counts.tally(sections, checked_label, true) }}

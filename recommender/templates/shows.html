@@ -253,74 +253,13 @@
     text-transform: uppercase;
   }
 
-  /* ── Settled state ──
-     Each variant matches the shape it replaced, so acting on a row changes
-     its contents without changing its height. Nothing below it moves. */
-  .show-row--settled { animation: settleIn 0.22s ease both; }
-
-  /* Replaces a poster card. Two sizes, matching the two card sizes in use. */
-  .show-row--settled.show-row--card,
-  .show-row--settled.show-row--card-lg {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-  }
-  .show-row--settled.show-row--card {
-    grid-template-columns: 58px minmax(0, 1fr) auto;
-    gap: 0.9rem;
-    padding: 0.85rem;
-  }
-  .show-row--settled.show-row--card-lg {
-    grid-template-columns: 72px minmax(0, 1fr) auto;
-    gap: 0.9rem;
-    padding: 1rem;
-  }
-  .show-row--settled.show-row--card-lg .show-poster,
-  .show-row--settled.show-row--card-lg .show-poster-empty { width: 72px; }
-  .show-row--settled.show-row--card-lg h3 { font-size: 1.3rem; }
-
-  /* Replaces a compact calendar line, so it stays a single line. */
-  .show-row--settled.show-row--line {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: baseline;
-    gap: 0.9rem;
-    padding: 0.42rem 0;
-    border-top: 1px solid rgba(53,47,64,0.55);
-  }
-  .show-row--settled.show-row--line .show-poster-link { display: none; }
-  .show-row--settled.show-row--line h3 {
-    display: inline;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 0.92rem;
-    margin: 0;
-  }
-  .show-row--settled.show-row--line .show-row-body {
-    display: flex;
-    gap: 0.6rem;
-    align-items: baseline;
-    white-space: nowrap;
-    overflow: hidden;
-  }
-  .show-row--settled.show-row--line .show-card-copy { font-size: 0.68rem; }
-  /* Match the calendar's bare button metrics, or the line grows taller. */
-  .show-row--settled.show-row--line .show-actions { flex-wrap: nowrap; }
-  .show-row--settled.show-row--line .show-actions button {
-    padding: 0.2rem 0.3rem;
-    font-size: 0.55rem;
-  }
-
-  .show-row--teal .show-settled-mark { color: var(--teal); }
-  .show-row--muted { opacity: 0.55; }
-  .show-row--muted .show-settled-mark { color: var(--muted); }
-  .show-settled-mark { margin-right: 0.3rem; }
-  @keyframes settleIn {
-    from { opacity: 0.3; }
-    to   { opacity: 1; }
-  }
-  .show-row--muted { animation: settleInMuted 0.22s ease both; }
-  @keyframes settleInMuted {
-    from { opacity: 0.2; }
-    to   { opacity: 0.55; }
+  /* ── Leaving rows ──
+     An acted-on row is done with, so it fades out and the list closes up
+     over it rather than lingering with an undo. */
+  .show-row.htmx-swapping {
+    opacity: 0;
+    transform: translateX(-6px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
   }
 
   /* ── Coming soon: a calendar. Dense dated lines, not cards. ── */
@@ -341,6 +280,46 @@
     border-top: 1px solid rgba(53,47,64,0.55);
   }
   .soon-row:first-child { border-top: none; }
+  .soon-controls { display: flex; align-items: baseline; gap: 0.9rem; }
+  .soon-sort {
+    color: var(--muted);
+    font-size: 0.58rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    cursor: pointer;
+    transition: color 0.15s;
+  }
+  .soon-sort:hover { color: var(--text); text-decoration: none; }
+  .soon-sort-arrow { color: var(--teal); font-size: 0.7rem; line-height: 1; }
+
+  /* Undated shows carry no schedule, so they sit below the calendar in their
+     own group rather than under a blank date inside it. */
+  .soon-undated { margin-top: 1.4rem; }
+  .soon-undated-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-bottom: 0.4rem;
+    color: var(--muted);
+    font-size: 0.58rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .soon-undated .soon-date { color: var(--border); }
+  .soon-undated-rest summary {
+    padding: 0.5rem 0 0;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.58rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+  .soon-undated-rest summary:hover { color: var(--text); }
   .soon-date { color: var(--body); font-size: 0.68rem; letter-spacing: 0.03em; }
   .soon-title { color: var(--text); font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .soon-slug { color: var(--muted); font-size: 0.6rem; letter-spacing: 0.06em; }
