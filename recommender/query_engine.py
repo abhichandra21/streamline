@@ -135,11 +135,28 @@ class ConversationContext:
 
 
 def _parse_json_response(text: str) -> dict | list:
+    """Pull the first JSON value out of an LLM response.
+
+    Models sometimes wrap the payload in a code fence, lead with a sentence, or
+    append a prose "Note:" paragraph after the closing fence. Anchoring the
+    fence strip to the end of the string left that trailing note in place and
+    json.loads raised "Extra data", which callers turned into empty results.
+    """
     text = text.strip()
-    if text.startswith('```'):
-        text = re.sub(r'^```(?:json)?\n?', '', text)
-        text = re.sub(r'\n?```$', '', text)
-    return json.loads(text.strip())
+    fenced = re.search(r'```(?:json)?\s*\n(.*?)\n?```', text, re.DOTALL)
+    if fenced:
+        text = fenced.group(1).strip()
+    else:
+        start = min((i for i in (text.find('{'), text.find('[')) if i != -1),
+                    default=-1)
+        if start > 0:
+            text = text[start:]
+    # raw_decode stops at the end of the first complete value, so any trailing
+    # commentary the model added is ignored rather than fatal.
+    value, _ = json.JSONDecoder().raw_decode(text)
+    if not isinstance(value, (dict, list)):
+        raise json.JSONDecodeError("Expected a JSON object or array", text, 0)
+    return value
 
 
 def _optional_positive_int(value) -> int | None:
