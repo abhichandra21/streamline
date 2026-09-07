@@ -1001,3 +1001,18 @@ def test_parse_json_response_object_with_trailing_note():
 def test_parse_json_response_rejects_non_json():
     with pytest.raises(json.JSONDecodeError):
         _parse_json_response("I could not produce a ranking for this query.")
+
+
+def test_parse_json_response_preamble_containing_bracket():
+    raw = 'Here are the rankings [best first]:\n\n[{"title": "Slow Horses"}]'
+    assert _parse_json_response(raw) == [{"title": "Slow Horses"}]
+
+
+def test_parse_json_response_preamble_containing_brace():
+    raw = 'Ranked by fit (see note {below}):\n{"genres": ["crime"]}'
+    assert _parse_json_response(raw) == {"genres": ["crime"]}
+
+
+def test_parse_json_response_rejects_non_json_with_brackets():
+    with pytest.raises(json.JSONDecodeError):
+        _parse_json_response("I could not find matches [sorry].")

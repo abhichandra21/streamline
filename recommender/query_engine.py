@@ -145,18 +145,30 @@ def _parse_json_response(text: str) -> dict | list:
     text = text.strip()
     fenced = re.search(r'```(?:json)?\s*\n(.*?)\n?```', text, re.DOTALL)
     if fenced:
-        text = fenced.group(1).strip()
-    else:
-        start = min((i for i in (text.find('{'), text.find('[')) if i != -1),
-                    default=-1)
-        if start > 0:
-            text = text[start:]
-    # raw_decode stops at the end of the first complete value, so any trailing
-    # commentary the model added is ignored rather than fatal.
-    value, _ = json.JSONDecoder().raw_decode(text)
-    if not isinstance(value, (dict, list)):
-        raise json.JSONDecodeError("Expected a JSON object or array", text, 0)
-    return value
+        return _decode_first_value(fenced.group(1).strip())
+    return _decode_first_value(text)
+
+
+def _decode_first_value(text: str) -> dict | list:
+    """Decode the first JSON object or array in text, ignoring prose around it.
+
+    A preamble can contain the same punctuation the payload opens with
+    ("Here are the rankings [best first]:"), so committing to the earliest
+    delimiter is not enough. Try each one in order and keep the first that
+    decodes. raw_decode stops at the end of a complete value, so trailing
+    commentary is ignored rather than fatal.
+    """
+    decoder = json.JSONDecoder()
+    for start in range(len(text)):
+        if text[start] not in '{[':
+            continue
+        try:
+            value, _ = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, (dict, list)):
+            return value
+    raise json.JSONDecodeError("No JSON object or array found", text, 0)
 
 
 def _optional_positive_int(value) -> int | None:
