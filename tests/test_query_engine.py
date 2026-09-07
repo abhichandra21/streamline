@@ -1,7 +1,12 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from recommender.query_engine import QueryIntent, parse_intent, RecommendContext, ask, rank_candidates
+import pytest
+
+from recommender.query_engine import (
+    QueryIntent, parse_intent, RecommendContext, ask, rank_candidates,
+    _parse_json_response,
+)
 from recommender.tmdb_client import TmdbMetadata
 from recommender.watch_index import WatchIndex
 from tests.mock_llm import make_mock_llm, make_mock_llm_sequence
@@ -956,3 +961,58 @@ def test_ask_runtime_fallback_adds_ranker_hint(monkeypatch):
     note = (captured["context_note"] or "").lower()
     assert "runtime" in note
     assert "low energy" in note   # original context preserved
+
+
+# --- _parse_json_response robustness ---------------------------------------
+
+def test_parse_json_response_plain_json():
+    assert _parse_json_response('{"a": 1}') == {"a": 1}
+
+
+def test_parse_json_response_fenced_block():
+    assert _parse_json_response('```json\n[1, 2]\n```') == [1, 2]
+
+
+def test_parse_json_response_fenced_block_with_trailing_note():
+    raw = (
+        '```json\n'
+        '[{"title": "Slow Horses"}]\n'
+        '```\n\n'
+        'Note: I ranked these by how closely they match the British crime brief.'
+    )
+    assert _parse_json_response(raw) == [{"title": "Slow Horses"}]
+
+
+def test_parse_json_response_bare_json_with_trailing_note():
+    raw = '[{"title": "Slow Horses"}]\n\nNote: only five candidates were plausible.'
+    assert _parse_json_response(raw) == [{"title": "Slow Horses"}]
+
+
+def test_parse_json_response_leading_preamble():
+    raw = 'Here are the rankings:\n\n[{"title": "Slow Horses"}]'
+    assert _parse_json_response(raw) == [{"title": "Slow Horses"}]
+
+
+def test_parse_json_response_object_with_trailing_note():
+    raw = '{"genres": ["crime"]}\n\nNote: assumed TV given "drama".'
+    assert _parse_json_response(raw) == {"genres": ["crime"]}
+
+
+def test_parse_json_response_rejects_non_json():
+    with pytest.raises(json.JSONDecodeError):
+        _parse_json_response("I could not produce a ranking for this query.")
+
+
+def test_parse_json_response_preamble_containing_bracket():
+    raw = 'Here are the rankings [best first]:\n\n[{"title": "Slow Horses"}]'
+    assert _parse_json_response(raw) == [{"title": "Slow Horses"}]
+
+
+def test_parse_json_response_preamble_containing_brace():
+    raw = 'Ranked by fit (see note {below}):\n{"genres": ["crime"]}'
+    assert _parse_json_response(raw) == {"genres": ["crime"]}
+
+
+def test_parse_json_response_rejects_non_json_with_brackets():
+    with pytest.raises(json.JSONDecodeError):
+        _parse_json_response("I could not find matches [sorry].")

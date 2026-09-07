@@ -135,11 +135,40 @@ class ConversationContext:
 
 
 def _parse_json_response(text: str) -> dict | list:
+    """Pull the first JSON value out of an LLM response.
+
+    Models sometimes wrap the payload in a code fence, lead with a sentence, or
+    append a prose "Note:" paragraph after the closing fence. Anchoring the
+    fence strip to the end of the string left that trailing note in place and
+    json.loads raised "Extra data", which callers turned into empty results.
+    """
     text = text.strip()
-    if text.startswith('```'):
-        text = re.sub(r'^```(?:json)?\n?', '', text)
-        text = re.sub(r'\n?```$', '', text)
-    return json.loads(text.strip())
+    fenced = re.search(r'```(?:json)?\s*\n(.*?)\n?```', text, re.DOTALL)
+    if fenced:
+        return _decode_first_value(fenced.group(1).strip())
+    return _decode_first_value(text)
+
+
+def _decode_first_value(text: str) -> dict | list:
+    """Decode the first JSON object or array in text, ignoring prose around it.
+
+    A preamble can contain the same punctuation the payload opens with
+    ("Here are the rankings [best first]:"), so committing to the earliest
+    delimiter is not enough. Try each one in order and keep the first that
+    decodes. raw_decode stops at the end of a complete value, so trailing
+    commentary is ignored rather than fatal.
+    """
+    decoder = json.JSONDecoder()
+    for start in range(len(text)):
+        if text[start] not in '{[':
+            continue
+        try:
+            value, _ = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, (dict, list)):
+            return value
+    raise json.JSONDecodeError("No JSON object or array found", text, 0)
 
 
 def _optional_positive_int(value) -> int | None:
