@@ -27,11 +27,11 @@
          same declarations serve both the collapse toggle and the narrow-window
          band, with no duplicated rules. */
       --sb-w:          208px;
-      --sb-label:      inline;
+      /* Text fades rather than being switched off, so the labels travel out
+         with the shrinking column instead of vanishing before it moves. */
+      --sb-text-op:    1;
       --sb-dot:        none;
       --sb-sec-pad:    1.15rem 1rem 0.5rem;
-      --sb-sec-size:   0.55rem;
-      --sb-sec-op:     1;
 
       --bg:        #141118;
       --surface:   #1c1922;
@@ -140,20 +140,36 @@
       opacity: 0.92;
       flex-shrink: 0;
     }
-    .nav-brand-word { color: var(--text); display: var(--sb-label); }
+    .nav-brand-word { color: var(--text); }
     .nav-brand-word em { font-style: italic; color: var(--teal); }
 
     .nav-section {
       font-family: 'JetBrains Mono', monospace;
-      font-size: var(--sb-sec-size);
+      font-size: 0.55rem;
       letter-spacing: 0.14em;
       text-transform: uppercase;
       color: var(--muted);
-      opacity: var(--sb-sec-op);
       padding: var(--sb-sec-pad);
       white-space: nowrap;
       line-height: 1.2;
     }
+    /* Everything textual fades together. Expanding waits a beat so the labels
+       arrive into a column wide enough to hold them; collapsing starts at once
+       so they are gone before the edge reaches them. The heading keeps its box
+       either way, so the gaps that separate the groups do not move. */
+    .nav-label,
+    .nav-brand-word,
+    .nav-badge,
+    .nav-section,
+    .nav-brand img {
+      opacity: var(--sb-text-op);
+      transition: opacity 0.16s ease 0.08s;
+    }
+    html.sb-rail .nav-label,
+    html.sb-rail .nav-brand-word,
+    html.sb-rail .nav-badge,
+    html.sb-rail .nav-section,
+    html.sb-rail .nav-brand img { transition: opacity 0.1s ease 0s; }
     .nav-group { display: flex; flex-direction: column; gap: 1px; padding: 0 0.5rem; }
 
     .nav-link {
@@ -192,7 +208,7 @@
       border-radius: 0 3px 3px 0;
       background: var(--accent);
     }
-    .nav-label { overflow: hidden; display: var(--sb-label); }
+    .nav-label { overflow: hidden; }
     /* Watchlist count shows as a dot once the rail is too narrow for the number. */
     .nav-dot {
       display: var(--sb-dot);
@@ -248,24 +264,21 @@
     /* Collapsing is a subtraction and nothing else. The icon column, the
        group headings and the toggle all keep the position they had when the
        labels were there, so the sidebar narrows without anything sliding. */
-    html.sb-rail .sidebar .nav-brand { display: none; }
     html.sb-rail {
-      --sb-label:      none;
-      --sb-dot:        block;
-      --sb-sec-size:   0.5rem;
-      --sb-sec-op:     0.55;
+      --sb-text-op: 0;
+      --sb-dot:     block;
     }
     @media (min-width: 840px) and (max-width: 1039px) {
       /* Nothing to toggle at this width, so the row carries the mark instead
          of an empty 56px gap -- lined up with the icon column below it. */
       .sidebar-toggle { display: none; }
       .sidebar .nav-brand { padding-left: 8.3px; }
+      /* The mark stays: it is the only thing on that row at this width. */
+      .sidebar .nav-brand img { opacity: 1; }
       :root {
-        --sb-w:          60px;
-        --sb-label:      none;
-        --sb-dot:        block;
-        --sb-sec-size:   0.5rem;
-        --sb-sec-op:     0.55;
+        --sb-w:       60px;
+        --sb-text-op: 0;
+        --sb-dot:     block;
       }
     }
 
@@ -497,7 +510,6 @@
       border-radius: 8px;
       line-height: 1.3;
       margin-left: auto;
-      display: var(--sb-label);
     }
 
     /* Badge */
