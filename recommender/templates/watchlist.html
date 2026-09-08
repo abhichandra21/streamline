@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Streamline — Watchlist{% endblock %}
+{% block main_class %}wide{% endblock %}
 {% block content %}
 <div style="margin-bottom:1.5rem;">
   <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--teal);">Queue</span>
@@ -27,62 +28,51 @@
 </div>
 
 {% if items %}
-<div id="wl-list" style="display:flex; flex-direction:column; gap:10px;">
+<div id="wl-list" class="wl-grid">
   {% for item in items %}
   <div id="wl-item-{{ loop.index }}"
-    class="wl-item"
+    class="wl-item wl-card"
     data-type="{{ item.content_type }}"
     data-title="{{ item.title | lower }}"
     data-saved="{{ item.saved_at or '' }}"
-    data-rating="{{ item.vote_average }}"
-    style="display:flex; gap:1rem; padding:1.25rem; border-radius:6px; background:var(--surface); border:1px solid var(--border); transition:border-color 0.2s;"
-    onmouseover="this.style.borderColor='var(--accent)'"
-    onmouseout="this.style.borderColor='var(--border)'">
+    data-rating="{{ item.vote_average }}">
 
-    {% if item.poster %}
-    <div style="width:68px; flex-shrink:0; aspect-ratio:2/3; overflow:hidden; border-radius:4px;">
-      <img src="{{ item.poster }}" alt="{{ item.title }}" style="width:100%; height:100%; object-fit:cover;">
+    <div class="wl-poster">
+      {% if item.poster %}
+      <img src="{{ item.poster }}" alt="{{ item.title }}" loading="lazy">
+      {% else %}
+      <span class="wl-poster-empty display">{{ item.title[:1] }}</span>
+      {% endif %}
+      <span class="badge {{ 'badge-tv' if item.content_type == 'tv' else 'badge-movie' }} wl-type">{{ item.content_type }}</span>
+      {% if item.vote_average %}
+      <span class="mono wl-score">★ {{ "%.1f"|format(item.vote_average) }}</span>
+      {% endif %}
     </div>
-    {% else %}
-    <div style="width:68px; flex-shrink:0; aspect-ratio:2/3; background:var(--surface2); border-radius:4px; display:flex; align-items:center; justify-content:center;">
-      <span style="font-family:'DM Serif Display',serif; font-size:1.5rem; color:var(--border);">{{ item.title[:1] }}</span>
-    </div>
-    {% endif %}
 
-    <div style="flex:1; min-width:0;">
-      <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:0.5rem; margin-bottom:0.35rem;">
-        {% if item.tmdb_url %}
-        <a href="{{ item.tmdb_url }}" target="_blank" rel="noopener" style="text-decoration:none;">
-          <h3 style="font-family:'DM Serif Display',serif; font-size:1.2rem; color:var(--text); line-height:1.25; margin:0; transition:color 0.15s;"
-            onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">{{ item.title }}</h3>
-        </a>
-        {% else %}
-        <h3 style="font-family:'DM Serif Display',serif; font-size:1.2rem; color:var(--text); line-height:1.25; margin:0;">{{ item.title }}</h3>
-        {% endif %}
-        <span class="badge {{ 'badge-tv' if item.content_type == 'tv' else 'badge-movie' }}" style="flex-shrink:0;">{{ item.content_type }}</span>
-      </div>
+    <div class="wl-body">
+      {% if item.tmdb_url %}
+      <a href="{{ item.tmdb_url }}" target="_blank" rel="noopener" class="wl-title-link">
+        <h3 class="wl-title">{{ item.title }}</h3>
+      </a>
+      {% else %}
+      <h3 class="wl-title">{{ item.title }}</h3>
+      {% endif %}
 
-      <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
-        {% if item.vote_average %}
-        <span class="mono" style="font-size:0.65rem; color:var(--accent2);">★ {{ "%.1f"|format(item.vote_average) }}</span>
-        {% endif %}
-        {% if item.genres %}
-        {% if item.vote_average %}<span style="color:var(--border);">·</span>{% endif %}
-        <span class="mono" style="font-size:0.62rem; color:var(--muted);">{{ item.genres | join("  ·  ") }}</span>
-        {% endif %}
-      </div>
+      {% if item.genres %}
+      <p class="mono wl-genres">{{ item.genres | join("  ·  ") }}</p>
+      {% endif %}
 
-      <div style="display:flex; align-items:center; gap:0.8rem; flex-wrap:wrap; margin-bottom:0.75rem;">
-        {% if item.streaming_providers %}
-        <span class="mono" style="font-size:0.58rem; color:var(--muted);">{{ item.streaming_providers | join("  ·  ") }}</span>
-        {% else %}
-        <span class="mono" style="font-size:0.58rem; color:var(--muted); opacity:0.6;">Not on your services</span>
-        {% endif %}
+      <p class="mono wl-where{% if not item.streaming_providers %} wl-where--none{% endif %}">
+        {%- if item.streaming_providers %}{{ item.streaming_providers | join("  ·  ") }}
+        {%- else %}Not on your services{% endif -%}
+      </p>
+
+      <div class="wl-links">
         {% if item.tmdb_url %}<a href="{{ item.tmdb_url }}" target="_blank" rel="noopener" class="mono result-link">TMDB</a>{% endif %}
         {% if item.imdb_url %}<a href="{{ item.imdb_url }}" target="_blank" rel="noopener" class="mono result-link">IMDB</a>{% endif %}
       </div>
 
-      <div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
+      <div class="wl-actions">
         <form hx-post="/watchlist/watched" hx-target="#wl-item-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="title" value="{{ item.title }}">
@@ -123,6 +113,102 @@
 {% endif %}
 
 <style>
+  /* Watchlist is 16 pieces of artwork, not 16 lines of prose -- a grid uses
+     the width a full-bleed row cannot. */
+  .wl-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
+    gap: 1.1rem;
+    align-items: start;
+  }
+  .wl-card {
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: border-color 0.2s, transform 0.15s;
+  }
+  .wl-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+
+  .wl-poster {
+    position: relative;
+    aspect-ratio: 2 / 3;
+    background: var(--surface2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .wl-poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .wl-poster-empty { font-size: 2.4rem; color: var(--border); }
+  .wl-type { position: absolute; top: 7px; right: 7px; backdrop-filter: blur(6px); }
+  .wl-score {
+    position: absolute;
+    left: 7px; bottom: 7px;
+    font-size: 0.6rem;
+    color: var(--accent2);
+    background: rgba(20,17,24,0.78);
+    border-radius: 3px;
+    padding: 1px 5px;
+    backdrop-filter: blur(6px);
+  }
+
+  .wl-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.28rem;
+    padding: 0.7rem 0.75rem 0.75rem;
+    flex: 1;
+    min-width: 0;
+  }
+  .wl-title-link { text-decoration: none; }
+  .wl-title-link:hover { text-decoration: none; }
+  .wl-title-link:hover .wl-title { color: var(--accent); }
+  .wl-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 1rem;
+    line-height: 1.2;
+    color: var(--text);
+    margin: 0;
+    transition: color 0.15s;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .wl-genres, .wl-where {
+    font-size: 0.56rem;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin: 0;
+  }
+  .wl-where { color: var(--body); }
+  .wl-where--none { opacity: 0.55; }
+  .wl-links { display: flex; gap: 0.6rem; margin-top: 0.1rem; }
+  .wl-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex-wrap: wrap;
+    margin-top: auto;
+    padding-top: 0.6rem;
+  }
+  .wl-actions form { margin: 0; display: inline; }
+
+  /* Two up on a phone: 172px tracks would fall back to a single giant poster. */
+  @media (max-width: 839px) {
+    .wl-grid {
+      grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+      gap: 0.7rem;
+    }
+    .wl-body { padding: 0.6rem 0.6rem 0.65rem; }
+    .wl-title { font-size: 0.92rem; }
+  }
+
   .wl-pill {
     background: none;
     border: none;

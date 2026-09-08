@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Streamline — On Deck{% endblock %}
+{% block main_class %}wide{% endblock %}
 {% block content %}
 <div class="shows-heading">
   <span class="mono shows-kicker">Your library</span>
@@ -194,6 +195,48 @@
   .show-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.4rem; flex-wrap: wrap; }
   .show-actions button { padding: 0.42rem 0.7rem; white-space: nowrap; }
   .show-inline-form { display: inline; margin: 0; }
+
+  /* Ready now is artwork, so it fills the width as a poster grid. The earlier
+     row layout was chosen when this list could run to seventeen entries and a
+     wall of cards drowned the emphasis; auto-fill keeps the wall from forming
+     while still using the space a full-bleed row wasted. Coming soon stays a
+     dated list -- it is a calendar, not a shelf. */
+  .shows-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    gap: 1rem;
+    align-items: start;
+  }
+  .shows-grid .show-card--ready {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+    /* Just above the tallest real card, so the collapse animation does not
+       spend most of its timeline on empty space. */
+    max-height: 500px;
+  }
+  .shows-grid .show-poster-link { display: block; width: 100%; }
+  .shows-grid .show-poster,
+  .shows-grid .show-poster-empty {
+    width: 100%;
+    height: auto;
+    border-radius: 0;
+    font-size: 2.4rem;
+  }
+  .shows-grid .show-row-body { padding: 0.7rem 0.75rem 0.15rem; width: 100%; }
+  .shows-grid .show-card--ready h3 { font-size: 1rem; }
+  .shows-grid .show-ready-line { gap: 0.4rem; }
+  .shows-grid .show-card-copy { font-size: 0.72rem; }
+  .shows-grid .show-actions {
+    justify-content: flex-start;
+    margin-top: auto;
+    padding: 0.55rem 0.75rem 0.75rem;
+    width: 100%;
+  }
+  .shows-grid .show-actions button { padding: 0.38rem 0.6rem; font-size: 0.6rem; }
+
 
   /* Quiet secondary action: present, but never competing with the primary. */
   .btn-quiet {
@@ -410,6 +453,28 @@
     .soon-row { grid-template-columns: 5.2rem minmax(0, 1fr); row-gap: 0.15rem; }
     .soon-slug { grid-column: 2; }
     .soon-row .show-inline-form { grid-column: 2; }
+  }
+
+  /* Must sit after the row-layout media blocks above: those re-pin the poster
+     width and indent the action row, which would otherwise burst the narrow
+     grid cards. */
+  @media (max-width: 839px) {
+    .shows-grid {
+      grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+      gap: 0.7rem;
+    }
+    .shows-grid .show-card--ready .show-poster,
+    .shows-grid .show-card--ready .show-poster-empty {
+      width: 100%;
+      height: auto;
+    }
+    .shows-grid .show-row-body { padding: 0.6rem 0.6rem 0.15rem; }
+    .shows-grid .show-card .show-actions {
+      grid-column: auto;
+      justify-content: flex-start;
+      padding: 0.5rem 0.6rem 0.6rem;
+    }
+    .shows-grid .show-actions button { white-space: normal; }
   }
 </style>
 {% endblock %}
