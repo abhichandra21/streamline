@@ -213,9 +213,12 @@
     gap: 0;
     padding: 0;
     overflow: hidden;
-    /* Just above the tallest real card, so the collapse animation does not
-       spend most of its timeline on empty space. */
-    max-height: 500px;
+    /* Only the leaving-row animation needs a cap, since height:auto cannot be
+       transitioned. It is generous rather than snug: Safari inflates text in
+       narrow columns, so a cap sized to the tallest card measured in Blink is
+       one the same card can exceed on an iPhone -- and once content overflows
+       a clamped flex column, the layout below stops being reliable. */
+    max-height: 760px;
   }
   .shows-grid .show-poster-link { display: block; width: 100%; }
   .shows-grid .show-poster,
@@ -229,9 +232,14 @@
   .shows-grid .show-card--ready h3 { font-size: 1rem; }
   .shows-grid .show-ready-line { gap: 0.4rem; }
   .shows-grid .show-card-copy { font-size: 0.72rem; }
+  /* The body absorbs the slack instead of the action row claiming it with an
+     auto margin. With `margin-top: auto` and a clamped height, free space goes
+     negative once the content overflows, and WebKit resolves that by pulling
+     the actions up over the title -- the bug this replaces. Growing the body
+     cannot produce a negative anything. */
+  .shows-grid .show-row-body { flex: 1 1 auto; }
   .shows-grid .show-actions {
     justify-content: flex-start;
-    margin-top: auto;
     padding: 0.55rem 0.75rem 0.75rem;
     width: 100%;
   }
@@ -449,10 +457,32 @@
     .show-row--settled { grid-template-columns: 44px minmax(0, 1fr); }
     .show-decision-row .show-actions,
     .show-row--settled .show-actions { grid-column: 1 / -1; justify-content: flex-start; padding-left: 3.3rem; }
-    /* The calendar folds to two lines rather than squeezing four columns. */
-    .soon-row { grid-template-columns: 5.2rem minmax(0, 1fr); row-gap: 0.15rem; }
-    .soon-slug { grid-column: 2; }
-    .soon-row .show-inline-form { grid-column: 2; }
+    /* The calendar folds to two lines, keeping Unfollow on the right of the
+       title exactly as it sits on a wide screen. Every cell is named, so
+       nothing is left to auto-placement.
+
+       The third line this replaces was the actual bug. `.soon-row` carries a
+       58px max-height for the leaving-row animation, sized for the one-line
+       wide layout. Folded to three lines the row needs 78px, and a clamped row
+       whose overflow is visible does not clip -- it spills. The last line
+       landed under the next row's border, reading as that row's Unfollow
+       sitting above its title.
+
+       The cap is raised as well, so a row that grows for any other reason
+       cannot spill the same way. */
+    .soon-row {
+      grid-template-columns: 5.2rem minmax(0, 1fr) auto;
+      grid-template-areas:
+        "date   title  action"
+        ".      slug   .";
+      column-gap: 0.7rem;
+      row-gap: 0.15rem;
+      max-height: 140px;
+    }
+    .soon-date { grid-area: date; }
+    .soon-title { grid-area: title; }
+    .soon-slug { grid-area: slug; }
+    .soon-row .show-inline-form { grid-area: action; justify-self: end; }
   }
 
   /* Must sit after the row-layout media blocks above: those re-pin the poster
