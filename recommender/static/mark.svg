@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="#e85d4a" stroke-width="1.8" stroke-linecap="round" role="img" aria-label="Streamline">
+  <title>Streamline</title>
+  <!--
+    Three waves, the same gesture as the mark this replaces, drawn in the
+    language the rest of the interface speaks: strokes, one colour, and no
+    background of its own. The play triangle is gone. It was a cliche, and at
+    the sizes this is actually seen it crowded the waves it sat inside.
+  -->
+  <path d="M2.4 7.6c3.2-2.7 6.4-2.7 9.6 0s6.4 2.7 9.6 0"/>
+  <path d="M2.4 12c3.2-2.7 6.4-2.7 9.6 0s6.4 2.7 9.6 0"/>
+  <path d="M2.4 16.4c3.2-2.7 6.4-2.7 9.6 0s6.4 2.7 9.6 0"/>
+</svg>

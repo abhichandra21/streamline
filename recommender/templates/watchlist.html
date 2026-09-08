@@ -210,11 +210,15 @@
   }
   .wl-where { color: var(--body); }
   .wl-where--none { opacity: 0.55; }
-  /* How much of an evening this asks for. Kept prominent: on a weeknight it
-     settles the question before genre or rating gets a look in. */
+  /* How much of an evening this asks for -- the fact that settles a weeknight
+     before genre or rating gets a look in. Prominent through position and
+     weight, not colour: teal means "you did something" everywhere else in the
+     app, and a runtime has not been done to. Leaving it teal put two teal
+     things on one card and made the action button compete with a number. */
   .wl-length {
     font-size: 0.58rem;
-    color: var(--teal);
+    font-weight: 500;
+    color: var(--body);
     letter-spacing: 0.04em;
     white-space: nowrap;
     overflow: hidden;
