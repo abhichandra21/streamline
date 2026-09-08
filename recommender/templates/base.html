@@ -125,8 +125,6 @@
       height: 56px;
       padding-left: 0.35rem;
       flex-shrink: 0;
-      font-family: 'DM Serif Display', serif;
-      font-size: 1.15rem;
       color: var(--text);
       text-decoration: none;
       white-space: nowrap;
@@ -140,8 +138,23 @@
       opacity: 0.92;
       flex-shrink: 0;
     }
-    .nav-brand-word { color: var(--text); }
-    .nav-brand-word em { font-style: italic; color: var(--teal); }
+    /* Lowercase, packed, one weight. The old mark signalled the seam twice at
+       once -- italic and a colour change, mid-word -- and set it in a display
+       serif drawn for headlines, which flattens out at 18px. This signals it
+       once, in a face that is already loaded and holds up small.
+
+       The serif stops being the brand voice as a result, and becomes purely
+       the page-title voice. */
+    .nav-brand-word {
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 600;
+      font-size: 1.19rem;
+      letter-spacing: -0.03em;
+      text-transform: lowercase;
+      color: var(--text);
+      line-height: 1;
+    }
+    .nav-brand-word em { font-style: normal; color: var(--accent); }
 
     .nav-section {
       font-family: 'JetBrains Mono', monospace;
@@ -658,11 +671,7 @@
       }
       .mobile-top:hover { text-decoration: none; }
       .mobile-top img { height: 20px; width: 20px; border-radius: 4px; opacity: 0.92; }
-      .mobile-top .nav-brand-word {
-        font-family: 'DM Serif Display', serif;
-        font-size: 1.1rem;
-        color: var(--text);
-      }
+      .mobile-top .nav-brand-word { font-size: 1.14rem; }
 
       .tabbar {
         display: flex;
