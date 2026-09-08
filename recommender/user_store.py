@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS title_ratings (
     normalized_title TEXT NOT NULL,
     content_type     TEXT NOT NULL CHECK (content_type IN ('tv', 'movie')),
     tmdb_id          INTEGER,
-    rating           TEXT NOT NULL CHECK (rating IN ('liked', 'disliked')),
+    rating           TEXT NOT NULL CHECK (rating IN ('more', 'neutral', 'less')),
     rated_at         TEXT NOT NULL,
     updated_at       TEXT NOT NULL
 );
@@ -174,13 +174,49 @@ def resolve_rating_content_type(db_path: str, title: str,
     )
 
 
+def _migrate_rating_vocabulary(conn) -> bool:
+    """Move title_ratings from liked/disliked to more/neutral/less.
+
+    The old CHECK constraint permits only the two old words, and SQLite cannot
+    alter a CHECK in place, so the table is rebuilt. Existing rows carry over:
+    liked becomes more, disliked becomes less. Nothing is discarded.
+
+    Idempotent -- it inspects the stored CHECK and returns immediately once the
+    table already allows the new vocabulary.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'title_ratings'"
+    ).fetchone()
+    if row is None or "'liked'" not in (row["sql"] or ""):
+        return False
+
+    with conn:
+        conn.execute("ALTER TABLE title_ratings RENAME TO title_ratings_old")
+        # Recreate from the current schema, then drop the stale indexes that
+        # followed the old table under its new name.
+        conn.executescript(_SCHEMA)
+        conn.execute(
+            "INSERT INTO title_ratings "
+            "(id, title, normalized_title, content_type, tmdb_id, rating, rated_at, updated_at) "
+            "SELECT id, title, normalized_title, content_type, tmdb_id, "
+            "       CASE rating WHEN 'liked' THEN ? WHEN 'disliked' THEN ? ELSE rating END, "
+            "       rated_at, updated_at "
+            "FROM title_ratings_old",
+            (RATING_MORE, RATING_LESS),
+        )
+        conn.execute("DROP TABLE title_ratings_old")
+        conn.executescript(_INDEXES)
+    return True
+
+
 def init_db(db_path: str) -> None:
-    """Create tables and indexes if not present."""
+    """Create tables and indexes if not present, and migrate older stores."""
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = _connect(db_path)
     try:
         conn.executescript(_SCHEMA)
         conn.executescript(_INDEXES)
+        _migrate_rating_vocabulary(conn)
     finally:
         conn.close()
 
@@ -277,13 +313,40 @@ def list_saved_titles(db_path: str, status: str | None = None) -> list[dict]:
         conn.close()
 
 
-LIKED_MULTIPLIER = 1.3
-DISLIKED_MULTIPLIER = 0.5
+MORE_MULTIPLIER = 1.3
+LESS_MULTIPLIER = 0.5
+
+# What the reader is actually asked, and why the wording matters: a rating
+# feeds profile weighting, not a verdict on quality. About a film someone
+# watched and found fine, "did you like it?" forces a yes and "did you dislike
+# it?" forces a no -- which is why `disliked` went unused for the whole life of
+# the two-value vocabulary. "More like this?" is answerable.
+RATING_MORE = "more"
+RATING_NEUTRAL = "neutral"
+RATING_LESS = "less"
+RATINGS = (RATING_MORE, RATING_NEUTRAL, RATING_LESS)
+
+# The old vocabulary, kept only so stored rows and any caller still passing the
+# old words resolve to the new ones.
+_LEGACY_RATINGS = {"liked": RATING_MORE, "disliked": RATING_LESS}
+
+
+def normalize_rating(rating: str) -> str:
+    """Accept either vocabulary and return the stored one."""
+    return _LEGACY_RATINGS.get(rating, rating)
 
 
 def rate_title(db_path: str, title: str, content_type: str | None,
                rating: str, tmdb_id: int | None = None) -> None:
-    """Upsert a rating. rating='clear' removes it."""
+    """Upsert a rating. rating='clear' removes it.
+
+    Accepts the old liked/disliked words as well, so a stale bookmark or an
+    older client cannot write a value the schema will reject.
+    """
+    if rating != "clear":
+        rating = normalize_rating(rating)
+        if rating not in RATINGS:
+            raise ValueError(f"Unknown rating {rating!r}; expected one of {RATINGS} or 'clear'")
     content_type = content_type or resolve_rating_content_type(db_path, title, tmdb_id=tmdb_id)
     norm = _normalize(title)
     conn = _connect(db_path)
@@ -358,13 +421,18 @@ def load_ratings(db_path: str) -> list[dict]:
 
 
 def get_disliked_titles(db_path: str) -> list[str]:
-    """Return titles rated as disliked."""
+    """Return titles the reader asked to see less like.
+
+    These become the profile's negative examples. Note that a neutral rating is
+    deliberately not one: "it was fine" says the title should stop being asked
+    about, not that the profile should steer away from it.
+    """
     if not Path(db_path).exists():
         return []
     conn = _connect(db_path)
     try:
         rows = conn.execute(
-            "SELECT title FROM title_ratings WHERE rating = 'disliked'",
+            "SELECT title FROM title_ratings WHERE rating = ?", (RATING_LESS,),
         ).fetchall()
         return [r["title"] for r in rows]
     finally:
@@ -375,17 +443,22 @@ def apply_rating_multipliers(scores: dict[str, float],
                              ratings: list[dict]) -> dict[str, float]:
     """Apply liked/disliked multipliers to engagement scores.
 
-    Liked titles get a 1.3x boost (capped at 1.0); disliked get 0.5x penalty.
+    "More like this" gets a 1.3x boost (capped at 1.0); "less like this" gets a
+    0.5x penalty; "it was fine" is deliberately neutral.
     """
     modified = dict(scores)
     for entry in ratings:
         title = entry["title"]
-        rating = entry["rating"]
+        rating = normalize_rating(entry["rating"])
         if title in modified:
-            if rating == "liked":
-                modified[title] = min(1.0, modified[title] * LIKED_MULTIPLIER)
-            elif rating == "disliked":
-                modified[title] = modified[title] * DISLIKED_MULTIPLIER
+            if rating == RATING_MORE:
+                modified[title] = min(1.0, modified[title] * MORE_MULTIPLIER)
+            elif rating == RATING_LESS:
+                modified[title] = modified[title] * LESS_MULTIPLIER
+            # RATING_NEUTRAL leaves the score alone on purpose. Its value is
+            # that it was recorded at all: it marks a title as considered, so a
+            # rating pass can stop asking about it without anyone having to
+            # overstate an opinion in either direction.
     return modified
 
 
@@ -458,6 +531,8 @@ def mark_watched_from_watchlist(db_path: str, title: str, content_type: str,
 
     If any step fails, the entire transaction rolls back.
     """
+    if rating and rating != "clear":
+        rating = normalize_rating(rating)
     now = _now_iso()
     norm = _normalize(title)
     conn = _connect(db_path)
@@ -706,7 +781,9 @@ def ensure_user_store(db_path: str, feedback_path: str) -> None:
         with conn:
             for entry in data.get("ratings", []):
                 title = entry["title"]
-                rating = entry.get("rating", "liked")
+                # feedback.json predates the vocabulary change, so every row in
+                # it speaks the old one.
+                rating = normalize_rating(entry.get("rating", "liked"))
                 tmdb_id = entry.get("tmdb_id")
                 ct = entry.get("content_type") or resolve_rating_content_type(db_path, title, tmdb_id=tmdb_id)
                 ts = entry.get("timestamp", _now_iso())

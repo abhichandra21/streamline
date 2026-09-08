@@ -34,8 +34,9 @@
     {% endif %}
     <select name="rating" class="input-field mono" style="padding:0.6rem 0.75rem; font-size:0.72rem;">
       <option value="" {% if not rating_filter %}selected{% endif %}>Any rating</option>
-      <option value="liked" {% if rating_filter == 'liked' %}selected{% endif %}>Liked</option>
-      <option value="disliked" {% if rating_filter == 'disliked' %}selected{% endif %}>Disliked</option>
+      <option value="more" {% if rating_filter == 'more' %}selected{% endif %}>More like this</option>
+      <option value="neutral" {% if rating_filter == 'neutral' %}selected{% endif %}>It was fine</option>
+      <option value="less" {% if rating_filter == 'less' %}selected{% endif %}>Less like this</option>
       <option value="unrated" {% if rating_filter == 'unrated' %}selected{% endif %}>Unrated</option>
     </select>
     <select name="sort" class="input-field mono" style="padding:0.6rem 0.75rem; font-size:0.72rem;">

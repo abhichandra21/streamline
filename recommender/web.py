@@ -799,10 +799,12 @@ def history() -> str:
             "last_watched": e.get("last_watched") or "",
         })
 
-    if rating_filter == "liked":
-        items = [it for it in items if it["rating"] == "liked"]
-    elif rating_filter == "disliked":
-        items = [it for it in items if it["rating"] == "disliked"]
+    if rating_filter in user_store.RATINGS:
+        items = [it for it in items if it["rating"] == rating_filter]
+    elif rating_filter in ("liked", "disliked"):
+        # Old bookmarks and links keep working after the vocabulary change.
+        wanted = user_store.normalize_rating(rating_filter)
+        items = [it for it in items if it["rating"] == wanted]
     elif rating_filter == "unrated":
         items = [it for it in items if not it["rating"]]
 

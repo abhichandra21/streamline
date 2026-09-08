@@ -1,18 +1,25 @@
-<span id="rating-{{ uid }}" style="display:inline-flex; align-items:center; gap:0.3rem;">
-  <form hx-post="/archive/rate" hx-target="#rating-{{ uid }}" hx-swap="outerHTML" style="margin:0; display:inline-flex; gap:2px;">
+{# The persistent control, shown inline on archive rows and the title page.
+   Short labels because it repeats down a list of nearly two thousand rows; the
+   full phrasing lives in the title attribute. Pressing the active choice
+   clears it. #}
+<span id="rating-{{ uid }}" class="rating-state">
+  <form hx-post="/archive/rate" hx-target="#rating-{{ uid }}" hx-swap="outerHTML" class="rating-form">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="title" value="{{ title }}">
     <input type="hidden" name="content_type" value="{{ content_type }}">
     <input type="hidden" name="tmdb_id" value="{{ tmdb_id or '' }}">
-    {% if current_rating == "liked" %}
-    <button type="submit" name="rating" value="clear" class="btn-thumb btn-thumb--liked" title="Remove rating">liked</button>
-    <button type="submit" name="rating" value="disliked" class="btn-thumb btn-thumb--dislike" title="Disliked">disliked</button>
-    {% elif current_rating == "disliked" %}
-    <button type="submit" name="rating" value="liked" class="btn-thumb btn-thumb--like" title="Liked">liked</button>
-    <button type="submit" name="rating" value="clear" class="btn-thumb btn-thumb--disliked" title="Remove rating">disliked</button>
+    {% for value, short, long in [
+        ("more", "More", "More like this"),
+        ("neutral", "Fine", "It was fine"),
+        ("less", "Less", "Less like this")] %}
+    {% if current_rating == value %}
+    <button type="submit" name="rating" value="clear"
+            class="rate-btn rate-btn--{{ value }} is-set"
+            title="{{ long }} — press again to clear">{{ short }}</button>
     {% else %}
-    <button type="submit" name="rating" value="liked" class="btn-thumb btn-thumb--like" title="Liked">liked</button>
-    <button type="submit" name="rating" value="disliked" class="btn-thumb btn-thumb--dislike" title="Disliked">disliked</button>
+    <button type="submit" name="rating" value="{{ value }}"
+            class="rate-btn rate-btn--{{ value }}" title="{{ long }}">{{ short }}</button>
     {% endif %}
+    {% endfor %}
   </form>
 </span>

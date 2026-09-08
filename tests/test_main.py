@@ -976,7 +976,8 @@ def test_liked_writes_to_sqlite(tmp_path, monkeypatch):
     main()
 
     ratings = load_ratings(db)
-    assert any(r["title"] == "Breaking Bad" and r["rating"] == "liked" for r in ratings)
+    # --liked is a superseded spelling kept working; it stores the new value.
+    assert any(r["title"] == "Breaking Bad" and r["rating"] == "more" for r in ratings)
 
 
 def test_add_writes_to_sqlite(tmp_path, monkeypatch):

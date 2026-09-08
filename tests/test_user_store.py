@@ -226,12 +226,12 @@ def test_rate_title(tmp_path):
     from recommender.user_store import init_db, rate_title, load_ratings
 
     init_db(db)
-    rate_title(db, "Breaking Bad", "tv", "liked", tmdb_id=1396)
+    rate_title(db, "Breaking Bad", "tv", "more", tmdb_id=1396)
 
     ratings = load_ratings(db)
     assert len(ratings) == 1
     assert ratings[0]["title"] == "Breaking Bad"
-    assert ratings[0]["rating"] == "liked"
+    assert ratings[0]["rating"] == "more"
 
 
 def test_rate_title_replaces_previous(tmp_path):
@@ -239,12 +239,12 @@ def test_rate_title_replaces_previous(tmp_path):
     from recommender.user_store import init_db, rate_title, load_ratings
 
     init_db(db)
-    rate_title(db, "Breaking Bad", "tv", "liked", tmdb_id=1396)
-    rate_title(db, "Breaking Bad", "tv", "disliked", tmdb_id=1396)
+    rate_title(db, "Breaking Bad", "tv", "more", tmdb_id=1396)
+    rate_title(db, "Breaking Bad", "tv", "less", tmdb_id=1396)
 
     ratings = load_ratings(db)
     assert len(ratings) == 1
-    assert ratings[0]["rating"] == "disliked"
+    assert ratings[0]["rating"] == "less"
 
 
 def test_rate_title_clear_removes_rating(tmp_path):
@@ -252,7 +252,7 @@ def test_rate_title_clear_removes_rating(tmp_path):
     from recommender.user_store import init_db, rate_title, load_ratings
 
     init_db(db)
-    rate_title(db, "Breaking Bad", "tv", "liked", tmdb_id=1396)
+    rate_title(db, "Breaking Bad", "tv", "more", tmdb_id=1396)
     rate_title(db, "Breaking Bad", "tv", "clear", tmdb_id=1396)
 
     assert load_ratings(db) == []
@@ -263,9 +263,9 @@ def test_get_disliked_titles(tmp_path):
     from recommender.user_store import init_db, rate_title, get_disliked_titles
 
     init_db(db)
-    rate_title(db, "Show A", "tv", "liked")
-    rate_title(db, "Show B", "tv", "disliked")
-    rate_title(db, "Movie C", "movie", "disliked")
+    rate_title(db, "Show A", "tv", "more")
+    rate_title(db, "Show B", "tv", "less")
+    rate_title(db, "Movie C", "movie", "less")
 
     disliked = get_disliked_titles(db)
     assert sorted(disliked) == ["Movie C", "Show B"]
@@ -276,8 +276,8 @@ def test_apply_rating_multipliers(tmp_path):
     from recommender.user_store import init_db, rate_title, load_ratings, apply_rating_multipliers
 
     init_db(db)
-    rate_title(db, "Show A", "tv", "liked")
-    rate_title(db, "Show B", "tv", "disliked")
+    rate_title(db, "Show A", "tv", "more")
+    rate_title(db, "Show B", "tv", "less")
 
     scores = {"Show A": 0.8, "Show B": 0.8, "Show C": 0.5}
     ratings = load_ratings(db)
@@ -346,7 +346,7 @@ def test_mark_watched_from_watchlist(tmp_path):
 
     init_db(db)
     save_title(db, "Breaking Bad", "tv", tmdb_id=1396)
-    mark_watched_from_watchlist(db, "Breaking Bad", "tv", rating="liked", tmdb_id=1396)
+    mark_watched_from_watchlist(db, "Breaking Bad", "tv", rating="more", tmdb_id=1396)
 
     assert list_saved_titles(db) == []
     archive = list_manual_archive(db)
@@ -354,7 +354,7 @@ def test_mark_watched_from_watchlist(tmp_path):
     assert archive[0]["title"] == "Breaking Bad"
     ratings = load_ratings(db)
     assert len(ratings) == 1
-    assert ratings[0]["rating"] == "liked"
+    assert ratings[0]["rating"] == "more"
 
 
 def test_mark_watched_without_rating(tmp_path):
@@ -390,7 +390,7 @@ def test_mark_watched_rollback_on_failure(tmp_path):
     conn.close()
 
     with pytest.raises(Exception):
-        us.mark_watched_from_watchlist(db, "Test Show", "tv", rating="liked", tmdb_id=999)
+        us.mark_watched_from_watchlist(db, "Test Show", "tv", rating="more", tmdb_id=999)
 
     # Watchlist row must still be present
     assert len(list_saved_titles(db)) == 1
@@ -457,6 +457,106 @@ def test_ensure_user_store_creates_tables(tmp_path):
     assert "saved_titles" in tables
 
 
+class TestRatingVocabulary:
+    """liked/disliked became more/neutral/less. Old rows and old callers must
+    survive that, and the middle option has to actually mean something."""
+
+    def test_migration_rewrites_stored_rows_and_keeps_everything_else(self, tmp_path):
+        import sqlite3
+        from recommender.user_store import init_db, load_ratings
+
+        db = str(tmp_path / "legacy.db")
+        init_db(db)
+        # Rebuild title_ratings with the pre-change constraint, then seed it.
+        conn = sqlite3.connect(db)
+        conn.executescript("""
+            DROP TABLE title_ratings;
+            CREATE TABLE title_ratings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                normalized_title TEXT NOT NULL,
+                content_type TEXT NOT NULL CHECK (content_type IN ('tv', 'movie')),
+                tmdb_id INTEGER,
+                rating TEXT NOT NULL CHECK (rating IN ('liked', 'disliked')),
+                rated_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO title_ratings
+                (id, title, normalized_title, content_type, tmdb_id, rating, rated_at, updated_at)
+            VALUES
+                (7, 'Vera', 'vera', 'tv', 111, 'liked', '2026-04-09T20:03:31+00:00', '2026-04-09T20:03:31+00:00'),
+                (9, 'Some Film', 'some film', 'movie', NULL, 'disliked', '2026-05-01T00:00:00+00:00', '2026-05-02T00:00:00+00:00');
+        """)
+        conn.commit()
+        conn.close()
+
+        init_db(db)
+
+        ratings = {r["title"]: r for r in load_ratings(db)}
+        assert ratings["Vera"]["rating"] == "more"
+        assert ratings["Some Film"]["rating"] == "less"
+        # Identity and history survive: nothing is re-dated or renumbered.
+        assert ratings["Vera"]["rated_at"] == "2026-04-09T20:03:31+00:00"
+        conn = sqlite3.connect(db)
+        assert [r[0] for r in conn.execute("SELECT id FROM title_ratings ORDER BY id")] == [7, 9]
+        assert "'more'" in conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'title_ratings'").fetchone()[0]
+        indexes = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='title_ratings' "
+            "AND name NOT LIKE 'sqlite_%'")}
+        assert indexes == {"title_ratings_tmdb_unique", "title_ratings_title_unique"}
+        conn.close()
+
+    def test_migration_is_idempotent(self, tmp_path):
+        from recommender.user_store import init_db, rate_title, load_ratings
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        rate_title(db, "Vera", "tv", "more", tmdb_id=111)
+        for _ in range(3):
+            init_db(db)
+        assert [r["rating"] for r in load_ratings(db)] == ["more"]
+
+    def test_old_words_still_write(self, tmp_path):
+        """A stale bookmark or an older client must not hit the CHECK."""
+        from recommender.user_store import init_db, rate_title, load_ratings
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        rate_title(db, "A", "tv", "liked")
+        rate_title(db, "B", "tv", "disliked")
+        assert sorted(r["rating"] for r in load_ratings(db)) == ["less", "more"]
+
+    def test_unknown_rating_is_refused(self, tmp_path):
+        from recommender.user_store import init_db, rate_title
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        with pytest.raises(ValueError):
+            rate_title(db, "A", "tv", "loved")
+
+    def test_neutral_is_recorded_but_does_not_move_the_score(self, tmp_path):
+        """The point of the middle option is that it is on record -- it marks a
+        title considered without overstating an opinion either way."""
+        from recommender.user_store import init_db, rate_title, load_ratings, apply_rating_multipliers
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        rate_title(db, "Fine Show", "tv", "neutral")
+        assert [r["rating"] for r in load_ratings(db)] == ["neutral"]
+        scores = apply_rating_multipliers({"Fine Show": 0.4}, load_ratings(db))
+        assert scores["Fine Show"] == 0.4
+
+    def test_neutral_is_not_a_negative_preference(self, tmp_path):
+        from recommender.user_store import init_db, rate_title, get_disliked_titles
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        rate_title(db, "Fine Show", "tv", "neutral")
+        rate_title(db, "Not For Me", "tv", "less")
+        assert get_disliked_titles(db) == ["Not For Me"]
+
+
 def test_ensure_user_store_migrates_feedback_json(tmp_path):
     db = str(tmp_path / "test.db")
     feedback_path = str(tmp_path / "feedback.json")
@@ -478,7 +578,10 @@ def test_ensure_user_store_migrates_feedback_json(tmp_path):
 
     ratings = load_ratings(db)
     assert len(ratings) == 2
-    assert any(r["title"] == "Show A" and r["rating"] == "liked" for r in ratings)
+    # feedback.json predates the vocabulary change, so its rows arrive in the
+    # old words and must land in the new ones.
+    assert any(r["title"] == "Show A" and r["rating"] == "more" for r in ratings)
+    assert any(r["title"] == "Show B" and r["rating"] == "less" for r in ratings)
 
     archive = list_manual_archive(db)
     assert len(archive) == 1

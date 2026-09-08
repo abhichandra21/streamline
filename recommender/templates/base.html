@@ -440,25 +440,53 @@
     .retry-form { display: flex; gap: 0.4rem; margin-top: 0.75rem; flex-wrap: wrap; }
     .unmatched-form { margin-top: 0.5rem; }
 
-    /* Thumb rating buttons */
-    .btn-thumb {
-      background: none;
-      border: none;
-      cursor: pointer;
-      padding: 2px 4px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.8rem;
+    /* Rating controls.
+       The old pair were bare lowercase words that looked identical whether they
+       were a control or a state -- "liked" in grey meant you could, "liked" in
+       teal meant you had. These read as buttons at rest and fill in when set. */
+    .rating-prompt, .rating-state { display: inline-flex; align-items: center; gap: 0.5rem; }
+    .rating-form { margin: 0; display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+    .rating-ask {
+      font-size: 0.6rem; letter-spacing: 0.08em; text-transform: uppercase;
       color: var(--muted);
-      transition: color 0.15s, opacity 0.15s;
     }
-    .btn-thumb--like:hover  { color: var(--teal); }
-    .btn-thumb--dislike:hover { color: var(--accent); }
-    .btn-thumb--liked  { color: var(--teal); }
-    .btn-thumb--liked:hover  { opacity: 0.5; }
-    .btn-thumb--disliked { color: var(--accent); }
-    .btn-thumb--disliked:hover { opacity: 0.5; }
-    .btn-thumb--skip { font-size: 0.6rem; }
-    .btn-thumb--skip:hover { color: var(--text); }
+    .rate-btn {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.58rem;
+      letter-spacing: 0.05em;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 3px 8px;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .rate-btn--more:hover    { border-color: var(--teal);     color: var(--teal); }
+    .rate-btn--neutral:hover { border-color: var(--muted);    color: var(--text); }
+    .rate-btn--less:hover    { border-color: var(--accent);   color: var(--accent); }
+    /* Set is a fill, not a colour change: a filled shape reads as chosen at a
+       glance where a recoloured word does not. */
+    .rate-btn--more.is-set {
+      background: rgba(58,184,160,0.16); border-color: var(--teal); color: var(--teal);
+    }
+    .rate-btn--neutral.is-set {
+      background: var(--surface2); border-color: var(--muted); color: var(--text);
+    }
+    .rate-btn--less.is-set {
+      background: rgba(232,93,74,0.14); border-color: var(--accent); color: var(--accent);
+    }
+    .rate-btn.is-set:hover { opacity: 0.65; }
+    /* Records nothing, so it is not shaped like the three that do. */
+    .rate-skip {
+      background: none; border: none; cursor: pointer;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.55rem; letter-spacing: 0.06em;
+      color: var(--muted); opacity: 0.7;
+      padding: 3px 4px; margin-left: 0.15rem;
+      text-decoration: underline; text-underline-offset: 2px;
+    }
+    .rate-skip:hover { color: var(--text); opacity: 1; }
 
     /* Watchlist action buttons */
     .wl-btn {

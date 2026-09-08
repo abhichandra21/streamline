@@ -210,7 +210,7 @@ def build_structured_profile(
         f"- {title} (score: {score:.2f}): {enrichments[title]}"
         for title, score in scored[:160]
     ]
-    disliked = ", ".join(f'"{title}"' for title in (negative_prefs or [])) or "none"
+    less_like = ", ".join(f'"{title}"' for title in (negative_prefs or [])) or "none"
     prompt = (
         "Create a compact structured JSON taste profile for a personal streaming recommender.\n"
         "Use the engagement scores to separate strong taste signals from incidental watches.\n"
@@ -232,7 +232,9 @@ def build_structured_profile(
         "Only infer cautious anti-patterns when repeated low-engagement evidence supports them; otherwise return an empty list.\n"
         "Use co_viewing only as one of: personal, family, mixed, unknown.\n"
         "Use weights from 0.0 to 1.0. Do not invent titles that are not in the history.\n\n"
-        f"Explicitly disliked titles: {disliked}\n\n"
+        # Watched-to-the-end titles the user wants less of, which is a weaker
+        # signal than dislike and should not be read as one.
+        f"Titles the user asked to see less like: {less_like}\n\n"
         "Watch history sorted by engagement score:\n"
         + "\n".join(lines)
     )
