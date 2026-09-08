@@ -457,23 +457,32 @@
     .show-row--settled { grid-template-columns: 44px minmax(0, 1fr); }
     .show-decision-row .show-actions,
     .show-row--settled .show-actions { grid-column: 1 / -1; justify-content: flex-start; padding-left: 3.3rem; }
-    /* The calendar folds to three lines rather than squeezing four columns.
-       Every cell is named. Giving the slug and the form a column but no row
-       and letting auto-placement finish the job is not portable: Blink walks
-       them down to rows two and three, WebKit hoists the form to row one and
-       it lands above the title. Naming the areas removes the guesswork. */
+    /* The calendar folds to two lines, keeping Unfollow on the right of the
+       title exactly as it sits on a wide screen. Every cell is named, so
+       nothing is left to auto-placement.
+
+       The third line this replaces was the actual bug. `.soon-row` carries a
+       58px max-height for the leaving-row animation, sized for the one-line
+       wide layout. Folded to three lines the row needs 78px, and a clamped row
+       whose overflow is visible does not clip -- it spills. The last line
+       landed under the next row's border, reading as that row's Unfollow
+       sitting above its title.
+
+       The cap is raised as well, so a row that grows for any other reason
+       cannot spill the same way. */
     .soon-row {
-      grid-template-columns: 5.2rem minmax(0, 1fr);
+      grid-template-columns: 5.2rem minmax(0, 1fr) auto;
       grid-template-areas:
-        "date   title"
-        ".      slug"
-        ".      action";
+        "date   title  action"
+        ".      slug   .";
+      column-gap: 0.7rem;
       row-gap: 0.15rem;
+      max-height: 140px;
     }
     .soon-date { grid-area: date; }
     .soon-title { grid-area: title; }
     .soon-slug { grid-area: slug; }
-    .soon-row .show-inline-form { grid-area: action; }
+    .soon-row .show-inline-form { grid-area: action; justify-self: end; }
   }
 
   /* Must sit after the row-layout media blocks above: those re-pin the poster
