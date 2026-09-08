@@ -1,5 +1,5 @@
 <div class="modal-overlay">
-  <div class="modal-box">
+  <div class="modal-box modal-box--wide">
     <div class="modal-header">
       <span class="mono" style="font-size:0.85rem;">Confirm: {{ title }}</span>
       <button type="button" class="btn-ghost modal-close"
@@ -27,15 +27,24 @@
             {% for c in candidates %}
               <div class="candidate-card">
                 {% if c.poster_path %}
-                  <img src="https://image.tmdb.org/t/p/w92{{ c.poster_path }}" alt="" class="candidate-poster">
+                  <img src="https://image.tmdb.org/t/p/w185{{ c.poster_path }}" alt="" class="candidate-poster" loading="lazy">
                 {% else %}
                   <div class="candidate-poster candidate-poster--empty"></div>
                 {% endif %}
                 <div class="candidate-info">
-                  <div class="mono" style="font-size:0.8rem;">{{ c.title }}{% if c.year %} ({{ c.year }}){% endif %}</div>
-                  <div class="mono" style="font-size:0.65rem; color:var(--muted); text-transform:uppercase;">
+                  <div class="candidate-name">{{ c.title }}{% if c.year %} <span class="candidate-year">({{ c.year }})</span>{% endif %}</div>
+                  <div class="mono candidate-meta">
                     {{ 'TV' if c.content_type == 'tv' else 'Film' }}
+                    {%- if c.original_language %} · {{ c.original_language }}{% endif %}
+                    {%- if c.vote_count %} · ★ {{ "%.1f"|format(c.vote_average) }} ({{ c.vote_count }}){% endif %}
                   </div>
+                  {% if c.original_title %}
+                  <div class="candidate-original">{{ c.original_title }}</div>
+                  {% endif %}
+                  {% if c.overview %}
+                  <p class="candidate-overview">{{ c.overview }}</p>
+                  {% endif %}
+                  <a href="{{ c.tmdb_url }}" target="_blank" rel="noopener" class="mono candidate-link">View on TMDB</a>
                   {% if c.conflict %}
                     <div class="mono conflict-badge">
                       {% if c.conflict.source == 'watchlist' %}Already on your watchlist

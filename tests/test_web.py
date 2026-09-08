@@ -1741,6 +1741,59 @@ class TestArchiveResolve:
         assert resp.status_code == 200
         assert b"Already on your watchlist" in resp.data
 
+    def test_candidate_carries_the_fields_that_separate_lookalikes(self, client, tmp_path, monkeypatch):
+        """A title and a year cannot tell two Drishyams apart; language, the
+        original title and the overview can."""
+        from recommender.user_store import init_db
+        from recommender.tmdb_client import DisambiguationCandidate, DisambiguationResult
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = DisambiguationResult(
+                candidates=[DisambiguationCandidate(
+                    tmdb_id=302156, content_type="movie", title="Drishyam",
+                    year=2015, poster_path="/x.jpg", score=90.0,
+                    overview="A commoner channels his knowledge of action films.",
+                    original_title="दृश्यम्",
+                    original_language="hi", vote_average=7.5, vote_count=507,
+                )],
+            )
+            resp = self._post(client)
+
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        assert "A commoner channels his knowledge of action films." in body
+        assert "दृश्यम्" in body
+        assert "HI" in body
+        assert "themoviedb.org/movie/302156" in body
+
+    def test_original_title_is_omitted_when_it_matches_the_display_title(self, client, tmp_path, monkeypatch):
+        """Otherwise every English-language row prints its own name twice."""
+        from recommender.user_store import init_db
+        from recommender.tmdb_client import DisambiguationCandidate, DisambiguationResult
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = DisambiguationResult(
+                candidates=[DisambiguationCandidate(
+                    tmdb_id=194583, content_type="tv", title="The Bear",
+                    year=2022, poster_path=None, score=90.0,
+                    original_title="The Bear", original_language="en",
+                )],
+            )
+            resp = self._post(client)
+
+        assert resp.status_code == 200
+        assert resp.data.decode().count("candidate-original") == 0
+
     def test_renders_candidates_already_in_watch_history(self, client, tmp_path, monkeypatch):
         """A title already present in the ingested watch_index (not the SQL
         tables) must still be flagged, or the modal misses most real
