@@ -213,9 +213,12 @@
     gap: 0;
     padding: 0;
     overflow: hidden;
-    /* Just above the tallest real card, so the collapse animation does not
-       spend most of its timeline on empty space. */
-    max-height: 500px;
+    /* Only the leaving-row animation needs a cap, since height:auto cannot be
+       transitioned. It is generous rather than snug: Safari inflates text in
+       narrow columns, so a cap sized to the tallest card measured in Blink is
+       one the same card can exceed on an iPhone -- and once content overflows
+       a clamped flex column, the layout below stops being reliable. */
+    max-height: 760px;
   }
   .shows-grid .show-poster-link { display: block; width: 100%; }
   .shows-grid .show-poster,
@@ -229,9 +232,14 @@
   .shows-grid .show-card--ready h3 { font-size: 1rem; }
   .shows-grid .show-ready-line { gap: 0.4rem; }
   .shows-grid .show-card-copy { font-size: 0.72rem; }
+  /* The body absorbs the slack instead of the action row claiming it with an
+     auto margin. With `margin-top: auto` and a clamped height, free space goes
+     negative once the content overflows, and WebKit resolves that by pulling
+     the actions up over the title -- the bug this replaces. Growing the body
+     cannot produce a negative anything. */
+  .shows-grid .show-row-body { flex: 1 1 auto; }
   .shows-grid .show-actions {
     justify-content: flex-start;
-    margin-top: auto;
     padding: 0.55rem 0.75rem 0.75rem;
     width: 100%;
   }
