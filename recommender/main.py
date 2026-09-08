@@ -92,35 +92,30 @@ def print_recommendations(results: list[Recommendation], query: str) -> None:
 
 def _handle_feedback_command(line: str) -> bool:
     """Handle interactive feedback commands. Returns True if line was a feedback command."""
-    # +liked <title> / +loved <title>
-    for prefix in ("+liked ", "+loved ", "+like "):
-        if line.lower().startswith(prefix):
-            title = line[len(prefix):].strip()
-            user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
-            try:
-                ct = user_store.resolve_rating_content_type(config.EVENT_DB_PATH, title)
-            except ValueError as exc:
-                console_out.print(f"[red]{exc}[/red]")
+    # Rating commands. The old +liked / +disliked spellings stay as aliases so
+    # muscle memory and any scripts keep working.
+    _RATING_PREFIXES = (
+        (user_store.RATING_MORE, "more like this", "green",
+         ("+more ", "+liked ", "+loved ", "+like ")),
+        (user_store.RATING_NEUTRAL, "fine", "cyan",
+         ("+fine ", "+neutral ", "+ok ")),
+        (user_store.RATING_LESS, "less like this", "yellow",
+         ("-less ", "+less ", "-disliked ", "+disliked ", "-dislike ", "+dislike ")),
+    )
+    for rating, phrasing, colour, prefixes in _RATING_PREFIXES:
+        for prefix in prefixes:
+            if line.lower().startswith(prefix):
+                title = line[len(prefix):].strip()
+                user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+                try:
+                    ct = user_store.resolve_rating_content_type(config.EVENT_DB_PATH, title)
+                except ValueError as exc:
+                    console_out.print(f"[red]{exc}[/red]")
+                    return True
+                user_store.rate_title(config.EVENT_DB_PATH, title, ct, rating)
+                console_out.print(f"[{colour}]Marked {phrasing}:[/{colour}] {title}")
+                console_out.print("[dim]Run --refresh-profile to update your taste profile.[/dim]")
                 return True
-            user_store.rate_title(config.EVENT_DB_PATH, title, ct, "liked")
-            console_out.print(f"[green]Marked as liked:[/green] {title}")
-            console_out.print("[dim]Run --refresh-profile to update your taste profile.[/dim]")
-            return True
-
-    # -disliked <title> / +disliked <title>
-    for prefix in ("-disliked ", "+disliked ", "-dislike ", "+dislike "):
-        if line.lower().startswith(prefix):
-            title = line[len(prefix):].strip()
-            user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
-            try:
-                ct = user_store.resolve_rating_content_type(config.EVENT_DB_PATH, title)
-            except ValueError as exc:
-                console_out.print(f"[red]{exc}[/red]")
-                return True
-            user_store.rate_title(config.EVENT_DB_PATH, title, ct, "disliked")
-            console_out.print(f"[yellow]Marked as disliked:[/yellow] {title}")
-            console_out.print("[dim]Run --refresh-profile to update your taste profile.[/dim]")
-            return True
 
     # +add <title> [tv|movie]
     if line.lower().startswith("+add "):
@@ -163,8 +158,12 @@ def main() -> None:
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("-n", type=int, default=None, help="Number of results (overrides default)")
     # Feedback flags
-    parser.add_argument("--liked", metavar="TITLE", help="Mark a title as liked")
-    parser.add_argument("--disliked", metavar="TITLE", help="Mark a title as disliked")
+    parser.add_argument("--more", metavar="TITLE", help="Mark a title as: more like this")
+    parser.add_argument("--fine", metavar="TITLE", help="Mark a title as: it was fine")
+    parser.add_argument("--less", metavar="TITLE", help="Mark a title as: less like this")
+    # Superseded spellings, kept working rather than broken.
+    parser.add_argument("--liked", metavar="TITLE", help=argparse.SUPPRESS)
+    parser.add_argument("--disliked", metavar="TITLE", help=argparse.SUPPRESS)
     parser.add_argument("--add", metavar="TITLE", help="Add a title to watch history")
     parser.add_argument("--type", choices=["tv", "movie"], default="tv",
                         help="Content type for --add (default: tv)")
@@ -177,17 +176,20 @@ def main() -> None:
     setup_logging(level_override="DEBUG" if args.debug else None)
 
     # Handle feedback-only invocations (no API keys needed).
-    if args.liked or args.disliked or args.add:
+    rating_args = [
+        (args.more or args.liked, user_store.RATING_MORE, "more like this", "green"),
+        (args.fine, user_store.RATING_NEUTRAL, "fine", "cyan"),
+        (args.less or args.disliked, user_store.RATING_LESS, "less like this", "yellow"),
+    ]
+    if any(title for title, _, _, _ in rating_args) or args.add:
         user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
         try:
-            if args.liked:
-                ct = user_store.resolve_rating_content_type(config.EVENT_DB_PATH, args.liked)
-                user_store.rate_title(config.EVENT_DB_PATH, args.liked, ct, "liked")
-                console_out.print(f"[green]Marked as liked:[/green] {args.liked}")
-            if args.disliked:
-                ct = user_store.resolve_rating_content_type(config.EVENT_DB_PATH, args.disliked)
-                user_store.rate_title(config.EVENT_DB_PATH, args.disliked, ct, "disliked")
-                console_out.print(f"[yellow]Marked as disliked:[/yellow] {args.disliked}")
+            for title, rating, phrasing, colour in rating_args:
+                if not title:
+                    continue
+                ct = user_store.resolve_rating_content_type(config.EVENT_DB_PATH, title)
+                user_store.rate_title(config.EVENT_DB_PATH, title, ct, rating)
+                console_out.print(f"[{colour}]Marked {phrasing}:[/{colour}] {title}")
         except ValueError as exc:
             console_out.print(f"[red]{exc}[/red]")
             return
@@ -220,7 +222,7 @@ def main() -> None:
         return
 
     console_out.print("Streaming Recommender — ask me anything about what to watch.")
-    console_out.print("Feedback: [bold]+liked Title[/bold], [bold]+disliked Title[/bold], [bold]+add Title tv|movie[/bold]")
+    console_out.print("Feedback: [bold]+more Title[/bold], [bold]+fine Title[/bold], [bold]+less Title[/bold], [bold]+add Title tv|movie[/bold]")
     console_out.print('Type [bold]exit[/bold] to quit.\n')
     from recommender.query_engine import QueryIntent
     conv_ctx: ConversationContext | None = None

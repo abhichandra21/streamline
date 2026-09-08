@@ -283,9 +283,14 @@ def build(
     if negative_prefs:
         titles_str = ", ".join(f'"{t}"' for t in negative_prefs)
         negative_section = (
-            f"\n\nThe user has explicitly disliked: {titles_str}. "
-            "Add a brief 'What you don't enjoy' section to the profile capturing "
-            "patterns in what they disliked."
+            # The signal is "I would not seek out more like this", not "I hated
+            # it" -- these are titles the user watched to the end. Overstating
+            # it to the model produces a harsher anti-pattern than the evidence
+            # supports.
+            f"\n\nThe user has asked to see less like these titles: {titles_str}. "
+            "They watched them; this is a preference against more of the same, "
+            "not a verdict that they were bad. Add a brief 'What you tend to "
+            "skip' section capturing the patterns they point to."
         )
 
     # Single batch — no need for merge or caching

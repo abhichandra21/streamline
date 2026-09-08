@@ -942,10 +942,14 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
     if refresh_profile or not resolved_profile_path.exists():
         user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
         ratings = user_store.load_ratings(config.EVENT_DB_PATH)
-        liked_count = sum(1 for r in ratings if r["rating"] == "liked")
-        disliked_count = sum(1 for r in ratings if r["rating"] == "disliked")
-        if liked_count or disliked_count:
-            console.print(f"  Applying feedback: {liked_count} liked, {disliked_count} disliked titles")
+        more_count = sum(1 for r in ratings if r["rating"] == user_store.RATING_MORE)
+        less_count = sum(1 for r in ratings if r["rating"] == user_store.RATING_LESS)
+        neutral_count = sum(1 for r in ratings if r["rating"] == user_store.RATING_NEUTRAL)
+        if more_count or less_count or neutral_count:
+            console.print(
+                f"  Applying feedback: {more_count} more like this, "
+                f"{less_count} less like this, {neutral_count} neutral"
+            )
 
         scores = compute_scores(events, metadata, config.RECENCY_HALF_LIFE_DAYS)
         scores = user_store.apply_rating_multipliers(scores, ratings)

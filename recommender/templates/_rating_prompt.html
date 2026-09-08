@@ -1,13 +1,21 @@
-<div id="rating-{{ uid }}" style="display:inline-flex; align-items:center; gap:0.5rem;">
-  <span class="mono" style="font-size:0.6rem; color:var(--muted);">Rate?</span>
-  <form hx-post="/archive/rate" hx-target="#rating-{{ uid }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+{# Asked once, right after a title is marked watched. There is room here for the
+   full phrasing, so it gets it. The question is "more like this?" rather than
+   "did you like it?" because the answer feeds profile weighting, not a verdict
+   on quality -- and about a film someone watched and found fine, "did you like
+   it" forces a yes and "did you dislike it" forces a no. #}
+<div id="rating-{{ uid }}" class="rating-prompt">
+  <span class="mono rating-ask">More like this?</span>
+  <form hx-post="/archive/rate" hx-target="#rating-{{ uid }}" hx-swap="outerHTML" class="rating-form">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="title" value="{{ title }}">
     <input type="hidden" name="content_type" value="{{ content_type }}">
     <input type="hidden" name="tmdb_id" value="{{ tmdb_id or '' }}">
     {% if context %}<input type="hidden" name="context" value="{{ context }}">{% endif %}
-    <button type="submit" name="rating" value="liked" class="btn-thumb btn-thumb--like" title="Liked">liked</button>
-    <button type="submit" name="rating" value="disliked" class="btn-thumb btn-thumb--dislike" title="Disliked">disliked</button>
-    <button type="submit" name="rating" value="skip" class="btn-thumb btn-thumb--skip" title="Skip">skip</button>
+    <button type="submit" name="rating" value="more" class="rate-btn rate-btn--more">More like this</button>
+    <button type="submit" name="rating" value="neutral" class="rate-btn rate-btn--neutral">It was fine</button>
+    <button type="submit" name="rating" value="less" class="rate-btn rate-btn--less">Less like this</button>
+    {# Not a fourth verdict: it records nothing and is styled apart so it does
+       not read as one. #}
+    <button type="submit" name="rating" value="skip" class="rate-skip">Later</button>
   </form>
 </div>

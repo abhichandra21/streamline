@@ -52,8 +52,8 @@
       </ul>
       <p><strong>Command-style inputs</strong> are not recommendation queries.</p>
       <ul>
-        <li><code>+liked Title</code>, <code>+disliked Title</code>, <code>+add Title tv|movie</code> work inside interactive mode.</li>
-        <li><code>./recommend --liked "Title"</code>, <code>--disliked</code>, <code>--add</code>, and <code>--history</code> are CLI commands.</li>
+        <li><code>+more Title</code>, <code>+fine Title</code>, <code>+less Title</code>, <code>+add Title tv|movie</code> work inside interactive mode.</li>
+        <li><code>./recommend --more "Title"</code>, <code>--fine</code>, <code>--less</code>, <code>--add</code>, and <code>--history</code> are CLI commands.</li>
       </ul>
       <p><strong>Runtime note</strong> — ordinary recommendations run from the cached watch index and taste profile after setup. Abandoned-watch queries depend on raw watch events, so they are less useful if your provider zips are no longer available at runtime.</p>
       <p>Results show the title, TMDB rating, genres, a personalized explanation of why it matches your taste, and where it's streaming.</p>
@@ -69,7 +69,7 @@
     <div class="help-body">
       <p>Your taste profile is built from <strong>all</strong> titles in your watch history, processed in batches and merged into clusters. Each cluster captures a distinct pattern in what you watch — genre preferences, tonal signatures, cultural interests.</p>
       <p>The profile is rebuilt when you run setup with <code>--refresh-profile</code>. It automatically backs up the previous version.</p>
-      <p>Feedback (liked/disliked titles) influences the profile on the next rebuild — liked titles get a score boost, disliked titles are noted as patterns to avoid.</p>
+      <p>Ratings influence the profile on the next rebuild. The question is <em>more like this?</em> rather than <em>was it good?</em>, because the answer is used to weight your taste profile, not to score the title. <strong>More like this</strong> boosts a title's weight, <strong>less like this</strong> reduces it and notes the pattern as one to steer away from, and <strong>it was fine</strong> records that you considered the title without moving anything — so a rating pass can stop asking about it.</p>
     </div>
   </details>
 
@@ -91,11 +91,12 @@
         <tr><td><code>./recommend --debug "query"</code></td><td>Full pipeline trace</td></tr>
         <tr><td><code>./recommend -n 5 "query"</code></td><td>Override result count</td></tr>
         <tr><td><code>./recommend --provider gemini "query"</code></td><td>Use Gemini instead of default</td></tr>
-        <tr><td><code>./recommend --liked "Title"</code></td><td>Mark a title as liked</td></tr>
-        <tr><td><code>./recommend --disliked "Title"</code></td><td>Mark a title as disliked</td></tr>
+        <tr><td><code>./recommend --more "Title"</code></td><td>More like this</td></tr>
+        <tr><td><code>./recommend --fine "Title"</code></td><td>It was fine</td></tr>
+        <tr><td><code>./recommend --less "Title"</code></td><td>Less like this</td></tr>
         <tr><td><code>./recommend --add "Title" --type tv</code></td><td>Add to watch history</td></tr>
       </table>
-      <p style="margin-top:1rem;">Inside interactive mode, you can also type <code>+liked Title</code>, <code>+disliked Title</code>, or <code>+add Title tv|movie</code>.</p>
+      <p style="margin-top:1rem;">Inside interactive mode, you can also type <code>+more Title</code>, <code>+fine Title</code>, <code>+less Title</code>, or <code>+add Title tv|movie</code>. The older <code>+liked</code> and <code>+disliked</code> spellings still work.</p>
 
       <p style="margin-top:1rem;">Web server:</p>
       <table class="help-table">

@@ -1238,8 +1238,10 @@ class TestWatchlistRoutes:
         })
         assert resp.status_code == 200
         assert len(list_manual_archive(db)) == 1
-        # Response should contain rating prompt
-        assert b"liked" in resp.data or b"thumbs" in resp.data.lower()
+        # Response should contain the rating prompt, in its own words
+        assert b"More like this" in resp.data
+        assert b"It was fine" in resp.data
+        assert b"Less like this" in resp.data
 
 
 class TestArchiveRoutes:
@@ -1272,19 +1274,19 @@ class TestArchiveRoutes:
             **_csrf_form(),
             "title": "Breaking Bad",
             "content_type": "tv",
-            "rating": "liked",
+            "rating": "more",
         })
         assert resp.status_code == 200
         ratings = load_ratings(db)
         assert len(ratings) == 1
-        assert ratings[0]["rating"] == "liked"
+        assert ratings[0]["rating"] == "more"
 
     def test_clear_rating(self, client, tmp_path, monkeypatch):
         from recommender.user_store import init_db, rate_title, load_ratings
 
         db = str(tmp_path / "test.db")
         init_db(db)
-        rate_title(db, "Breaking Bad", "tv", "liked")
+        rate_title(db, "Breaking Bad", "tv", "more")
         monkeypatch.setattr("config.EVENT_DB_PATH", db)
         monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
 
@@ -1368,7 +1370,7 @@ class TestRenderedState:
 
         db = str(tmp_path / "test.db")
         init_db(db)
-        rate_title(db, "Breaking Bad", "tv", "liked")
+        rate_title(db, "Breaking Bad", "tv", "more")
         monkeypatch.setattr("config.EVENT_DB_PATH", db)
         monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
 
@@ -1377,11 +1379,12 @@ class TestRenderedState:
             **_csrf_form(),
             "title": "Breaking Bad",
             "content_type": "tv",
-            "rating": "liked",
+            "rating": "more",
         })
         assert resp.status_code == 200
-        # Should show the liked state (clear button for liked thumb)
+        # The chosen option becomes the one that clears it
         assert b"clear" in resp.data
+        assert b"is-set" in resp.data
 
     def test_history_dedup_does_not_double_show_manual_entry(self, client, tmp_path, monkeypatch):
         """A manual archive entry already in the watch index should not appear twice."""

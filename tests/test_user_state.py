@@ -65,14 +65,14 @@ def test_is_dismissed_fallback_to_normalized_title(tmp_path):
 def test_has_rating_and_get_rating(tmp_path):
     db = str(tmp_path / "test.db")
     init_db(db)
-    rate_title(db, "Breaking Bad", "tv", "liked", tmdb_id=1396)
+    rate_title(db, "Breaking Bad", "tv", "more", tmdb_id=1396)
 
     from recommender.user_state import UserStateIndex
     idx = UserStateIndex.load(db)
 
     meta = FakeMeta("Breaking Bad", "tv", tmdb_id=1396)
     assert idx.has_rating(meta)
-    assert idx.get_rating(meta) == "liked"
+    assert idx.get_rating(meta) == "more"
 
     assert not idx.has_rating(FakeMeta("Unknown", "tv"))
     assert idx.get_rating(FakeMeta("Unknown", "tv")) is None
@@ -97,7 +97,7 @@ def test_snapshot_does_not_see_later_mutations(tmp_path):
 def test_get_rating_does_not_fallthrough_on_wrong_tmdb_id(tmp_path):
     db = str(tmp_path / "test.db")
     init_db(db)
-    rate_title(db, "Breaking Bad", "tv", "liked")  # no tmdb_id, stored by title
+    rate_title(db, "Breaking Bad", "tv", "more")  # no tmdb_id, stored by title
 
     from recommender.user_state import UserStateIndex
     idx = UserStateIndex.load(db)
@@ -111,13 +111,13 @@ def test_get_rating_is_content_type_aware_for_shared_tmdb_id(tmp_path):
     """A movie and a TV show that share a numeric TMDB id must not collide."""
     db = str(tmp_path / "test.db")
     init_db(db)
-    rate_title(db, "Breathe", "movie", "liked", tmdb_id=407445)
+    rate_title(db, "Breathe", "movie", "more", tmdb_id=407445)
 
     from recommender.user_state import UserStateIndex
     idx = UserStateIndex.load(db)
 
-    # The movie is liked; the TV show with the same id is still unrated.
-    assert idx.get_rating(FakeMeta("Breathe", "movie", tmdb_id=407445)) == "liked"
+    # The movie is rated; the TV show with the same id is still unrated.
+    assert idx.get_rating(FakeMeta("Breathe", "movie", tmdb_id=407445)) == "more"
     assert idx.get_rating(FakeMeta("Breathe", "tv", tmdb_id=407445)) is None
     assert not idx.has_rating(FakeMeta("Breathe", "tv", tmdb_id=407445))
 
