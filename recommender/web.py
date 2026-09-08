@@ -1746,6 +1746,9 @@ def archive_resolve() -> str:
         conflict = user_store.find_conflict(config.EVENT_DB_PATH, cand.content_type, cand.tmdb_id)
         if conflict is None and key in watched_index:
             conflict = {"source": "watched", "title": watched_index[key]}
+        # The original title only earns its place when it differs from the
+        # display title -- otherwise it is the same string twice.
+        original = cand.original_title if cand.original_title != cand.title else ""
         candidates.append({
             "tmdb_id": cand.tmdb_id,
             "content_type": cand.content_type,
@@ -1753,6 +1756,12 @@ def archive_resolve() -> str:
             "year": cand.year,
             "poster_path": cand.poster_path,
             "conflict": conflict,
+            "overview": cand.overview,
+            "original_title": original,
+            "original_language": (cand.original_language or "").upper(),
+            "vote_average": cand.vote_average,
+            "vote_count": cand.vote_count,
+            "tmdb_url": f"https://www.themoviedb.org/{'tv' if cand.content_type == 'tv' else 'movie'}/{cand.tmdb_id}",
         })
 
     return render_template(
