@@ -27,17 +27,11 @@
          same declarations serve both the collapse toggle and the narrow-window
          band, with no duplicated rules. */
       --sb-w:          208px;
-      --sb-label:      inline;
+      /* Text fades rather than being switched off, so the labels travel out
+         with the shrinking column instead of vanishing before it moves. */
+      --sb-text-op:    1;
       --sb-dot:        none;
-      --sb-justify:    flex-start;
-      --sb-link-pad:   0 0.6rem;
-      --sb-brand-pad:  0 1rem;
-      --sb-brand-just: flex-start;
       --sb-sec-pad:    1.15rem 1rem 0.5rem;
-      --sb-sec-align:  left;
-      --sb-sec-size:   0.55rem;
-      --sb-sec-op:     1;
-      --sb-toggle-rot: 0deg;
 
       --bg:        #141118;
       --surface:   #1c1922;
@@ -129,8 +123,7 @@
       align-items: center;
       gap: 0.5rem;
       height: 56px;
-      padding: var(--sb-brand-pad);
-      justify-content: var(--sb-brand-just);
+      padding-left: 0.35rem;
       flex-shrink: 0;
       font-family: 'DM Serif Display', serif;
       font-size: 1.15rem;
@@ -147,21 +140,36 @@
       opacity: 0.92;
       flex-shrink: 0;
     }
-    .nav-brand-word { color: var(--text); display: var(--sb-label); }
+    .nav-brand-word { color: var(--text); }
     .nav-brand-word em { font-style: italic; color: var(--teal); }
 
     .nav-section {
       font-family: 'JetBrains Mono', monospace;
-      font-size: var(--sb-sec-size);
+      font-size: 0.55rem;
       letter-spacing: 0.14em;
       text-transform: uppercase;
       color: var(--muted);
-      opacity: var(--sb-sec-op);
       padding: var(--sb-sec-pad);
-      text-align: var(--sb-sec-align);
       white-space: nowrap;
       line-height: 1.2;
     }
+    /* Everything textual fades together. Expanding waits a beat so the labels
+       arrive into a column wide enough to hold them; collapsing starts at once
+       so they are gone before the edge reaches them. The heading keeps its box
+       either way, so the gaps that separate the groups do not move. */
+    .nav-label,
+    .nav-brand-word,
+    .nav-badge,
+    .nav-section,
+    .nav-brand img {
+      opacity: var(--sb-text-op);
+      transition: opacity 0.16s ease 0.08s;
+    }
+    html.sb-rail .nav-label,
+    html.sb-rail .nav-brand-word,
+    html.sb-rail .nav-badge,
+    html.sb-rail .nav-section,
+    html.sb-rail .nav-brand img { transition: opacity 0.1s ease 0s; }
     .nav-group { display: flex; flex-direction: column; gap: 1px; padding: 0 0.5rem; }
 
     .nav-link {
@@ -169,8 +177,7 @@
       align-items: center;
       gap: 0.7rem;
       height: 38px;
-      padding: var(--sb-link-pad);
-      justify-content: var(--sb-justify);
+      padding: 0 0.6rem;
       border-radius: 6px;
       color: var(--body);
       text-decoration: none;
@@ -201,7 +208,7 @@
       border-radius: 0 3px 3px 0;
       background: var(--accent);
     }
-    .nav-label { overflow: hidden; display: var(--sb-label); }
+    .nav-label { overflow: hidden; }
     /* Watchlist count shows as a dot once the rail is too narrow for the number. */
     .nav-dot {
       display: var(--sb-dot);
@@ -210,81 +217,69 @@
       background: var(--teal);
     }
 
-    /* Collapse control rides the sidebar's right edge near the top, the way
-       Jira's does: outside the sidebar so its own overflow can't clip it. It
-       sits dim at rest rather than fully hidden -- this is a single-user app
-       where the control should be findable without knowing to hover. */
+    /* The collapse control sits in the brand row, in the icon column, so it is
+       in the same place whether the sidebar is open or shut -- your hand goes
+       to one spot. On the right edge it also shared a line with the first
+       group heading, which left "Discover" competing with a floating button. */
+    .sidebar-head {
+      display: flex;
+      align-items: center;
+      height: 56px;
+      flex-shrink: 0;
+      /* 9.3px + half the 33.6px button's slack puts the glyph on 17.6px, the
+         same column as every nav icon below it. */
+      padding-left: 9.3px;
+      overflow: hidden;
+    }
     .sidebar-toggle {
-      position: absolute;
-      top: 62px;
-      left: calc(var(--sb-w) - 11px);
-      width: 22px;
-      height: 22px;
       display: grid;
       place-items: center;
+      width: 33.6px;
+      height: 33.6px;
+      flex-shrink: 0;
       padding: 0;
-      border-radius: 50%;
-      border: 1px solid var(--border);
-      background: var(--surface2);
+      border: none;
+      border-radius: 6px;
+      background: none;
       color: var(--muted);
       cursor: pointer;
-      opacity: 0.55;
-      z-index: 25;
-      transition: opacity 0.15s, left 0.2s cubic-bezier(0.4, 0, 0.2, 1),
-                  color 0.15s, border-color 0.15s, background 0.15s;
+      transition: color 0.15s, background 0.15s;
     }
-    .sidebar:hover ~ .sidebar-toggle,
-    .sidebar-toggle:hover,
-    .sidebar-toggle:focus-visible { opacity: 1; }
-    /* Pointer-less input never fires hover, so keep it plainly visible there. */
-    @media (hover: none) { .sidebar-toggle { opacity: 1; } }
-    .sidebar-toggle:hover {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
+    .sidebar-toggle:hover { background: var(--surface2); color: var(--text); }
+    .sidebar-toggle:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
+    /* A panel glyph rather than a bare chevron: it says which thing is being
+       toggled, where an arrow only says a direction. */
     .sidebar-toggle svg {
-      width: 13px; height: 13px;
-      stroke: currentColor; fill: none; stroke-width: 2;
+      width: 17px; height: 17px;
+      stroke: currentColor; fill: none; stroke-width: 1.6;
       stroke-linecap: round; stroke-linejoin: round;
-      transform: rotate(var(--sb-toggle-rot));
-      transition: transform 0.2s;
     }
+    .sidebar-toggle .panel-fill { fill: currentColor; stroke: none; opacity: 0.55; }
 
     /* The rail: 60px, icons only. Applied when the reader collapses it, and
        forced between 840 and 1039px where a full sidebar would squeeze page
        content below the ~685px the Archive and Settings tables need. */
     html.sb-rail,
     html.sb-rail .sidebar { --sb-w: 60px; }
+    /* Collapsing is a subtraction and nothing else. The icon column, the
+       group headings and the toggle all keep the position they had when the
+       labels were there, so the sidebar narrows without anything sliding. */
     html.sb-rail {
-      --sb-label:      none;
-      --sb-dot:        block;
-      --sb-justify:    center;
-      --sb-link-pad:   0;
-      --sb-brand-pad:  0;
-      --sb-brand-just: center;
-      --sb-sec-pad:    1.15rem 0 0.5rem;
-      --sb-sec-align:  center;
-      --sb-sec-size:   0.5rem;
-      --sb-sec-op:     0.55;
-      --sb-toggle-rot: 180deg;
+      --sb-text-op: 0;
+      --sb-dot:     block;
     }
     @media (min-width: 840px) and (max-width: 1039px) {
-      :root {
-        --sb-w:          60px;
-        --sb-label:      none;
-        --sb-dot:        block;
-        --sb-justify:    center;
-        --sb-link-pad:   0;
-        --sb-brand-pad:  0;
-        --sb-brand-just: center;
-        --sb-sec-pad:    1.15rem 0 0.5rem;
-        --sb-sec-align:  center;
-        --sb-sec-size:   0.5rem;
-        --sb-sec-op:     0.55;
-      }
-      /* Nothing to toggle when the width already forces the rail. */
+      /* Nothing to toggle at this width, so the row carries the mark instead
+         of an empty 56px gap -- lined up with the icon column below it. */
       .sidebar-toggle { display: none; }
+      .sidebar .nav-brand { padding-left: 8.3px; }
+      /* The mark stays: it is the only thing on that row at this width. */
+      .sidebar .nav-brand img { opacity: 1; }
+      :root {
+        --sb-w:       60px;
+        --sb-text-op: 0;
+        --sb-dot:     block;
+      }
     }
 
     /* Recent searches strip. The wand marks a Mood Match run, replacing the
@@ -515,7 +510,6 @@
       border-radius: 8px;
       line-height: 1.3;
       margin-left: auto;
-      display: var(--sb-label);
     }
 
     /* Badge */
@@ -791,7 +785,7 @@
     <g id="ico-logs"><path d="M5 6.5h14M5 10.5h14M5 14.5h9M5 18.5h6"/></g>
     <g id="ico-help"><circle cx="12" cy="12" r="8.4"/><path d="M9.8 9.7a2.3 2.3 0 1 1 2.9 2.5v1.5"/><path d="M12.6 17.1h.01"/></g>
     <g id="ico-more"><circle cx="5.5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.4" fill="currentColor" stroke="none"/></g>
-    <g id="ico-collapse"><path d="M14.5 5.5 8 12l6.5 6.5"/></g>
+    <g id="ico-panel"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path class="panel-fill" d="M4.6 6.1h4v11.8h-4z"/></g>
   </defs></svg>
 
   {%- set on_home     = request.path == '/' %}
@@ -806,10 +800,16 @@
 
   <div class="app">
     <aside class="sidebar">
-      <a href="/" class="nav-brand">
-        <img src="/static/logo.png" alt="">
-        <span class="nav-brand-word">Stream<em>line</em></span>
-      </a>
+      <div class="sidebar-head">
+        <button type="button" class="sidebar-toggle" onclick="toggleSidebar()"
+                aria-label="Collapse sidebar" title="Collapse sidebar">
+          <svg viewBox="0 0 24 24"><use href="#ico-panel"/></svg>
+        </button>
+        <a href="/" class="nav-brand">
+          <img src="/static/logo.png" alt="">
+          <span class="nav-brand-word">Stream<em>line</em></span>
+        </a>
+      </div>
 
       <div class="nav-section">Discover</div>
       <nav class="nav-group">
@@ -843,11 +843,6 @@
       </nav>
 
     </aside>
-
-    <button type="button" class="sidebar-toggle" onclick="toggleSidebar()"
-            aria-label="Collapse sidebar" title="Collapse sidebar">
-      <svg viewBox="0 0 24 24"><use href="#ico-collapse"/></svg>
-    </button>
 
     <div class="app-main">
       <a href="/" class="mobile-top">
