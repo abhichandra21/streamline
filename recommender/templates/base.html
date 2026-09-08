@@ -268,11 +268,35 @@
       --sb-text-op: 0;
       --sb-dot:     block;
     }
+    /* In the rail the mark and the collapse control want the same slot, so
+       they share it: the mark at rest, the control when you reach for it.
+       Both sit on the icon column's optical centre, so the swap is a
+       cross-fade with nothing moving. */
+    html.sb-rail .sidebar-head { position: relative; }
+    html.sb-rail .nav-brand {
+      position: absolute;
+      left: 15.6px;
+      top: 0;
+      height: 56px;
+      padding: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease;
+    }
+    html.sb-rail .nav-brand img { opacity: 1; transition: opacity 0.15s ease; }
+    html.sb-rail .sidebar-toggle { opacity: 0; transition: opacity 0.15s ease; }
+    html.sb-rail .sidebar:hover .sidebar-toggle,
+    html.sb-rail .sidebar-toggle:focus-visible { opacity: 1; }
+    html.sb-rail .sidebar:hover .nav-brand img { opacity: 0; }
+    /* Without a pointer there is no hover to reveal it, so it stays put. */
+    @media (hover: none) {
+      html.sb-rail .sidebar-toggle { opacity: 1; }
+      html.sb-rail .nav-brand img { opacity: 0; }
+    }
     @media (min-width: 840px) and (max-width: 1039px) {
       /* Nothing to toggle at this width, so the row carries the mark instead
          of an empty 56px gap -- lined up with the icon column below it. */
       .sidebar-toggle { display: none; }
-      .sidebar .nav-brand { padding-left: 8.3px; }
+      .sidebar .nav-brand { padding-left: 6.3px; }
       /* The mark stays: it is the only thing on that row at this width. */
       .sidebar .nav-brand img { opacity: 1; }
       :root {
