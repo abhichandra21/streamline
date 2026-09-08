@@ -31,6 +31,20 @@
   }
   .log-toolbar-left  { display: flex; align-items: center; gap: 0.4rem; }
   .log-toolbar-right { display: flex; align-items: center; gap: 0.4rem; margin-left: auto; }
+  /* An absolute log path has no break opportunities, so it pushed the page
+     wider than a phone viewport. */
+  .log-path { overflow-wrap: anywhere; }
+
+  /* The toolbar sits in a container that clips overflow, so on a phone the
+     right-hand controls were simply unreachable. Let both halves wrap. */
+  @media (max-width: 839px) {
+    .log-toolbar { flex-wrap: wrap; row-gap: 0.45rem; }
+    .log-toolbar-left,
+    .log-toolbar-right { flex-wrap: wrap; row-gap: 0.4rem; }
+    .log-toolbar-right { margin-left: 0; }
+    .log-toolbar-right input[type="search"],
+    .log-toolbar-right input[type="text"] { min-width: 0; flex: 1 1 8rem; }
+  }
 
   /* ── Toolbar icon buttons ────────────────────────────────────────────────── */
   .tb-btn {
@@ -142,7 +156,7 @@
   <span class="mono" style="font-size:0.6rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">Diagnostics</span>
   <h1 style="font-size:clamp(1.5rem, 3vw, 2rem); margin-top:0.15rem; margin-bottom:0.15rem;">Logs</h1>
   <p style="color:var(--muted); font-size:0.78rem; margin:0;">
-    <code class="mono" style="font-size:0.7rem; color:var(--body);">{{ log_path }}</code>
+    <code class="mono log-path" style="font-size:0.7rem; color:var(--body);">{{ log_path }}</code>
   </p>
 </div>
 

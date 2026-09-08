@@ -16,8 +16,29 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
+  <script>
+    // Restore the collapsed rail before first paint so it never flashes wide.
+    try { if (localStorage.getItem('sidebar') === 'rail') document.documentElement.classList.add('sb-rail'); } catch (e) {}
+  </script>
+
   <style>
     :root {
+      /* Sidebar geometry. The rail is expressed as a variable override so the
+         same declarations serve both the collapse toggle and the narrow-window
+         band, with no duplicated rules. */
+      --sb-w:          208px;
+      --sb-label:      inline;
+      --sb-dot:        none;
+      --sb-justify:    flex-start;
+      --sb-link-pad:   0 0.6rem;
+      --sb-brand-pad:  0 1rem;
+      --sb-brand-just: flex-start;
+      --sb-sec-pad:    1.15rem 1rem 0.5rem;
+      --sb-sec-align:  left;
+      --sb-sec-size:   0.55rem;
+      --sb-sec-op:     1;
+      --sb-toggle-rot: 0deg;
+
       --bg:        #141118;
       --surface:   #1c1922;
       --surface2:  #24202c;
@@ -67,25 +88,58 @@
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
 
-    /* Navigation */
-    nav {
+    /* ---------- Sidebar navigation ---------- */
+    .app { display: flex; min-height: 100vh; position: relative; }
+    .app-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    /* Auto cross-axis margins turn off flex stretch, so the box would size to
+       its own min-content and could run past the viewport. The explicit width
+       makes it definite again; max-width still caps and centres it.
+       The 54rem cap keeps line length readable on text-shaped pages. Pages
+       whose content is artwork rather than prose opt out with `wide`. */
+    .app-main main {
+      flex: 1 0 auto;
+      min-width: 0;
+      width: 100%;
+      max-width: 54rem;
+      margin: 0 auto;
+      padding: 2.5rem 2rem 5rem;
+    }
+    .app-main main.wide { max-width: 88rem; }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      align-self: flex-start;
+      height: 100vh;
+      width: var(--sb-w);
+      flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      overflow-x: hidden;
+      transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      z-index: 20;
+    }
+    .sidebar::-webkit-scrollbar { width: 0; }
+
+    .nav-brand {
       display: flex;
       align-items: center;
-      gap: 2rem;
-      padding: 0 2rem;
+      gap: 0.5rem;
       height: 56px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-    }
-    .nav-brand {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.45rem;
-      text-decoration: none;
+      padding: var(--sb-brand-pad);
+      justify-content: var(--sb-brand-just);
+      flex-shrink: 0;
       font-family: 'DM Serif Display', serif;
-      font-size: 1.18rem;
-      letter-spacing: 0.01em;
+      font-size: 1.15rem;
+      color: var(--text);
+      text-decoration: none;
+      white-space: nowrap;
+      overflow: hidden;
     }
+    .nav-brand:hover { text-decoration: none; }
     .nav-brand img {
       height: 21px;
       width: 21px;
@@ -93,35 +147,162 @@
       opacity: 0.92;
       flex-shrink: 0;
     }
-    .nav-brand:hover { text-decoration: none; }
-    .nav-brand-word { color: var(--text); }
-    .nav-brand-word em {
-      font-style: italic;
-      color: var(--teal);
-    }
-    .nav-link {
+    .nav-brand-word { color: var(--text); display: var(--sb-label); }
+    .nav-brand-word em { font-style: italic; color: var(--teal); }
+
+    .nav-section {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 0.7rem;
-      letter-spacing: 0.08em;
+      font-size: var(--sb-sec-size);
+      letter-spacing: 0.14em;
       text-transform: uppercase;
       color: var(--muted);
-      text-decoration: none;
-      padding-bottom: 2px;
-      border-bottom: 2px solid transparent;
-      transition: color 0.2s, border-color 0.2s;
+      opacity: var(--sb-sec-op);
+      padding: var(--sb-sec-pad);
+      text-align: var(--sb-sec-align);
+      white-space: nowrap;
+      line-height: 1.2;
     }
-    .nav-link:hover { color: var(--text); text-decoration: none; }
-    .nav-link.active { color: var(--text); border-bottom-color: var(--accent); }
+    .nav-group { display: flex; flex-direction: column; gap: 1px; padding: 0 0.5rem; }
 
-    .nav-group { display: flex; align-items: center; gap: 1.5rem; }
-    .nav-group-system {
+    .nav-link {
       display: flex;
       align-items: center;
-      gap: 1.2rem;
-      padding-left: 1.2rem;
-      border-left: 1px solid var(--border);
+      gap: 0.7rem;
+      height: 38px;
+      padding: var(--sb-link-pad);
+      justify-content: var(--sb-justify);
+      border-radius: 6px;
+      color: var(--body);
+      text-decoration: none;
+      font-size: 0.875rem;
+      white-space: nowrap;
+      position: relative;
+      transition: background 0.15s, color 0.15s;
     }
-    .nav-group-system .nav-link { font-size: 0.64rem; letter-spacing: 0.07em; }
+    .nav-link svg {
+      width: 17px;
+      height: 17px;
+      flex-shrink: 0;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.6;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      opacity: 0.82;
+    }
+    .nav-link:hover { background: var(--surface2); color: var(--text); text-decoration: none; }
+    .nav-link.active { background: rgba(232,93,74,0.13); color: var(--text); }
+    .nav-link.active svg { opacity: 1; stroke: var(--accent); }
+    .nav-link.active::before {
+      content: '';
+      position: absolute;
+      left: -0.5rem; top: 9px; bottom: 9px;
+      width: 3px;
+      border-radius: 0 3px 3px 0;
+      background: var(--accent);
+    }
+    .nav-label { overflow: hidden; display: var(--sb-label); }
+    /* Watchlist count shows as a dot once the rail is too narrow for the number. */
+    .nav-dot {
+      display: var(--sb-dot);
+      position: absolute; right: 9px; top: 8px;
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--teal);
+    }
+
+    /* Collapse control rides the sidebar's right edge near the top, the way
+       Jira's does: outside the sidebar so its own overflow can't clip it. It
+       sits dim at rest rather than fully hidden -- this is a single-user app
+       where the control should be findable without knowing to hover. */
+    .sidebar-toggle {
+      position: absolute;
+      top: 62px;
+      left: calc(var(--sb-w) - 11px);
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--muted);
+      cursor: pointer;
+      opacity: 0.55;
+      z-index: 25;
+      transition: opacity 0.15s, left 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+                  color 0.15s, border-color 0.15s, background 0.15s;
+    }
+    .sidebar:hover ~ .sidebar-toggle,
+    .sidebar-toggle:hover,
+    .sidebar-toggle:focus-visible { opacity: 1; }
+    /* Pointer-less input never fires hover, so keep it plainly visible there. */
+    @media (hover: none) { .sidebar-toggle { opacity: 1; } }
+    .sidebar-toggle:hover {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .sidebar-toggle svg {
+      width: 13px; height: 13px;
+      stroke: currentColor; fill: none; stroke-width: 2;
+      stroke-linecap: round; stroke-linejoin: round;
+      transform: rotate(var(--sb-toggle-rot));
+      transition: transform 0.2s;
+    }
+
+    /* The rail: 60px, icons only. Applied when the reader collapses it, and
+       forced between 840 and 1039px where a full sidebar would squeeze page
+       content below the ~685px the Archive and Settings tables need. */
+    html.sb-rail,
+    html.sb-rail .sidebar { --sb-w: 60px; }
+    html.sb-rail {
+      --sb-label:      none;
+      --sb-dot:        block;
+      --sb-justify:    center;
+      --sb-link-pad:   0;
+      --sb-brand-pad:  0;
+      --sb-brand-just: center;
+      --sb-sec-pad:    1.15rem 0 0.5rem;
+      --sb-sec-align:  center;
+      --sb-sec-size:   0.5rem;
+      --sb-sec-op:     0.55;
+      --sb-toggle-rot: 180deg;
+    }
+    @media (min-width: 840px) and (max-width: 1039px) {
+      :root {
+        --sb-w:          60px;
+        --sb-label:      none;
+        --sb-dot:        block;
+        --sb-justify:    center;
+        --sb-link-pad:   0;
+        --sb-brand-pad:  0;
+        --sb-brand-just: center;
+        --sb-sec-pad:    1.15rem 0 0.5rem;
+        --sb-sec-align:  center;
+        --sb-sec-size:   0.5rem;
+        --sb-sec-op:     0.55;
+      }
+      /* Nothing to toggle when the width already forces the rail. */
+      .sidebar-toggle { display: none; }
+    }
+
+    /* Recent searches strip. The wand marks a Mood Match run, replacing the
+       "Mood Match - " prefix that used to eat a third of every label. */
+    .recent-icon {
+      width: 10px; height: 10px;
+      vertical-align: -1px;
+      margin-right: 0.3rem;
+      stroke: var(--lavender);
+      fill: none;
+      stroke-width: 1.7;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex-shrink: 0;
+    }
+
+    /* Mobile-only chrome, off until the breakpoint. */
+    .mobile-top, .tabbar, .nav-sheet, .nav-sheet-scrim { display: none; }
 
     /* Inputs */
     .input-field {
@@ -269,6 +450,8 @@
       padding: 1px 5px;
       border-radius: 8px;
       line-height: 1.3;
+      margin-left: auto;
+      display: var(--sb-label);
     }
 
     /* Badge */
@@ -370,56 +553,127 @@
     .wiz-chips .wiz-chip:nth-child(4){animation-delay:.14s}
     .wiz-chips .wiz-chip:nth-child(5){animation-delay:.18s}
 
-    /* Mobile masthead: three deliberate rows.
-       Row 1: brand alone.
-       Row 2: primary nav, horizontally scrollable if needed.
-       Row 3: system/utility links, dimmer and smaller. */
-    @media (max-width: 720px) {
-      nav {
-        flex-direction: column;
-        align-items: stretch;
-        height: auto;
-        gap: 0;
-        padding: 0;
-      }
-      .nav-brand {
-        align-self: flex-start;
-        padding: 0.7rem 1rem 0.55rem;
-        font-size: 1.2rem;
-      }
-      .nav-group,
-      .nav-group-system {
+    /* Mobile: the sidebar gives way to a brand strip on top and a fixed
+       tab bar in thumb reach. The overflow lives in a sheet driven by
+       :target, so it opens with CSS alone if JS never loads. */
+    @media (max-width: 839px) {
+      .app { display: block; }
+      .sidebar,
+      .sidebar-toggle { display: none; }
+
+      .mobile-top {
         display: flex;
         align-items: center;
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        overflow-y: hidden;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
-        margin-left: 0 !important;
-        border-left: none;
-        padding: 0.5rem 1rem 0.55rem;
-        gap: 1.15rem;
-        border-top: 1px solid var(--border);
+        gap: 0.55rem;
+        height: 50px;
+        padding: 0 1rem;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        text-decoration: none;
       }
-      .nav-group::-webkit-scrollbar,
-      .nav-group-system::-webkit-scrollbar { display: none; }
-      .nav-group-system {
-        opacity: 0.78;
-        padding-top: 0.45rem;
-        padding-bottom: 0.65rem;
-        gap: 1rem;
-      }
-      .nav-group .nav-link,
-      .nav-group-system .nav-link {
-        white-space: nowrap;
-        flex-shrink: 0;
-      }
-      .nav-group-system .nav-link {
-        font-size: 0.56rem;
-        letter-spacing: 0.06em;
+      .mobile-top:hover { text-decoration: none; }
+      .mobile-top img { height: 20px; width: 20px; border-radius: 4px; opacity: 0.92; }
+      .mobile-top .nav-brand-word {
+        font-family: 'DM Serif Display', serif;
+        font-size: 1.1rem;
+        color: var(--text);
       }
 
+      .tabbar {
+        display: flex;
+        position: fixed;
+        left: 0; right: 0; bottom: 0;
+        height: calc(64px + env(safe-area-inset-bottom));
+        padding-bottom: env(safe-area-inset-bottom);
+        background: rgba(28,25,34,0.94);
+        backdrop-filter: blur(14px);
+        border-top: 1px solid var(--border);
+        z-index: 40;
+      }
+      .tab {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        padding-top: 6px;
+        position: relative;
+        color: var(--muted);
+        text-decoration: none;
+      }
+      .tab:hover { text-decoration: none; }
+      .tab svg {
+        width: 21px; height: 21px;
+        stroke: currentColor; fill: none; stroke-width: 1.6;
+        stroke-linecap: round; stroke-linejoin: round;
+      }
+      .tab span {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.52rem;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+      .tab.active { color: var(--accent); }
+      .tab.active::before {
+        content: '';
+        position: absolute; top: 0;
+        width: 26px; height: 2px;
+        border-radius: 0 0 2px 2px;
+        background: var(--accent);
+      }
+      .tab-badge {
+        position: absolute;
+        top: 4px; right: calc(50% - 17px);
+        min-width: 15px; height: 15px;
+        border-radius: 999px;
+        background: var(--teal);
+        color: var(--bg);
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.5rem;
+        display: grid;
+        place-items: center;
+        padding: 0 3px;
+      }
+
+      .nav-sheet {
+        display: block;
+        position: fixed;
+        left: 0; right: 0; bottom: 0;
+        background: var(--surface);
+        border-top: 1px solid var(--border);
+        border-radius: 14px 14px 0 0;
+        transform: translateY(110%);
+        transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+        z-index: 50;
+        padding: 0.6rem 0.5rem calc(1rem + env(safe-area-inset-bottom));
+      }
+      .nav-sheet:target { transform: translateY(0); }
+      .nav-sheet .nav-section { padding: 0.7rem 1rem 0.35rem; }
+      .nav-sheet-grab {
+        width: 36px; height: 4px;
+        border-radius: 2px;
+        background: var(--border);
+        margin: 0.2rem auto 0.5rem;
+      }
+      .nav-sheet-scrim {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background: rgba(10,8,13,0.62);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.22s;
+        z-index: 45;
+      }
+      .nav-sheet:target + .nav-sheet-scrim { opacity: 1; pointer-events: auto; }
+
+      /* Reserve the tab bar's strip on the layout wrapper, so nothing after
+         main -- the footer included -- can end up underneath it. */
+      .app { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
       main { padding: 1.75rem 1rem 4rem !important; }
       footer { padding: 1.25rem 1rem !important; gap: 0.9rem !important; }
 
@@ -438,36 +692,106 @@
 
       /* Pills clamp to container width; allow internal break for long queries. */
       .btn-ghost { max-width: 100%; word-break: break-word; }
+
+      /* Recent searches stack one per line and truncate rather than wrapping.
+         Three is enough on a phone; "View all" carries the rest. */
+      .recent-strip {
+        flex-direction: column;
+        align-items: stretch !important;
+        gap: 0.3rem !important;
+      }
+      .recent-item {
+        display: flex;
+        align-items: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        word-break: normal;
+      }
+      .recent-item:nth-of-type(n+4) { display: none; }
+      .recent-all { align-self: flex-start; color: var(--accent) !important; }
     }
   </style>
 </head>
 
 <body>
 
-  <nav>
-    <a href="/" class="nav-brand">
-      <img src="/static/logo.png" alt="">
-      <span class="nav-brand-word">Stream<em>line</em></span>
-    </a>
-    <div class="nav-group" style="margin-left:0.5rem;">
-      <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">Home</a>
-      <a href="/wizard" class="nav-link {% if request.path == '/wizard' %}active{% endif %}">Mood Match</a>
-      <a href="/searches" class="nav-link {% if request.path == '/searches' %}active{% endif %}">Searches</a>
-      <a href="/watchlist" class="nav-link {% if request.path == '/watchlist' %}active{% endif %}" style="display:flex; align-items:center; gap:0.3rem;">
-        Watchlist
-        {% if watchlist_count %}<span class="nav-badge">{{ watchlist_count }}</span>{% endif %}
-      </a>
-      <a href="/shows" class="nav-link {% if request.path.startswith('/shows') %}active{% endif %}">On Deck</a>
-      <a href="/history" class="nav-link {% if request.path.startswith('/history') or request.path.startswith('/title') %}active{% endif %}">Archive</a>
-    </div>
-    <div class="nav-group-system">
-      <a href="/settings" class="nav-link {% if request.path == '/settings' %}active{% endif %}">Settings</a>
-      <a href="/logs" class="nav-link {% if request.path == '/logs' %}active{% endif %}">Logs</a>
-      <a href="/help" class="nav-link {% if request.path == '/help' %}active{% endif %}">Help</a>
-    </div>
-  </nav>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+    <g id="ico-home"><path d="M3 10.4 12 3l9 7.4"/><path d="M5.6 9.2V20h12.8V9.2"/><path d="M9.8 20v-5.4h4.4V20"/></g>
+    <g id="ico-wand"><path d="M12 3.6l1.7 4.4 4.4 1.7-4.4 1.7L12 15.8l-1.7-4.4L5.9 9.7l4.4-1.7z"/><path d="M18.4 15.2l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></g>
+    <g id="ico-search"><circle cx="10.5" cy="10.5" r="6.2"/><path d="M15.2 15.2 20.5 20.5"/></g>
+    <g id="ico-mark"><path d="M6.5 3.5h11v17l-5.5-4.1-5.5 4.1z"/></g>
+    <g id="ico-deck"><rect x="3.2" y="5.4" width="17.6" height="13.2" rx="2"/><path d="M10.3 9.6 15 12l-4.7 2.4z"/></g>
+    <g id="ico-archive"><rect x="3.2" y="4.6" width="17.6" height="4.4" rx="1.2"/><path d="M5.2 9v10.4h13.6V9"/><path d="M10 12.8h4"/></g>
+    <g id="ico-settings"><path d="M4 7.5h9M17 7.5h3M4 16.5h3M11 16.5h9"/><circle cx="15" cy="7.5" r="2.1"/><circle cx="9" cy="16.5" r="2.1"/></g>
+    <g id="ico-logs"><path d="M5 6.5h14M5 10.5h14M5 14.5h9M5 18.5h6"/></g>
+    <g id="ico-help"><circle cx="12" cy="12" r="8.4"/><path d="M9.8 9.7a2.3 2.3 0 1 1 2.9 2.5v1.5"/><path d="M12.6 17.1h.01"/></g>
+    <g id="ico-more"><circle cx="5.5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.4" fill="currentColor" stroke="none"/></g>
+    <g id="ico-collapse"><path d="M14.5 5.5 8 12l6.5 6.5"/></g>
+  </defs></svg>
 
-  <main style="max-width:54rem; margin:0 auto; padding:2.5rem 2rem 5rem;">
+  {%- set on_home     = request.path == '/' %}
+  {%- set on_wizard   = request.path == '/wizard' %}
+  {%- set on_searches = request.path == '/searches' %}
+  {%- set on_list     = request.path == '/watchlist' %}
+  {%- set on_shows    = request.path.startswith('/shows') %}
+  {%- set on_archive  = request.path.startswith('/history') or request.path.startswith('/title') %}
+  {%- set on_settings = request.path == '/settings' %}
+  {%- set on_logs     = request.path == '/logs' %}
+  {%- set on_help     = request.path == '/help' %}
+
+  <div class="app">
+    <aside class="sidebar">
+      <a href="/" class="nav-brand">
+        <img src="/static/logo.png" alt="">
+        <span class="nav-brand-word">Stream<em>line</em></span>
+      </a>
+
+      <div class="nav-section">Discover</div>
+      <nav class="nav-group">
+        <a href="/" title="Home" class="nav-link {% if on_home %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><use href="#ico-home"/></svg><span class="nav-label">Home</span></a>
+        <a href="/wizard" title="Mood Match" class="nav-link {% if on_wizard %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><use href="#ico-wand"/></svg><span class="nav-label">Mood Match</span></a>
+        <a href="/searches" title="Searches" class="nav-link {% if on_searches %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><use href="#ico-search"/></svg><span class="nav-label">Searches</span></a>
+      </nav>
+
+      <div class="nav-section">Library</div>
+      <nav class="nav-group">
+        <a href="/watchlist" title="Watchlist{% if watchlist_count %} — {{ watchlist_count }}{% endif %}" class="nav-link {% if on_list %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><use href="#ico-mark"/></svg><span class="nav-label">Watchlist</span>
+          {% if watchlist_count %}<span class="nav-badge">{{ watchlist_count }}</span><span class="nav-dot"></span>{% endif %}</a>
+        <a href="/shows" title="On Deck" class="nav-link {% if on_shows %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><use href="#ico-deck"/></svg><span class="nav-label">On Deck</span></a>
+        <a href="/history" title="Archive" class="nav-link {% if on_archive %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><use href="#ico-archive"/></svg><span class="nav-label">Archive</span></a>
+      </nav>
+
+      <div class="nav-section">System</div>
+      <nav class="nav-group">
+        <a href="/settings" title="Settings" class="nav-link {% if on_settings %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><use href="#ico-settings"/></svg><span class="nav-label">Settings</span></a>
+        <a href="/logs" title="Logs" class="nav-link {% if on_logs %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><use href="#ico-logs"/></svg><span class="nav-label">Logs</span></a>
+        <a href="/help" title="Help" class="nav-link {% if on_help %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><use href="#ico-help"/></svg><span class="nav-label">Help</span></a>
+      </nav>
+
+    </aside>
+
+    <button type="button" class="sidebar-toggle" onclick="toggleSidebar()"
+            aria-label="Collapse sidebar" title="Collapse sidebar">
+      <svg viewBox="0 0 24 24"><use href="#ico-collapse"/></svg>
+    </button>
+
+    <div class="app-main">
+      <a href="/" class="mobile-top">
+        <img src="/static/logo.png" alt="">
+        <span class="nav-brand-word">Stream<em>line</em></span>
+      </a>
+
+  <main class="{% block main_class %}{% endblock %}">
     {% block content %}{% endblock %}
   </main>
 
@@ -486,6 +810,54 @@
     <span style="color:var(--border);">·</span>
     <a href="https://github.com/abhichandra21/streamline" target="_blank" rel="noopener" class="mono" style="font-size:0.58rem; letter-spacing:0.08em; color:var(--muted); text-decoration:none;">github</a>
   </footer>
+    </div>
+  </div>
+
+  <nav class="tabbar">
+    <a href="/" class="tab {% if on_home %}active{% endif %}">
+      <svg viewBox="0 0 24 24"><use href="#ico-home"/></svg><span>Home</span></a>
+    <a href="/wizard" class="tab {% if on_wizard %}active{% endif %}">
+      <svg viewBox="0 0 24 24"><use href="#ico-wand"/></svg><span>Mood</span></a>
+    <a href="/shows" class="tab {% if on_shows %}active{% endif %}">
+      <svg viewBox="0 0 24 24"><use href="#ico-deck"/></svg><span>On Deck</span></a>
+    <a href="/watchlist" class="tab {% if on_list %}active{% endif %}">
+      {% if watchlist_count %}<span class="tab-badge">{{ watchlist_count }}</span>{% endif %}
+      <svg viewBox="0 0 24 24"><use href="#ico-mark"/></svg><span>List</span></a>
+    <a href="#nav-more" class="tab {% if on_searches or on_archive or on_settings or on_logs or on_help %}active{% endif %}">
+      <svg viewBox="0 0 24 24"><use href="#ico-more"/></svg><span>More</span></a>
+  </nav>
+
+  <div id="nav-more" class="nav-sheet">
+    <div class="nav-sheet-grab"></div>
+    <div class="nav-section">Library</div>
+    <nav class="nav-group">
+      <a href="/searches" class="nav-link {% if on_searches %}active{% endif %}">
+        <svg viewBox="0 0 24 24"><use href="#ico-search"/></svg><span class="nav-label">Searches</span></a>
+      <a href="/history" class="nav-link {% if on_archive %}active{% endif %}">
+        <svg viewBox="0 0 24 24"><use href="#ico-archive"/></svg><span class="nav-label">Archive</span></a>
+    </nav>
+    <div class="nav-section">System</div>
+    <nav class="nav-group">
+      <a href="/settings" class="nav-link {% if on_settings %}active{% endif %}">
+        <svg viewBox="0 0 24 24"><use href="#ico-settings"/></svg><span class="nav-label">Settings</span></a>
+      <a href="/logs" class="nav-link {% if on_logs %}active{% endif %}">
+        <svg viewBox="0 0 24 24"><use href="#ico-logs"/></svg><span class="nav-label">Logs</span></a>
+      <a href="/help" class="nav-link {% if on_help %}active{% endif %}">
+        <svg viewBox="0 0 24 24"><use href="#ico-help"/></svg><span class="nav-label">Help</span></a>
+    </nav>
+  </div>
+  <a href="#" class="nav-sheet-scrim" aria-label="Close menu"></a>
+
+  <script>
+    function toggleSidebar() {
+      var rail = document.documentElement.classList.toggle('sb-rail');
+      var label = rail ? 'Expand sidebar' : 'Collapse sidebar';
+      var btn = document.querySelector('.sidebar-toggle');
+      btn.setAttribute('aria-label', label);
+      btn.setAttribute('title', label);
+      try { localStorage.setItem('sidebar', rail ? 'rail' : 'full'); } catch (e) {}
+    }
+  </script>
 
 </body>
 </html>

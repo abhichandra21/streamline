@@ -32,13 +32,17 @@
 
   <div id="results" style="margin-top:1.5rem;"></div>
 
-  <div style="margin-top:1.25rem; display:flex; flex-wrap:wrap; gap:0.4rem; align-items:center;">
+  <div class="recent-strip" style="margin-top:1.25rem; display:flex; flex-wrap:wrap; gap:0.4rem; align-items:center;">
     {% if recent_queries %}
-    <span class="mono" style="font-size:0.6rem; color:var(--muted); padding-top:2px;">Recent:</span>
+    <span class="mono recent-label" style="font-size:0.6rem; color:var(--muted); padding-top:2px;">Recent:</span>
     {% for q in recent_queries %}
-    <a href="/searches#q-{{ loop.index }}" class="btn-ghost" style="padding:3px 10px; font-size:0.58rem; text-decoration:none;"{% if q.summary %} title="{{ q.summary }}"{% endif %}>{{ q.label or q.query }}</a>
+    {%- set label = q.label or q.query %}
+    {%- set from_wizard = label.startswith('Mood Match - ') %}
+    <a href="/searches#q-{{ loop.index }}" class="btn-ghost recent-item" style="padding:3px 10px; font-size:0.58rem; text-decoration:none;"{% if q.summary %} title="{{ q.summary }}"{% elif from_wizard %} title="{{ label }}"{% endif %}>
+      {%- if from_wizard %}<svg class="recent-icon" viewBox="0 0 24 24" aria-label="Mood Match"><use href="#ico-wand"/></svg>{% endif -%}
+      {{ label[13:] if from_wizard else label }}</a>
     {% endfor %}
-    <a href="/searches" class="mono" style="font-size:0.58rem; color:var(--muted); text-decoration:none; padding-top:2px; transition:color 0.15s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'">View all</a>
+    <a href="/searches" class="mono recent-all" style="font-size:0.58rem; color:var(--muted); text-decoration:none; padding-top:2px; transition:color 0.15s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'">View all</a>
     {% else %}
     <span class="mono" style="font-size:0.6rem; color:var(--muted); padding-top:2px;">Try:</span>
     {% for s in ["gritty British crime drama", "feel-good comedy", "dark espionage thriller", "Indian family drama"] %}
