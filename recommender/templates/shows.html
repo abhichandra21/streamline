@@ -457,10 +457,23 @@
     .show-row--settled { grid-template-columns: 44px minmax(0, 1fr); }
     .show-decision-row .show-actions,
     .show-row--settled .show-actions { grid-column: 1 / -1; justify-content: flex-start; padding-left: 3.3rem; }
-    /* The calendar folds to two lines rather than squeezing four columns. */
-    .soon-row { grid-template-columns: 5.2rem minmax(0, 1fr); row-gap: 0.15rem; }
-    .soon-slug { grid-column: 2; }
-    .soon-row .show-inline-form { grid-column: 2; }
+    /* The calendar folds to three lines rather than squeezing four columns.
+       Every cell is named. Giving the slug and the form a column but no row
+       and letting auto-placement finish the job is not portable: Blink walks
+       them down to rows two and three, WebKit hoists the form to row one and
+       it lands above the title. Naming the areas removes the guesswork. */
+    .soon-row {
+      grid-template-columns: 5.2rem minmax(0, 1fr);
+      grid-template-areas:
+        "date   title"
+        ".      slug"
+        ".      action";
+      row-gap: 0.15rem;
+    }
+    .soon-date { grid-area: date; }
+    .soon-title { grid-area: title; }
+    .soon-slug { grid-area: slug; }
+    .soon-row .show-inline-form { grid-area: action; }
   }
 
   /* Must sit after the row-layout media blocks above: those re-pin the poster
