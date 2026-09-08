@@ -393,6 +393,63 @@ def _human_date(value: str | None) -> str:
     return f"{parsed.day} {parsed.strftime('%b %Y')}"
 
 
+def _length_of(content_type: str, raw: dict) -> tuple[str, int]:
+    """How much of an evening a title asks for, as a label and a sort key.
+
+    A film is a single sitting, so its runtime is both. A series is a
+    commitment, so the label counts seasons and episodes -- the terms a
+    decision is actually made in -- while the sort key approximates the whole
+    thing in minutes so films and series can be ranked against each other.
+    """
+    if content_type == "tv":
+        seasons = raw.get("number_of_seasons") or 0
+        episodes = raw.get("number_of_episodes") or 0
+        if not (seasons or episodes):
+            return "", 0
+        parts = []
+        if seasons:
+            parts.append(f"{seasons} season" + ("s" if seasons != 1 else ""))
+        if episodes:
+            parts.append(f"{episodes} episode" + ("s" if episodes != 1 else ""))
+        runs = raw.get("episode_run_time") or []
+        per_episode = runs[0] if runs else 45
+        return " · ".join(parts), episodes * per_episode
+    runtime = raw.get("runtime") or 0
+    if not runtime:
+        return "", 0
+    return f"{runtime} min", runtime
+
+
+def _waiting_label(saved_at: str | None) -> tuple[str, int]:
+    """How long a title has sat unwatched, as a label and a day count.
+
+    Most visits to the watchlist end in "nothing tonight", so the page has to
+    make rejection easy. Age is the fact that does it: a title that has waited
+    eight months is usually a title to let go of.
+    """
+    if not saved_at:
+        return "", 0
+    try:
+        parsed = datetime.strptime(saved_at[:10], "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return "", 0
+    days = max(0, (datetime.now() - parsed).days)
+    if days < 1:
+        return "saved today", 0
+    if days == 1:
+        return "saved yesterday", 1
+    if days < 7:
+        return f"saved {days} days ago", days
+    if days < 60:
+        weeks = days // 7
+        return f"saved {weeks} week" + ("s" if weeks != 1 else "") + " ago", days
+    months = days // 30
+    if months < 24:
+        return f"saved {months} month" + ("s" if months != 1 else "") + " ago", days
+    years = days // 365
+    return f"saved {years} year" + ("s" if years != 1 else "") + " ago", days
+
+
 def _shows_checked_label() -> str | None:
     """Human phrasing for when the release cache was last fully refreshed."""
     checked_at = show_tracker.last_refresh_at(config.RELEASE_CACHE_DIR)
@@ -751,12 +808,16 @@ def history() -> str:
 
     total = len(items)
     ALLOWED_PAGE_SIZES = (30, 60, 120)
+    # The archive opens as a poster wall, and 60 covers about a screen and a
+    # half of it. Browsing a shelf wants to keep going, so the default page is
+    # the largest of the three; the selector still offers the smaller ones.
+    DEFAULT_PAGE_SIZE = 120
     try:
-        per_page = int(request.args.get("per_page", "60"))
+        per_page = int(request.args.get("per_page", str(DEFAULT_PAGE_SIZE)))
     except (ValueError, TypeError):
-        per_page = 60
+        per_page = DEFAULT_PAGE_SIZE
     if per_page not in ALLOWED_PAGE_SIZES:
-        per_page = 60
+        per_page = DEFAULT_PAGE_SIZE
     try:
         page = max(1, int(request.args.get("page", "1")))
     except (ValueError, TypeError):
@@ -1477,6 +1538,11 @@ def _decorate_saved_item(item: dict, ctx) -> None:
     item.setdefault("poster", None)
     item.setdefault("tmdb_url", "")
     item.setdefault("imdb_url", "")
+    item.setdefault("length_label", "")
+    item.setdefault("length_minutes", 0)
+    waiting_label, waiting_days = _waiting_label(item.get("saved_at"))
+    item["waiting_label"] = waiting_label
+    item["waiting_days"] = waiting_days
     tmdb_id = item.get("tmdb_id")
     ct = item.get("content_type")
     if not (ctx and tmdb_id and ct):
@@ -1499,6 +1565,7 @@ def _decorate_saved_item(item: dict, ctx) -> None:
     tmdb_type = "tv" if ct == "tv" else "movie"
     item["tmdb_url"] = f"https://www.themoviedb.org/{tmdb_type}/{tmdb_id}"
     raw = tmdb._load_cache(ct, tmdb_id) or {}
+    item["length_label"], item["length_minutes"] = _length_of(ct, raw)
     imdb_id = raw.get("imdb_id")
     if imdb_id:
         item["imdb_url"] = f"https://www.imdb.com/title/{imdb_id}/"

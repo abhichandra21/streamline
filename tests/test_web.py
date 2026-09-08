@@ -1,6 +1,7 @@
 """Tests for the web UI contract: jobs, progressive enhancement, settings/rebuild separation."""
 
 import time
+from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -386,6 +387,49 @@ class TestYourShowsInPlaceActions:
 
         assert "shows-decisions-clear" in body
         assert '<div class="shows-decisions-list">' not in body
+
+
+class TestWatchlistDecisionFacts:
+    """The two facts that let a saved title be rejected quickly."""
+
+    @pytest.mark.parametrize("content_type,raw,label,minutes", [
+        ("movie", {"runtime": 109}, "109 min", 109),
+        ("movie", {"runtime": 0}, "", 0),
+        ("movie", {}, "", 0),
+        ("tv", {"number_of_seasons": 1, "number_of_episodes": 8,
+                "episode_run_time": [45]}, "1 season · 8 episodes", 360),
+        ("tv", {"number_of_seasons": 5, "number_of_episodes": 62,
+                "episode_run_time": [30]}, "5 seasons · 62 episodes", 1860),
+        ("tv", {}, "", 0),
+    ])
+    def test_length_of(self, content_type, raw, label, minutes):
+        assert web._length_of(content_type, raw) == (label, minutes)
+
+    def test_series_without_runtime_falls_back_to_an_estimate(self):
+        """A missing episode_run_time must not make a series look free."""
+        label, minutes = web._length_of("tv", {
+            "number_of_seasons": 2, "number_of_episodes": 10,
+        })
+        assert label == "2 seasons · 10 episodes"
+        assert minutes == 450
+
+    @pytest.mark.parametrize("days_ago,expected", [
+        (0, "saved today"),
+        (1, "saved yesterday"),
+        (3, "saved 3 days ago"),
+        (14, "saved 2 weeks ago"),
+        (200, "saved 6 months ago"),
+        (900, "saved 2 years ago"),
+    ])
+    def test_waiting_label(self, days_ago, expected):
+        saved = (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+        label, days = web._waiting_label(saved)
+        assert label == expected
+        assert days == days_ago
+
+    @pytest.mark.parametrize("value", ["", None, "not-a-date"])
+    def test_waiting_label_tolerates_bad_input(self, value):
+        assert web._waiting_label(value) == ("", 0)
 
 
 class TestHumanDates:

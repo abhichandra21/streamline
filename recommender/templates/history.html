@@ -80,10 +80,10 @@
 
     <!-- View toggle -->
     <div style="display:flex; gap:2px; background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:2px;">
-      <button onclick="setView('list')" id="btn-list" class="view-btn active" title="List view">
+      <button onclick="setView('list')" id="btn-list" class="view-btn" title="List view">
         <svg width="14" height="14" viewBox="0 0 14 14"><rect x="1" y="2" width="12" height="1.5" rx="0.5" fill="currentColor"/><rect x="1" y="6" width="12" height="1.5" rx="0.5" fill="currentColor"/><rect x="1" y="10" width="12" height="1.5" rx="0.5" fill="currentColor"/></svg>
       </button>
-      <button onclick="setView('grid')" id="btn-grid" class="view-btn" title="Poster grid">
+      <button onclick="setView('grid')" id="btn-grid" class="view-btn active" title="Poster grid">
         <svg width="14" height="14" viewBox="0 0 14 14"><rect x="1" y="1" width="5" height="5.5" rx="0.5" fill="currentColor"/><rect x="8" y="1" width="5" height="5.5" rx="0.5" fill="currentColor"/><rect x="1" y="7.5" width="5" height="5.5" rx="0.5" fill="currentColor"/><rect x="8" y="7.5" width="5" height="5.5" rx="0.5" fill="currentColor"/></svg>
       </button>
       <button onclick="setView('compact')" id="btn-compact" class="view-btn" title="Compact list">
@@ -96,7 +96,7 @@
 <!-- Blocking script: apply saved view mode before any archive-view paints -->
 <script>
 (function() {
-  var saved = localStorage.getItem('archive-view') || 'list';
+  var saved = localStorage.getItem('archive-view') || 'grid';
   document.documentElement.setAttribute('data-archive-view', saved);
 })();
 </script>
@@ -239,7 +239,12 @@
   html[data-archive-view="grid"] #view-grid,
   html[data-archive-view="compact"] #view-compact { display: block; }
   /* Fallback when no attribute is set (first visit, no localStorage) */
-  html:not([data-archive-view]) #view-list { display: block; }
+  html:not([data-archive-view]) #view-grid { display: block; }
+
+  /* The width follows the view, not the page. In grid the content is artwork
+     and wants the room; in list and compact it is text, where the 54rem cap
+     keeps the line length readable. */
+  html[data-archive-view="grid"] .app-main main { max-width: 88rem; }
 
   .view-btn {
     background: none;
@@ -335,7 +340,7 @@ function setView(mode) {
 }
 // Sync button active state with the view already applied by the blocking script
 (function() {
-  var saved = localStorage.getItem('archive-view') || 'list';
+  var saved = localStorage.getItem('archive-view') || 'grid';
   if (document.getElementById('view-' + saved)) {
     document.querySelectorAll('.view-btn').forEach(function(el) { el.classList.remove('active'); });
     document.getElementById('btn-' + saved).classList.add('active');

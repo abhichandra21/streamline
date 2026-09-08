@@ -17,6 +17,8 @@
     <select class="input-field mono" id="wl-sort" onchange="setSort(this.value)" style="padding:4px 8px; font-size:0.65rem; border-radius:3px;">
       <option value="newest">Newest first</option>
       <option value="oldest">Oldest first</option>
+      <option value="shortest">Shortest first</option>
+      <option value="waiting">Waiting longest</option>
       <option value="rating">Highest rated</option>
       <option value="az">A → Z</option>
       <option value="za">Z → A</option>
@@ -35,7 +37,9 @@
     data-type="{{ item.content_type }}"
     data-title="{{ item.title | lower }}"
     data-saved="{{ item.saved_at or '' }}"
-    data-rating="{{ item.vote_average }}">
+    data-rating="{{ item.vote_average }}"
+    data-length="{{ item.length_minutes or 0 }}"
+    data-waiting="{{ item.waiting_days or 0 }}">
 
     <div class="wl-poster">
       {% if item.poster %}
@@ -58,6 +62,10 @@
       <h3 class="wl-title">{{ item.title }}</h3>
       {% endif %}
 
+      {% if item.length_label %}
+      <p class="mono wl-length">{{ item.length_label }}</p>
+      {% endif %}
+
       {% if item.genres %}
       <p class="mono wl-genres">{{ item.genres | join("  ·  ") }}</p>
       {% endif %}
@@ -66,6 +74,10 @@
         {%- if item.streaming_providers %}{{ item.streaming_providers | join("  ·  ") }}
         {%- else %}Not on your services{% endif -%}
       </p>
+
+      {% if item.waiting_label %}
+      <p class="mono wl-waiting{% if item.waiting_days >= 180 %} wl-waiting--stale{% endif %}">{{ item.waiting_label }}</p>
+      {% endif %}
 
       <div class="wl-links">
         {% if item.tmdb_url %}<a href="{{ item.tmdb_url }}" target="_blank" rel="noopener" class="mono result-link">TMDB</a>{% endif %}
@@ -102,6 +114,16 @@
 
 <div id="wl-empty" style="display:none; padding:4rem 2rem; text-align:center; border:1px dashed var(--border); border-radius:8px;">
   <p class="mono" style="font-size:0.68rem; color:var(--muted); letter-spacing:0.08em;">No titles match this filter</p>
+</div>
+
+{# Deciding against everything here is a normal outcome, not a failed one, so
+   the page ends with somewhere to go rather than stopping. #}
+<div class="wl-exit">
+  <p class="mono wl-exit-lead">Nothing here tonight?</p>
+  <div class="wl-exit-links">
+    <a href="/wizard" class="btn-ghost">Try Mood Match</a>
+    <a href="/" class="btn-ghost">Search for something else</a>
+  </div>
 </div>
 
 {% else %}
@@ -188,6 +210,25 @@
   }
   .wl-where { color: var(--body); }
   .wl-where--none { opacity: 0.55; }
+  /* How much of an evening this asks for. Kept prominent: on a weeknight it
+     settles the question before genre or rating gets a look in. */
+  .wl-length {
+    font-size: 0.58rem;
+    color: var(--teal);
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin: 0;
+  }
+  .wl-waiting {
+    font-size: 0.54rem;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+    margin: 0.1rem 0 0;
+    opacity: 0.75;
+  }
+  .wl-waiting--stale { color: var(--accent2); opacity: 1; }
   .wl-links { display: flex; gap: 0.6rem; margin-top: 0.1rem; }
   .wl-actions {
     display: flex;
@@ -208,6 +249,25 @@
     .wl-body { padding: 0.6rem 0.6rem 0.65rem; }
     .wl-title { font-size: 0.92rem; }
   }
+
+  .wl-exit {
+    margin-top: 2.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .wl-exit-lead {
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0;
+  }
+  .wl-exit-links { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .wl-exit-links .btn-ghost { padding: 0.45rem 0.9rem; }
 
   .wl-pill {
     background: none;
@@ -260,6 +320,14 @@ function _apply(sortVal) {
     if (sort === 'newest') return (b.dataset.saved || '').localeCompare(a.dataset.saved || '');
     if (sort === 'oldest') return (a.dataset.saved || '').localeCompare(b.dataset.saved || '');
     if (sort === 'rating') return parseFloat(b.dataset.rating || 0) - parseFloat(a.dataset.rating || 0);
+    // Titles with no known length sort last rather than first, where a zero
+    // would otherwise put them.
+    if (sort === 'shortest') {
+      const la = parseInt(a.dataset.length || 0, 10) || Infinity;
+      const lb = parseInt(b.dataset.length || 0, 10) || Infinity;
+      return la - lb;
+    }
+    if (sort === 'waiting') return parseInt(b.dataset.waiting || 0, 10) - parseInt(a.dataset.waiting || 0, 10);
     return 0;
   });
   visible.forEach(el => list.appendChild(el));
