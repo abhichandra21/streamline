@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Streamline{% endblock %}</title>
-  <link rel="icon" type="image/png" href="/static/logo.png">
+  <link rel="icon" type="image/svg+xml" href="/static/mark.svg">
   <script src="https://unpkg.com/htmx.org@2.0.2" integrity="sha384-Y7hw+L/jvKeWIRRkqWYfPcvVxHzVzn5REgzbawhxAuQGwX1XWe70vji+VSeHOThJ" crossorigin="anonymous"></script>
   <script>
     // Inject CSRF token into every HTMX request automatically
@@ -131,12 +131,16 @@
       overflow: hidden;
     }
     .nav-brand:hover { text-decoration: none; }
+    /* The mark only appears where the name cannot: the rail, and the browser
+       tab. Beside the wordmark it was saying the same thing twice, and it was
+       the one object in the sidebar that did not belong to the icon set --
+       eight monochrome outlines, and a filled block carrying its own
+       background. */
     .nav-brand img {
       height: 21px;
       width: 21px;
-      border-radius: 4px;
-      opacity: 0.92;
       flex-shrink: 0;
+      display: none;
     }
     /* Lowercase, packed, one weight. The old mark signalled the seam twice at
        once -- italic and a colour change, mid-word -- and set it in a display
@@ -295,7 +299,7 @@
       pointer-events: none;
       transition: opacity 0.15s ease;
     }
-    html.sb-rail .nav-brand img { opacity: 1; transition: opacity 0.15s ease; }
+    html.sb-rail .nav-brand img { display: block; opacity: 1; transition: opacity 0.15s ease; }
     html.sb-rail .sidebar-toggle { opacity: 0; transition: opacity 0.15s ease; }
     html.sb-rail .sidebar:hover .sidebar-toggle,
     html.sb-rail .sidebar-toggle:focus-visible { opacity: 1; }
@@ -311,7 +315,7 @@
       .sidebar-toggle { display: none; }
       .sidebar .nav-brand { padding-left: 6.3px; }
       /* The mark stays: it is the only thing on that row at this width. */
-      .sidebar .nav-brand img { opacity: 1; }
+      .sidebar .nav-brand img { display: block; opacity: 1; }
       :root {
         --sb-w:       60px;
         --sb-text-op: 0;
@@ -670,7 +674,6 @@
         text-decoration: none;
       }
       .mobile-top:hover { text-decoration: none; }
-      .mobile-top img { height: 20px; width: 20px; border-radius: 4px; opacity: 0.92; }
       .mobile-top .nav-brand-word { font-size: 1.14rem; }
 
       .tabbar {
@@ -839,7 +842,7 @@
           <svg viewBox="0 0 24 24"><use href="#ico-panel"/></svg>
         </button>
         <a href="/" class="nav-brand">
-          <img src="/static/logo.png" alt="">
+          <img src="/static/mark.svg" alt="" aria-hidden="true">
           <span class="nav-brand-word">Stream<em>line</em></span>
         </a>
       </div>
@@ -879,7 +882,6 @@
 
     <div class="app-main">
       <a href="/" class="mobile-top">
-        <img src="/static/logo.png" alt="">
         <span class="nav-brand-word">Stream<em>line</em></span>
       </a>
 
