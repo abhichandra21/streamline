@@ -58,13 +58,24 @@ class MatchHints:
 
 @dataclass
 class DisambiguationCandidate:
-    """A ranked TMDB search result offered to the user for manual-add disambiguation."""
+    """A ranked TMDB search result offered to the user for manual-add disambiguation.
+
+    Everything below `score` comes free with the search response the candidate
+    was built from. A title and a year alone cannot separate a remake from its
+    original, or two regional films sharing a transliterated name, so the
+    fields that can are carried through rather than discarded here.
+    """
     tmdb_id: int
     content_type: str       # "tv" or "movie"
     title: str
     year: int | None
     poster_path: str | None
     score: float
+    overview: str = ""
+    original_title: str = ""
+    original_language: str = ""
+    vote_average: float = 0.0
+    vote_count: int = 0
 
 
 @dataclass
@@ -246,6 +257,11 @@ class TmdbClient:
                     year=year,
                     poster_path=raw.get("poster_path"),
                     score=self._score_candidate(raw, title, ct, hints),
+                    overview=raw.get("overview") or "",
+                    original_title=raw.get("original_name") or raw.get("original_title") or "",
+                    original_language=raw.get("original_language") or "",
+                    vote_average=raw.get("vote_average") or 0.0,
+                    vote_count=raw.get("vote_count") or 0,
                 )
 
         ranked = sorted(merged.values(), key=lambda c: c.score, reverse=True)[:5]
