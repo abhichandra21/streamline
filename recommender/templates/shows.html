@@ -213,12 +213,6 @@
     gap: 0;
     padding: 0;
     overflow: hidden;
-    /* Only the leaving-row animation needs a cap, since height:auto cannot be
-       transitioned. It is generous rather than snug: Safari inflates text in
-       narrow columns, so a cap sized to the tallest card measured in Blink is
-       one the same card can exceed on an iPhone -- and once content overflows
-       a clamped flex column, the layout below stops being reliable. */
-    max-height: 760px;
   }
   .shows-grid .show-poster-link { display: block; width: 100%; }
   .shows-grid .show-poster,
@@ -317,15 +311,21 @@
   /* ── Leaving rows ──
      An acted-on row is done with, so it fades out and the list closes up
      over it rather than lingering with an undo. */
-  /* A leaving row collapses its own height as it fades, so the list closes
-     up smoothly instead of snapping shut once the row is gone. max-height
-     is set per row shape because height:auto cannot be transitioned; each
-     value sits just above the real height so almost none of the timeline is
-     spent on invisible space. */
-  .show-card--ready { max-height: 120px; }
-  .show-card        { max-height: 150px; }
-  .show-decision-row { max-height: 105px; }
-  .soon-row         { max-height: 58px; }
+  /* A leaving row collapses its own height as it fades, so the list closes up
+     smoothly instead of snapping shut once the row is gone. height:auto cannot
+     be transitioned, so the row needs a definite max-height to animate from --
+     but it only needs one while it is leaving.
+
+     Per-shape resting caps were how this used to work, and they were a standing
+     trap: a cap is measured against today's content at today's font size in
+     today's layout, row overflow is visible, and a row taller than its cap
+     spills into the next one rather than clipping. That is what put Unfollow
+     above the next show's title on iPhone.
+
+     The height is now pinned from the element itself when the request starts,
+     which is early enough for the browser to paint it before the transition
+     begins, and no resting layout is constrained by a number that has to stay
+     correct. */
 
   /* Acknowledge the click straight away: the request is in flight before the
      collapse can start, and without this the row sits inert for ~200ms. */
@@ -461,15 +461,10 @@
        title exactly as it sits on a wide screen. Every cell is named, so
        nothing is left to auto-placement.
 
-       The third line this replaces was the actual bug. `.soon-row` carries a
-       58px max-height for the leaving-row animation, sized for the one-line
-       wide layout. Folded to three lines the row needs 78px, and a clamped row
-       whose overflow is visible does not clip -- it spills. The last line
-       landed under the next row's border, reading as that row's Unfollow
-       sitting above its title.
-
-       The cap is raised as well, so a row that grows for any other reason
-       cannot spill the same way. */
+       The third line this replaces was half of the iPhone bug: folded to three
+       lines the row outgrew the resting max-height it carried at the time, and
+       a clamped row whose overflow is visible spills rather than clips. That
+       cap is gone now, but two lines is the better layout regardless. */
     .soon-row {
       grid-template-columns: 5.2rem minmax(0, 1fr) auto;
       grid-template-areas:
@@ -477,7 +472,6 @@
         ".      slug   .";
       column-gap: 0.7rem;
       row-gap: 0.15rem;
-      max-height: 140px;
     }
     .soon-date { grid-area: date; }
     .soon-title { grid-area: title; }
@@ -507,4 +501,27 @@
     .shows-grid .show-actions button { white-space: normal; }
   }
 </style>
+
+<script>
+  // Pin a leaving row's height so the collapse has something definite to
+  // animate from. Done when the request starts rather than at swap time: the
+  // network round trip guarantees the browser paints the pinned value first,
+  // so the transition to max-height:0 actually runs.
+  //
+  // The row keeps no cap at rest, which is the point -- a resting cap has to be
+  // re-measured every time content, font size or breakpoint changes, and when
+  // it falls behind the row spills into its neighbour instead of clipping.
+  document.body.addEventListener('htmx:beforeRequest', function (evt) {
+    var el = evt.target;
+    var row = el && el.closest ? el.closest('.show-row') : null;
+    if (row) row.style.maxHeight = row.offsetHeight + 'px';
+  });
+
+  // A request that fails leaves the row on screen, so it must not keep a cap.
+  document.body.addEventListener('htmx:afterRequest', function (evt) {
+    var el = evt.target;
+    var row = el && el.closest ? el.closest('.show-row') : null;
+    if (row && !row.classList.contains('htmx-swapping')) row.style.maxHeight = '';
+  });
+</script>
 {% endblock %}
