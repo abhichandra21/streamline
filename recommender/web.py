@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import requests
 import yaml
 from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
 from markupsafe import Markup, escape
@@ -35,7 +36,10 @@ from recommender.query_engine import RecommendContext, ask, _safe_query_intent
 from recommender import wizard
 from recommender import wizard_flow
 from recommender.structured_profile import load_structured_profile
-from recommender.tmdb_client import TmdbClient
+from recommender.tmdb_client import MOVIE_GENRE_IDS, TV_GENRE_IDS, TmdbClient, TmdbRateLimitError
+from recommender.catalog_finder import (
+    FindCriteria, PERIOD_OPTIONS, RATING_OPTIONS, find_unwatched_titles,
+)
 
 def _events_loader_fallback() -> list:
     events = load_events(config.EVENT_DB_PATH)
@@ -1146,6 +1150,119 @@ def poll_job(job_id: str) -> str:
 
     result = job.result
     return render_template("_results.html", results=result["items"], query=result["query"], error=None)
+
+
+# ── Find (deterministic unwatched catalogue) ─────────────────────────────────
+
+FIND_KEYWORD_MAX_CHARS = 80
+_FIND_PERIOD_KEYS = {key for key, _label in PERIOD_OPTIONS}
+_FIND_RATINGS = {key: value for key, _label, value in RATING_OPTIONS}
+_FIND_RATING_KEYS = {value: key for key, _label, value in RATING_OPTIONS}
+
+
+def _find_genres(content_type: str) -> list[str]:
+    genre_map = TV_GENRE_IDS if content_type == "tv" else MOVIE_GENRE_IDS
+    return sorted(genre_map)
+
+
+def _find_criteria(args) -> FindCriteria:
+    """Validate the Find query string. Unknown values revert to their defaults
+    so nothing unexpected ever reaches TMDB."""
+    content_type = args.get("type", "movie")
+    if content_type not in ("movie", "tv"):
+        content_type = "movie"
+
+    period = args.get("period", "6m")
+    if period not in _FIND_PERIOD_KEYS:
+        period = "6m"
+
+    genre = (args.get("genre") or "").strip().lower() or None
+    if genre is not None and genre not in _find_genres(content_type):
+        genre = None
+
+    keyword = (args.get("keyword") or "").strip()[:FIND_KEYWORD_MAX_CHARS] or None
+
+    min_rating = _FIND_RATINGS.get(args.get("rating", "any"))
+
+    return FindCriteria(content_type=content_type, period=period, genre=genre,
+                        keyword=keyword, min_rating=min_rating)
+
+
+def _find_start(args) -> int:
+    """Rows already shown before this batch; drives the running numbers."""
+    try:
+        return max(0, int(args.get("start", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _find_url(criteria: FindCriteria, cursor: str, start: int) -> str:
+    params = {
+        "type": criteria.content_type,
+        "period": criteria.period,
+        "genre": criteria.genre or "",
+        "keyword": criteria.keyword or "",
+        "rating": _FIND_RATING_KEYS.get(criteria.min_rating, "any"),
+        "cursor": cursor,
+        "start": start,
+    }
+    return url_for("find_page", **params)
+
+
+@app.route("/find")
+def find_page() -> str:
+    """Highest-rated unwatched titles for a few explicit criteria, one batch at a time.
+
+    Reads the watch index and manual archive directly and talks only to TMDB.
+    No LLM, no taste profile, no shared recommendation context. A cursor
+    continues the list; with HTMX only the next batch is returned and appended,
+    without it the same URL renders a full page.
+    """
+    criteria = _find_criteria(request.args)
+    cursor = request.args.get("cursor") or None
+    start = _find_start(request.args)
+    page = {
+        "criteria": criteria,
+        "genres": _find_genres(criteria.content_type),
+        "period_options": PERIOD_OPTIONS,
+        "rating_options": RATING_OPTIONS,
+        "results": None,
+        "error": None,
+        "start": start,
+        "more_url": None,
+    }
+
+    if not config.TMDB_API_KEY:
+        page["error"] = "TMDB_API_KEY is not set. Add it to the environment (or .env) and restart the web UI."
+        return render_template("find.html", **page)
+
+    try:
+        watch_index = wi.load(config.WATCH_INDEX_PATH)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        log.warning("Find: watch index unavailable at %s: %s", config.WATCH_INDEX_PATH, exc)
+        page["error"] = "Watch index is missing or unreadable. Run ./recommend setup, then reload this page."
+        return render_template("find.html", **page)
+    user_state = _load_user_state()
+
+    tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+    try:
+        results = find_unwatched_titles(
+            tmdb, watch_index, user_state, criteria, config.AVAILABILITY_CACHE_DIR,
+            cursor=cursor,
+        )
+        page["results"] = results
+        if results.next_cursor:
+            page["more_url"] = _find_url(criteria, results.next_cursor, start + len(results.rows))
+    except TmdbRateLimitError as exc:
+        wait = f" Try again in about {int(exc.retry_after_seconds)} seconds." if exc.retry_after_seconds else ""
+        page["error"] = f"TMDB rate limit reached while reading the catalogue.{wait}"
+    except (requests.RequestException, ValueError, KeyError) as exc:
+        log.warning("Find: TMDB request failed: %s", exc)
+        page["error"] = f"TMDB request failed: {exc}"
+
+    if cursor and _is_htmx() and page["results"] is not None:
+        return render_template("_find_rows.html", **page)
+    return render_template("find.html", **page)
 
 
 @app.route("/wizard")

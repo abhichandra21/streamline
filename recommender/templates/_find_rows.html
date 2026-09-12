@@ -1,0 +1,80 @@
+{#- One batch of Find results plus the control that fetches the next one.
+    Included by find.html on first load and returned alone for HTMX continuations,
+    so the appended markup is identical to the first-paint markup. -#}
+{%- set c = criteria %}
+{%- for r in results.rows %}
+{%- set t = r.title %}
+{%- set a = r.availability %}
+{%- set n = start + loop.index %}
+<article class="find-card" style="--i:{{ loop.index0 }};">
+  <div class="find-rank"><span>{{ n }}</span></div>
+
+  <a class="find-poster" href="https://www.themoviedb.org/{{ t.content_type }}/{{ t.tmdb_id }}" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true">
+    {%- if t.poster_path %}
+    <img src="https://image.tmdb.org/t/p/w342{{ t.poster_path }}" alt="" loading="lazy" width="92" height="138">
+    {%- else %}
+    <span class="find-poster-empty">{{ t.title[:1] }}</span>
+    {%- endif %}
+  </a>
+
+  <div class="find-body">
+    <header class="find-head">
+      <h2 class="find-title">
+        <a href="https://www.themoviedb.org/{{ t.content_type }}/{{ t.tmdb_id }}" target="_blank" rel="noopener">{{ t.title }}</a>
+        {%- if t.year %} <span class="find-year">{{ t.year }}</span>{% endif %}
+      </h2>
+      <div class="find-score" title="{{ '{:,}'.format(t.vote_count) }} TMDB votes">
+        <span class="find-score-n">{{ "%.1f"|format(t.vote_average) }}</span>
+        <span class="find-score-v">{{ "{:,}".format(t.vote_count) }} votes</span>
+      </div>
+    </header>
+
+    {%- if t.overview %}
+    <p class="find-overview">{{ t.overview }}</p>
+    {%- endif %}
+
+    <ul class="find-avail" aria-label="Where to watch">
+      {%- set shown = [] %}
+      {%- if a.stream %}{% set _ = shown.append(1) %}
+      <li class="find-chip is-stream"><i></i>Stream<span>{{ a.stream | join(' · ') }}</span></li>
+      {%- endif %}
+      {%- if a.free %}{% set _ = shown.append(1) %}
+      <li class="find-chip is-free"><i></i>Free<span>{{ a.free | join(' · ') }}</span></li>
+      {%- endif %}
+      {%- if a.with_ads %}{% set _ = shown.append(1) %}
+      <li class="find-chip is-ads"><i></i>With ads<span>{{ a.with_ads | join(' · ') }}</span></li>
+      {%- endif %}
+      {%- if a.rent %}{% set _ = shown.append(1) %}
+      <li class="find-chip is-rent"><i></i>Rent<span>{{ a.rent | join(' · ') }}</span></li>
+      {%- endif %}
+      {%- if a.buy %}{% set _ = shown.append(1) %}
+      <li class="find-chip is-buy"><i></i>Buy<span>{{ a.buy | join(' · ') }}</span></li>
+      {%- endif %}
+      {%- if r.in_theaters %}{% set _ = shown.append(1) %}
+      <li class="find-chip is-cinema"><i></i>In theaters</li>
+      {%- endif %}
+      {%- if not shown %}
+      <li class="find-chip is-unknown"><i></i>Unknown</li>
+      {%- endif %}
+    </ul>
+  </div>
+</article>
+{%- endfor %}
+
+{%- if more_url %}
+<a class="find-more" href="{{ more_url }}"
+   hx-get="{{ more_url }}" hx-swap="outerHTML" hx-indicator="this">
+  <span class="find-more-rule"></span>
+  <span class="find-more-label">
+    <span class="find-more-spin" aria-hidden="true"></span>
+    Show more
+  </span>
+  <span class="find-more-rule"></span>
+</a>
+{%- else %}
+<div class="find-end">
+  <span class="find-more-rule"></span>
+  <span class="find-more-label">End of the catalogue</span>
+  <span class="find-more-rule"></span>
+</div>
+{%- endif %}

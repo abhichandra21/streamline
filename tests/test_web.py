@@ -2274,3 +2274,365 @@ class TestFollowFromTitlePage:
 
         assert response.status_code == 303
         assert response.headers["Location"].endswith("/title/274479?type=tv")
+
+
+# ── Find page ─────────────────────────────────────────────────────────────────
+
+class TestFind:
+    """GET /find: deterministic, LLM-free, validated criteria, explicit errors."""
+
+    @staticmethod
+    def _results(criteria, rows=(), **flags):
+        from datetime import date
+        from recommender.catalog_finder import FindResults
+        return FindResults(criteria=criteria, release_start=date(2026, 3, 12),
+                           release_end=date(2026, 9, 12), rows=tuple(rows), **flags)
+
+    @staticmethod
+    def _row(tmdb_id=1, content_type="movie", availability=None, in_theaters=False, **overrides):
+        from recommender.catalog_finder import FindRow
+        from recommender.tmdb_client import CatalogAvailability, CatalogTitle
+        fields = dict(tmdb_id=tmdb_id, content_type=content_type, title=f"Title {tmdb_id}", year=2026,
+                      poster_path=f"/p{tmdb_id}.jpg", overview=f"Overview {tmdb_id}",
+                      vote_average=8.2, vote_count=340)
+        fields.update(overrides)
+        return FindRow(title=CatalogTitle(**fields),
+                       availability=availability or CatalogAvailability(unknown=True),
+                       in_theaters=in_theaters)
+
+    @pytest.fixture
+    def find_env(self, monkeypatch, tmp_path):
+        """Healthy environment: key set, watch index present, finder stubbed and recorded."""
+        index_path = tmp_path / "watch_index.json"
+        index_path.write_text('[{"tmdb_id": 500, "title": "Seen Film", "content_type": "movie"}]')
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "test-key")
+        monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(index_path))
+        monkeypatch.setattr(web.config, "AVAILABILITY_CACHE_DIR", str(tmp_path / "avail"))
+        monkeypatch.setattr(web.config, "CACHE_DIR", str(tmp_path / "tmdb"))
+
+        # The Find page must never touch the recommendation pipeline.
+        def forbidden(*_a, **_k):
+            raise AssertionError("Find must not use the recommendation pipeline")
+        monkeypatch.setattr(web, "_get_context", forbidden)
+        monkeypatch.setattr(web, "_build_context", forbidden)
+        monkeypatch.setattr(web, "create_client", forbidden)
+        monkeypatch.setattr(web, "load_structured_profile", forbidden)
+
+        calls = {"finder": [], "wi_load": [], "user_state": 0}
+        real_load = web.wi.load
+
+        def recording_load(path):
+            calls["wi_load"].append(path)
+            return real_load(path)
+        monkeypatch.setattr(web.wi, "load", recording_load)
+
+        class _UserState:
+            def is_manually_watched(self, meta):
+                return False
+
+        def fake_user_state():
+            calls["user_state"] += 1
+            return _UserState()
+        monkeypatch.setattr(web, "_load_user_state", fake_user_state)
+
+        def fake_finder(tmdb, watch_index, user_state, criteria, availability_cache_dir, **kwargs):
+            calls["finder"].append({
+                "tmdb": tmdb, "watch_index": watch_index, "user_state": user_state,
+                "criteria": criteria, "availability_cache_dir": availability_cache_dir, **kwargs,
+            })
+            return self._results(criteria, rows=[self._row(1), self._row(2)], next_cursor="1.12")
+        monkeypatch.setattr(web, "find_unwatched_titles", fake_finder)
+        return calls
+
+    def test_bare_find_uses_movie_last_six_months(self, client, find_env):
+        from recommender.catalog_finder import FindCriteria
+        resp = client.get("/find")
+        assert resp.status_code == 200
+        assert len(find_env["finder"]) == 1
+        assert find_env["finder"][0]["criteria"] == FindCriteria(content_type="movie", period="6m")
+
+    def test_valid_query_is_passed_through(self, client, find_env):
+        from recommender.catalog_finder import FindCriteria
+        client.get("/find?type=tv&period=1y&genre=crime&keyword=heist&rating=7.5")
+        crit = find_env["finder"][0]["criteria"]
+        assert crit == FindCriteria(content_type="tv", period="1y", genre="crime",
+                                    keyword="heist", min_rating=7.5)
+
+    def test_every_period_and_rating_key_is_accepted(self, client, find_env):
+        from recommender.catalog_finder import PERIOD_OPTIONS, RATING_OPTIONS
+        for key, _label in PERIOD_OPTIONS:
+            client.get(f"/find?period={key}")
+            assert find_env["finder"][-1]["criteria"].period == key
+        for key, _label, value in RATING_OPTIONS:
+            client.get(f"/find?rating={key}")
+            assert find_env["finder"][-1]["criteria"].min_rating == value
+
+    def test_unknown_values_revert_to_defaults(self, client, find_env):
+        from recommender.catalog_finder import FindCriteria
+        client.get("/find?type=anime&period=99y&genre=<script>&rating=9.9&keyword=%20%20")
+        assert find_env["finder"][0]["criteria"] == FindCriteria()
+
+    def test_genre_must_be_valid_for_the_selected_type(self, client, find_env):
+        client.get("/find?type=movie&genre=kids")        # kids is TV-only
+        assert find_env["finder"][0]["criteria"].genre is None
+        client.get("/find?type=tv&genre=kids")
+        assert find_env["finder"][1]["criteria"].genre == "kids"
+        client.get("/find?type=movie&genre=Crime")
+        assert find_env["finder"][2]["criteria"].genre == "crime"
+
+    def test_keyword_is_trimmed_and_capped_at_80_characters(self, client, find_env):
+        long = "k" * 120
+        client.get(f"/find?keyword=%20{long}%20")
+        assert find_env["finder"][0]["criteria"].keyword == "k" * 80
+
+    def test_uses_watch_index_and_user_state_directly(self, client, find_env):
+        from recommender.tmdb_client import TmdbClient
+        client.get("/find")
+        assert find_env["wi_load"] == [web.config.WATCH_INDEX_PATH]
+        assert find_env["user_state"] == 1
+        call = find_env["finder"][0]
+        assert call["watch_index"].is_watched(type("M", (), {"tmdb_id": 500, "content_type": "movie", "title": "Seen Film"})())
+        assert isinstance(call["tmdb"], TmdbClient)
+        assert call["tmdb"].api_key == "test-key"
+        assert call["availability_cache_dir"] == web.config.AVAILABILITY_CACHE_DIR
+
+    def test_missing_watch_index_says_run_setup_and_makes_no_tmdb_request(self, client, find_env, monkeypatch, tmp_path):
+        monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(tmp_path / "missing.json"))
+        with patch("recommender.tmdb_client.requests.get", side_effect=AssertionError("no TMDB")):
+            resp = client.get("/find")
+        body = resp.get_data(as_text=True)
+        assert resp.status_code == 200
+        assert "Run ./recommend setup" in body
+        assert find_env["finder"] == []
+
+    def test_corrupt_watch_index_says_run_setup(self, client, find_env, monkeypatch, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not json")
+        monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(bad))
+        resp = client.get("/find")
+        assert "Run ./recommend setup" in resp.get_data(as_text=True)
+        assert find_env["finder"] == []
+
+    def test_missing_api_key_is_a_distinct_message(self, client, find_env, monkeypatch):
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "")
+        body = client.get("/find").get_data(as_text=True)
+        assert "TMDB_API_KEY" in body
+        assert "Run ./recommend setup" not in body
+        assert find_env["finder"] == []
+
+    def test_unknown_keyword_is_a_distinct_message(self, client, find_env, monkeypatch):
+        def finder(tmdb, watch_index, user_state, criteria, availability_cache_dir, **kwargs):
+            return self._results(criteria, keyword_missing=True)
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        body = client.get("/find?keyword=zzzz").get_data(as_text=True)
+        assert "zzzz" in body
+        assert "No exact TMDB keyword" in body
+        assert "No unwatched" not in body
+
+    def test_tmdb_failure_is_a_distinct_message(self, client, find_env, monkeypatch):
+        import requests
+
+        def finder(*_a, **_k):
+            raise requests.ConnectionError("dns down")
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        resp = client.get("/find")
+        body = resp.get_data(as_text=True)
+        assert resp.status_code == 200
+        assert "TMDB request failed" in body
+        assert "dns down" in body
+        assert "Run ./recommend setup" not in body
+
+    def test_tmdb_rate_limit_on_discover_is_a_distinct_message(self, client, find_env, monkeypatch):
+        from recommender.tmdb_client import TmdbRateLimitError
+
+        def finder(*_a, **_k):
+            raise TmdbRateLimitError(12.0)
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        body = client.get("/find").get_data(as_text=True)
+        assert "TMDB rate limit" in body
+        assert "TMDB request failed" not in body
+
+    def test_empty_results_is_a_distinct_message(self, client, find_env, monkeypatch):
+        def finder(tmdb, watch_index, user_state, criteria, availability_cache_dir, **kwargs):
+            return self._results(criteria, rows=[], catalog_exhausted=True)
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        body = client.get("/find").get_data(as_text=True)
+        assert "No unwatched" in body
+        assert "No exact TMDB keyword" not in body
+
+    def test_availability_rate_limit_is_a_visible_warning_with_results(self, client, find_env, monkeypatch):
+        def finder(tmdb, watch_index, user_state, criteria, availability_cache_dir, **kwargs):
+            return self._results(criteria, rows=[self._row(1)], availability_rate_limited=True)
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        body = client.get("/find").get_data(as_text=True)
+        assert "Title 1" in body
+        assert "rate limit" in body.lower()
+        assert "availability" in body.lower()
+
+    def test_no_llm_or_context_construction(self, client, find_env):
+        # find_env installs raising stubs for _get_context/create_client/load_structured_profile.
+        resp = client.get("/find?type=tv&period=30d")
+        assert resp.status_code == 200
+
+
+class TestFindRendering(TestFind):
+    """The narrow page: one GET form, at most 10 cards, availability labels, nothing else."""
+
+    def test_form_has_the_complete_filter_set_and_nothing_more(self, client, find_env):
+        from recommender.catalog_finder import PERIOD_OPTIONS, RATING_OPTIONS
+        from recommender.tmdb_client import MOVIE_GENRE_IDS
+        body = client.get("/find").get_data(as_text=True)
+
+        assert 'method="get"' in body and 'action="/find"' in body
+        assert 'name="type" value="movie"' in body and 'name="type" value="tv"' in body
+        assert 'name="period"' in body and 'name="genre"' in body
+        assert 'name="keyword"' in body and 'maxlength="80"' in body
+        assert 'name="rating"' in body
+        assert "Show results" in body
+        for key, label in PERIOD_OPTIONS:
+            assert f'value="{key}"' in body and label in body
+        for key, label, _v in RATING_OPTIONS:
+            assert f'value="{key}"' in body and f">{label}<" in body
+        for g in MOVIE_GENRE_IDS:
+            assert f'value="{g}"' in body
+
+        # No natural language, provider, country, language, actions, or paging.
+        assert 'name="q"' not in body
+        assert 'name="provider"' not in body
+        assert 'name="country"' not in body
+        assert 'name="language"' not in body
+        assert "/watchlist/save" not in body
+        assert "/archive/add" not in body
+        assert "Next" not in body
+        assert "Previous" not in body
+        # No auto-submit layer on the form: filters run only on Show results.
+        form = body[body.index('<form id="find-form"'):body.index("</form>")]
+        assert "hx-" not in form and "onchange" not in form and "<script" not in form
+        assert "Next" not in body and "Previous" not in body
+
+    def test_form_reflects_the_selected_criteria(self, client, find_env):
+        body = client.get("/find?type=tv&period=2y&genre=crime&keyword=heist&rating=8").get_data(as_text=True)
+        assert 'value="tv" checked' in body
+        assert 'value="2y" selected' in body
+        assert 'value="crime" selected' in body
+        assert 'value="heist"' in body
+        assert 'value="8" selected' in body
+        # TV genre list, not the movie one.
+        assert 'value="kids"' in body
+
+    def test_cards_show_poster_title_year_rating_votes_overview_and_labels(self, client, find_env, monkeypatch):
+        from recommender.tmdb_client import CatalogAvailability
+        rows = [
+            self._row(1, availability=CatalogAvailability(stream=("Netflix", "Max"), rent=("Apple TV",)),
+                      in_theaters=True, title="Stream And Rent", year=2026, vote_average=8.4, vote_count=1234),
+            self._row(2, availability=CatalogAvailability(free=("Tubi",), with_ads=("Peacock",), buy=("Amazon Video",)),
+                      title="Free Ads Buy"),
+            self._row(3, availability=CatalogAvailability(unknown=True), title="Nobody Knows", poster_path=None),
+            self._row(4, availability=CatalogAvailability(), title="Known Empty"),
+        ]
+
+        def finder(tmdb, watch_index, user_state, criteria, availability_cache_dir, **kwargs):
+            return self._results(criteria, rows=rows)
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        body = client.get("/find").get_data(as_text=True)
+
+        assert "https://image.tmdb.org/t/p/w342/p1.jpg" in body
+        assert "Stream And Rent" in body and 'class="find-year">2026<' in body
+        assert 'class="find-score-n">8.4<' in body and "1,234 votes" in body
+        assert "Overview 1" in body
+
+        def chip(kind):
+            i = body.index(f'class="find-chip is-{kind}"')
+            return body[i:body.index("</li>", i)]
+        assert "Stream" in chip("stream") and "Netflix · Max" in chip("stream")
+        assert "Rent" in chip("rent") and "Apple TV" in chip("rent")
+        assert "In theaters" in chip("cinema")
+        assert "Free" in chip("free") and "Tubi" in chip("free")
+        assert "With ads" in chip("ads") and "Peacock" in chip("ads")
+        assert "Buy" in chip("buy") and "Amazon Video" in chip("buy")
+        assert body.count('class="find-chip is-unknown"') == 2, "no-data and empty-bucket rows both show Unknown"
+        # Running rank numbers start at 1 on a first page.
+        assert 'class="find-rank"><span>1</span>' in body
+        assert "Availability data provided by JustWatch" in body
+        assert body.count('class="find-card') == 4
+
+    def test_in_theaters_only_appears_when_flagged(self, client, find_env):
+        # find_env rows default to in_theaters=False
+        body = client.get("/find").get_data(as_text=True)
+        assert "In theaters" not in body
+
+    # ── Paging: the list keeps going batch by batch ──
+
+    def test_cursor_is_passed_to_the_finder(self, client, find_env):
+        client.get("/find?period=1y&cursor=3.7")
+        assert find_env["finder"][0]["cursor"] == "3.7"
+        client.get("/find")
+        assert find_env["finder"][1]["cursor"] is None
+
+    def test_show_more_link_carries_criteria_cursor_and_running_count(self, client, find_env):
+        body = client.get("/find?type=tv&period=2y&genre=crime&keyword=heist&rating=8").get_data(as_text=True)
+        assert "Show more" in body
+        more = body[body.index('class="find-more"'):]
+        href = more[more.index('href="') + 6:]
+        href = href[:href.index('"')].replace("&amp;", "&")
+        assert href.startswith("/find?")
+        for part in ("type=tv", "period=2y", "genre=crime", "keyword=heist", "rating=8", "cursor=1.12", "start=2"):
+            assert part in href, part
+        # Progressive enhancement: HTMX appends, the bare link still works.
+        assert 'hx-get="' in more and 'hx-swap="outerHTML"' in more
+
+    def test_no_show_more_when_tmdb_is_exhausted(self, client, find_env, monkeypatch):
+        def finder(tmdb, watch_index, user_state, criteria, availability_cache_dir, **kwargs):
+            return self._results(criteria, rows=[self._row(1)], next_cursor=None, catalog_exhausted=True)
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        body = client.get("/find").get_data(as_text=True)
+        assert "Show more" not in body
+        assert "end of the catalogue" in body.lower()
+
+    def test_htmx_continuation_returns_only_the_next_batch(self, client, find_env):
+        resp = client.get("/find?cursor=1.12&start=10", headers={"HX-Request": "true"})
+        body = resp.get_data(as_text=True)
+        assert resp.status_code == 200
+        assert '<form id="find-form"' not in body
+        assert "<aside" not in body
+        assert body.count('class="find-card') == 2
+        assert "Show more" in body
+        # Running numbers continue from where the page left off.
+        assert ">11<" in body and ">12<" in body
+
+    def test_plain_continuation_renders_the_full_page(self, client, find_env):
+        body = client.get("/find?cursor=1.12&start=10").get_data(as_text=True)
+        assert '<form id="find-form"' in body
+        assert body.count('class="find-card') == 2
+        assert ">11<" in body
+
+    def test_bad_start_falls_back_to_zero(self, client, find_env):
+        body = client.get("/find?start=abc").get_data(as_text=True)
+        assert ">1<" in body
+        body = client.get("/find?start=-4").get_data(as_text=True)
+        assert ">1<" in body
+
+    def test_htmx_first_load_still_renders_the_full_page(self, client, find_env):
+        body = client.get("/find", headers={"HX-Request": "true"}).get_data(as_text=True)
+        assert '<form id="find-form"' in body
+
+    def test_no_attribution_or_cards_when_there_are_no_results(self, client, find_env, monkeypatch):
+        def finder(tmdb, watch_index, user_state, criteria, availability_cache_dir, **kwargs):
+            return self._results(criteria, rows=[])
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        body = client.get("/find").get_data(as_text=True)
+        assert "JustWatch" not in body
+        assert 'class="find-card' not in body
+
+    def test_find_is_in_desktop_discover_nav_and_mobile_more_sheet(self, client, find_env):
+        body = client.get("/find").get_data(as_text=True)
+        assert body.count('href="/find"') >= 2
+        sidebar = body[body.index('<aside class="sidebar">'):body.index("</aside>")]
+        discover = sidebar[sidebar.index("Discover"):sidebar.index("Library")]
+        assert 'href="/find" title="Find" class="nav-link active"' in discover
+        sheet = body[body.index('<div id="nav-more"'):body.index('class="nav-sheet-scrim"')]
+        assert 'href="/find" class="nav-link active"' in sheet
+
+    def test_find_is_not_active_on_other_pages(self, client):
+        body = client.get("/help").get_data(as_text=True)
+        assert 'href="/find" title="Find" class="nav-link "' in body
