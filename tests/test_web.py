@@ -2807,6 +2807,46 @@ class TestFindBrowseMode:
         assert "Apple TV+" in body
         assert kwargs["filters"]["providers"] == [8]
 
+    def test_every_browse_control_carries_the_whole_facet_set(
+        self, client, tmp_path, monkeypatch,
+    ):
+        """Text mode has one parameter to preserve. Browse has ten, and a
+        toggle that drops one silently changes the question being asked."""
+        self._wire(monkeypatch, tmp_path, watched={("movie", 0)})
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.discover_page.return_value = self._page(page=2, total_pages=4)
+            MockClient.return_value.get_provider_options.return_value = [
+                {"id": 8, "name": "Netflix"},
+            ]
+            body = client.get(
+                "/find?mode=browse&type=tv&genre=crime&year_from=2015&year_to=2020"
+                "&language=en&country=GB&min_rating=7&min_votes=250"
+                "&sort=vote_average.desc&provider=8&page=2&where=1"
+            ).get_data(as_text=True)
+
+        facets = [
+            "type=tv", "genre=crime", "year_from=2015", "year_to=2020",
+            "language=en", "country=GB", "min_rating=7", "min_votes=250",
+            "sort=vote_average.desc", "provider=8",
+        ]
+        # The view controls, identified by their visible text. The mode switch
+        # is excluded on purpose: switching modes is a reset, not a view change.
+        controls = {
+            "hide chip": "hidden</a>",
+            "availability toggle": "where to watch</a>",
+            "previous page": "Previous</a>",
+            "next page": "Next &rarr;</a>",
+        }
+        found = 0
+        for name, marker in controls.items():
+            for line in body.splitlines():
+                if marker not in line or 'href="/find?' not in line:
+                    continue
+                found += 1
+                missing = [f for f in facets if f not in line]
+                assert not missing, f"{name} drops {missing}"
+        assert found >= 4, f"expected all four controls rendered, saw {found}"
+
     def test_browse_rejects_a_sort_it_does_not_offer(self, client, tmp_path, monkeypatch):
         """The sort reaches TMDB, so it is not taken on trust from the query string."""
         self._wire(monkeypatch, tmp_path)
