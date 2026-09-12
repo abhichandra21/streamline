@@ -200,6 +200,8 @@ EVENT_DB_PATH = str(_ROOT / _cfg.get("event_db_path", "data/streamline.db"))
 CACHE_DIR = str(_ROOT / "recommender/cache/tmdb")
 ENRICHMENT_CACHE_DIR = str(_ROOT / "recommender/cache/enrichments")
 PROVIDERS_CACHE_DIR = str(_ROOT / "recommender/cache/providers")
+# Find page: full watch-availability buckets and US now-playing ids, on short TTLs.
+AVAILABILITY_CACHE_DIR = str(_ROOT / "recommender/cache/availability")
 RELEASE_CACHE_DIR = str(_ROOT / "recommender/cache/releases")
 TASTE_PROFILE_PATH = str(_ROOT / "recommender/cache/taste_profile.txt")
 STRUCTURED_TASTE_PROFILE_PATH = str(_ROOT / "recommender/cache/taste_profile_structured.json")

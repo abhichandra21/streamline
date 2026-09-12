@@ -4,6 +4,7 @@ import re
 import shutil
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -12,6 +13,11 @@ import requests
 log = logging.getLogger("recommender.tmdb")
 
 MAX_DISCOVER_PAGES = 20
+
+# Find page availability is display-only but must be fresh: catalogue rows are
+# unhydrated, so these are the only per-title calls and they get short TTLs.
+AVAILABILITY_TTL_SECONDS = 24 * 3600
+NOW_PLAYING_TTL_SECONDS = 6 * 3600
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 
@@ -45,6 +51,42 @@ class TmdbMetadata:
     vote_count: int = 0
     runtime_minutes: int | None = None
     release_year: int | None = None
+
+
+@dataclass(frozen=True)
+class CatalogTitle:
+    """One Discover row for the Find page. Built from the list response only;
+    no per-title detail fetch."""
+    tmdb_id: int
+    content_type: str       # "tv" or "movie"
+    title: str
+    year: int | None
+    poster_path: str | None
+    overview: str
+    vote_average: float
+    vote_count: int
+
+
+@dataclass(frozen=True)
+class CatalogPage:
+    rows: tuple[CatalogTitle, ...]
+    page: int
+    total_pages: int
+
+
+@dataclass(frozen=True)
+class CatalogAvailability:
+    """Watch availability buckets for one region, straight from TMDB/JustWatch.
+
+    unknown=True means TMDB returned no data for the region. That is never the
+    same as "not available anywhere"; the page must say Unknown, not nothing.
+    """
+    stream: tuple[str, ...] = ()
+    free: tuple[str, ...] = ()
+    with_ads: tuple[str, ...] = ()
+    rent: tuple[str, ...] = ()
+    buy: tuple[str, ...] = ()
+    unknown: bool = False
 
 
 @dataclass
@@ -785,6 +827,86 @@ class TmdbClient:
         log.debug("Discover returned %d candidates after %d pages", len(candidates), page - 1)
         return list(candidates.values())
 
+    def search_keyword_exact(self, query: str) -> tuple[int, str] | None:
+        """Return (keyword_id, name) for a case-insensitive exact TMDB keyword name.
+
+        Partial matches are deliberately rejected so the Find page never silently
+        broadens a keyword the user typed.
+        """
+        wanted = (query or "").strip().lower()
+        if not wanted:
+            return None
+        data = self._get("search/keyword", params={"query": wanted, "page": 1})
+        for item in data.get("results", []):
+            name = item.get("name") or ""
+            if name.lower() == wanted:
+                return int(item["id"]), name
+        return None
+
+    def discover_catalog_page(
+        self,
+        content_type: str,
+        release_start: date,
+        release_end: date,
+        genre: str | None = None,
+        keyword_id: int | None = None,
+        min_rating: float | None = None,
+        page: int = 1,
+        region: str = "US",
+    ) -> CatalogPage:
+        """One TMDB Discover page in TMDB order, sorted by rating with a 100-vote floor.
+
+        Unlike search_by_filters(), this performs no detail hydration and writes
+        nothing to the metadata cache. TV dates use first_air_date; TMDB has no
+        regional first-premiere filter, so region is only sent for movies.
+        """
+        is_tv = content_type == "tv"
+        prefix = "tv" if is_tv else "movie"
+        genre_map = TV_GENRE_IDS if is_tv else MOVIE_GENRE_IDS
+        date_field = "first_air_date" if is_tv else "primary_release_date"
+
+        params: dict = {
+            "sort_by": "vote_average.desc",
+            "vote_count.gte": 100,
+            f"{date_field}.gte": release_start.isoformat(),
+            f"{date_field}.lte": release_end.isoformat(),
+            "page": page,
+        }
+        if not is_tv:
+            params["region"] = region
+        if genre and genre.lower() in genre_map:
+            params["with_genres"] = str(genre_map[genre.lower()])
+        if keyword_id is not None:
+            params["with_keywords"] = str(keyword_id)
+        if min_rating is not None:
+            params["vote_average.gte"] = min_rating
+
+        data = self._get(f"discover/{prefix}", params=params)
+        rows = tuple(self._parse_catalog_row(item, content_type) for item in data.get("results", []))
+        return CatalogPage(
+            rows=rows,
+            page=int(data.get("page") or page),
+            total_pages=int(data.get("total_pages") or 1),
+        )
+
+    @staticmethod
+    def _parse_catalog_row(item: dict, content_type: str) -> CatalogTitle:
+        is_tv = content_type == "tv"
+        raw_date = item.get("first_air_date" if is_tv else "release_date") or ""
+        year: int | None = None
+        if len(raw_date) >= 4 and raw_date[:4].isdigit():
+            year = int(raw_date[:4])
+        return CatalogTitle(
+            tmdb_id=int(item["id"]),
+            content_type=content_type,
+            title=item.get("name" if is_tv else "title") or item.get("original_name") or item.get("original_title") or "",
+            year=year,
+            poster_path=item.get("poster_path") or None,
+            overview=item.get("overview") or "",
+            vote_average=float(item.get("vote_average") or 0.0),
+            vote_count=int(item.get("vote_count") or 0),
+        )
+
     def get_candidates(self, content_type: str, size: int = 500) -> list[TmdbMetadata]:
         """
         Fetch top-rated and popular titles as the recommendation candidate pool.
@@ -851,6 +973,107 @@ class TmdbClient:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps({"providers": providers}))
         return providers
+
+    @staticmethod
+    def _read_fresh_cache(path: Path, ttl_seconds: int) -> dict | None:
+        """Return the cached JSON if the file is younger than ttl_seconds."""
+        try:
+            if time.time() - path.stat().st_mtime > ttl_seconds:
+                return None
+            return json.loads(path.read_text())
+        except FileNotFoundError:
+            return None
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("Corrupt cache file %s, treating as a cache miss: %s", path, exc)
+            return None
+
+    def get_catalog_availability(
+        self,
+        tmdb_id: int,
+        content_type: str,
+        region: str,
+        cache_dir: str,
+    ) -> CatalogAvailability:
+        """Return every availability bucket for a title in the region (24h cache).
+
+        Rate limits propagate so the caller can stop its batch. Any other failure
+        returns Unknown and is not cached, so the next request retries TMDB.
+        """
+        cache_path = Path(cache_dir) / content_type / region / f"{tmdb_id}.json"
+        cached = self._read_fresh_cache(cache_path, AVAILABILITY_TTL_SECONDS)
+        if cached is not None:
+            return self._availability_from_cache(cached)
+
+        prefix = "tv" if content_type == "tv" else "movie"
+        try:
+            data = self._get(f"{prefix}/{tmdb_id}/watch/providers")
+        except TmdbRateLimitError:
+            raise
+        except Exception as exc:
+            log.debug("Availability fetch failed for %s/%d: %s", content_type, tmdb_id, exc)
+            return CatalogAvailability(unknown=True)
+
+        region_data = (data.get("results") or {}).get(region)
+        if region_data is None:
+            record = {"unknown": True}
+        else:
+            def names(bucket: str) -> list[str]:
+                return [p["provider_name"] for p in region_data.get(bucket) or [] if p.get("provider_name")]
+            record = {
+                "unknown": False,
+                "stream": names("flatrate"),
+                "free": names("free"),
+                "with_ads": names("ads"),
+                "rent": names("rent"),
+                "buy": names("buy"),
+            }
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(record))
+        return self._availability_from_cache(record)
+
+    @staticmethod
+    def _availability_from_cache(record: dict) -> CatalogAvailability:
+        if record.get("unknown"):
+            return CatalogAvailability(unknown=True)
+        return CatalogAvailability(
+            stream=tuple(record.get("stream") or ()),
+            free=tuple(record.get("free") or ()),
+            with_ads=tuple(record.get("with_ads") or ()),
+            rent=tuple(record.get("rent") or ()),
+            buy=tuple(record.get("buy") or ()),
+            unknown=False,
+        )
+
+    def get_now_playing_ids(self, region: str, cache_dir: str) -> set[int] | None:
+        """Return every movie id on TMDB's now-playing list for the region (6h cache).
+
+        Returns None when the list could not be read completely: a title missing
+        from a partial list must not be labelled as out of theaters. Rate limits
+        propagate.
+        """
+        cache_path = Path(cache_dir) / "now_playing" / f"{region}.json"
+        cached = self._read_fresh_cache(cache_path, NOW_PLAYING_TTL_SECONDS)
+        if cached is not None:
+            return {int(i) for i in cached.get("ids", [])}
+
+        ids: set[int] = set()
+        page = 1
+        total_pages = 1
+        while page <= total_pages:
+            try:
+                data = self._get("movie/now_playing", params={"region": region, "page": page})
+            except TmdbRateLimitError:
+                raise
+            except Exception as exc:
+                log.debug("Now-playing fetch failed for %s page %d: %s", region, page, exc)
+                return None
+            ids.update(int(item["id"]) for item in data.get("results", []) if item.get("id") is not None)
+            total_pages = int(data.get("total_pages") or 1)
+            page += 1
+
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps({"ids": sorted(ids)}))
+        return ids
 
     def clear_cache(self) -> None:
         """Delete all cached TMDB responses."""

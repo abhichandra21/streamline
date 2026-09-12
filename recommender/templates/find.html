@@ -1,0 +1,470 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Find{% endblock %}
+{% block content %}
+{%- set c = criteria %}
+
+<style>
+  /* ── Find: an editorial index of what you have not seen ────────────────
+     One vertical ledger. Serif rank numerals in the gutter, hairline rules,
+     the TMDB score set large like a magazine pull-figure. Everything reads
+     top to bottom; nothing competes with the list. */
+
+  .find-hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 1rem 2rem;
+    margin-bottom: 1.75rem;
+  }
+  .find-kicker {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--accent);
+  }
+  .find-h1 {
+    font-size: clamp(2.6rem, 6vw, 4.2rem);
+    line-height: 0.95;
+    letter-spacing: -0.02em;
+    margin: 0.25rem 0 0;
+  }
+  .find-h1 em { font-style: italic; color: var(--accent2); }
+  .find-lede {
+    color: var(--muted);
+    font-size: 0.9rem;
+    max-width: 44ch;
+    line-height: 1.55;
+    margin: 0.9rem 0 0;
+  }
+  .find-window {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted);
+    text-align: right;
+    line-height: 1.9;
+    white-space: nowrap;
+  }
+  .find-window b { color: var(--text); font-weight: 500; }
+
+  /* Control strip. One dark panel, mono captions, fields drawn as underlines. */
+  .find-form {
+    position: relative;
+    display: grid;
+    /* Two ruled rows of three: type / period / genre, then keyword / rating / go. */
+    grid-template-columns: 11.5rem minmax(0, 1fr) minmax(0, 1fr);
+    gap: 1.25rem 1.5rem;
+    align-items: end;
+    padding: 1.25rem 1.5rem 1.35rem;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.025), transparent 55%),
+      var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 2.75rem;
+  }
+  .find-form::before {
+    /* Coral hairline along the top edge, like a ruled ledger header. */
+    content: '';
+    position: absolute; inset: -1px -1px auto -1px;
+    height: 2px; border-radius: 10px 10px 0 0;
+    background: linear-gradient(90deg, var(--accent), var(--accent2) 45%, transparent 85%);
+    opacity: 0.85;
+  }
+  .find-field { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
+  .find-cap {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.56rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted);
+  }
+  .find-form select, .find-form input[type="text"] {
+    appearance: none; -webkit-appearance: none;
+    width: 100%;
+    background: transparent;
+    border: 0; border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.95rem;
+    padding: 0.35rem 1.4rem 0.45rem 0;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .find-form select {
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 9px) 55%, calc(100% - 4px) 55%;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    cursor: pointer;
+  }
+  .find-form select option { background: var(--surface2); color: var(--text); }
+  .find-form input[type="text"]::placeholder { color: var(--muted); opacity: 0.7; font-style: italic; }
+  .find-form select:focus, .find-form input[type="text"]:focus { border-bottom-color: var(--accent); }
+
+  /* Movies / TV: a two-cell segmented switch with a sliding pill (CSS only). */
+  .find-seg {
+    position: relative;
+    display: grid; grid-template-columns: 1fr 1fr;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px;
+    isolation: isolate;
+  }
+  .find-seg::after {
+    content: '';
+    position: absolute; top: 3px; bottom: 3px; left: 3px;
+    width: calc(50% - 3px);
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 4px 14px rgba(232,93,74,0.35);
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: -1;
+  }
+  .find-seg:has(input[value="tv"]:checked)::after { transform: translateX(100%); }
+  .find-seg label {
+    position: relative;
+    padding: 0.45rem 1.05rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted);
+    text-align: center;
+    cursor: pointer;
+    transition: color 0.2s;
+    user-select: none;
+  }
+  .find-seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .find-seg label:has(input:checked) { color: #fff; }
+  .find-seg:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  .find-go {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.66rem; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text);
+    background: transparent;
+    border: 1px solid var(--text);
+    border-radius: 999px;
+    padding: 0.7rem 1.35rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.2s, color 0.2s, transform 0.15s;
+  }
+  .find-form .find-go { justify-self: end; }
+  .find-go:hover { background: var(--text); color: var(--bg); transform: translateY(-1px); }
+  .find-go:active { transform: translateY(0); }
+
+  /* Notices */
+  .find-note {
+    display: flex; gap: 0.9rem; align-items: baseline;
+    padding: 1rem 1.25rem;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--muted);
+    border-radius: 6px;
+    background: var(--surface);
+    font-size: 0.9rem; color: var(--body);
+    margin-bottom: 1.5rem;
+  }
+  .find-note.is-error { border-left-color: var(--accent); color: #f0a094; }
+  .find-note.is-warn  { border-left-color: var(--accent2); }
+  .find-note .find-cap { flex-shrink: 0; transform: translateY(-1px); }
+  .find-note strong { color: var(--text); font-weight: 500; }
+
+  /* Ledger head above the list */
+  .find-ledger-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0.25rem;
+  }
+  .find-ledger-head .find-cap { color: var(--body); }
+
+  /* Cards */
+  .find-list { display: flex; flex-direction: column; }
+  .find-card {
+    display: grid;
+    grid-template-columns: 3.25rem 92px minmax(0, 1fr);
+    gap: 0 1.35rem;
+    padding: 1.5rem 0;
+    border-bottom: 1px solid var(--border);
+    animation: findRise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    animation-delay: calc(var(--i, 0) * 55ms);
+  }
+  @keyframes findRise {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: none; }
+  }
+  .find-rank {
+    font-family: 'DM Serif Display', serif;
+    font-size: 2rem;
+    line-height: 1;
+    color: var(--border);
+    padding-top: 0.15rem;
+    transition: color 0.25s;
+    font-variant-numeric: tabular-nums;
+  }
+  .find-card:hover .find-rank { color: var(--accent); }
+
+  .find-poster {
+    display: block;
+    width: 92px; height: 138px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: var(--surface2);
+    box-shadow: 0 10px 28px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.04) inset;
+    transition: transform 0.3s cubic-bezier(0.2, 0.7, 0.2, 1), box-shadow 0.3s;
+    transform-origin: 50% 100%;
+  }
+  .find-poster img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .find-card:hover .find-poster {
+    transform: translateY(-4px) rotate(-1.25deg);
+    box-shadow: 0 18px 36px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06) inset;
+  }
+  .find-poster-empty {
+    display: grid; place-items: center;
+    width: 100%; height: 100%;
+    font-family: 'DM Serif Display', serif;
+    font-size: 2.6rem; color: var(--border);
+  }
+
+  .find-body { min-width: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+  .find-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 1rem;
+    align-items: start;
+  }
+  .find-title {
+    font-size: 1.45rem;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+  .find-title a { color: var(--text); }
+  .find-title a:hover { color: var(--accent); text-decoration: none; }
+  .find-year {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem; color: var(--muted);
+    margin-left: 0.4rem;
+    vertical-align: 0.25em;
+  }
+  .find-score { text-align: right; line-height: 1; }
+  .find-score-n {
+    display: block;
+    font-family: 'DM Serif Display', serif;
+    font-size: 1.9rem;
+    color: var(--accent2);
+    letter-spacing: -0.02em;
+  }
+  .find-score-v {
+    display: block;
+    margin-top: 0.3rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.58rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .find-overview {
+    font-size: 0.9rem;
+    line-height: 1.6;
+    color: var(--body);
+    margin: 0;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .find-card:hover .find-overview { -webkit-line-clamp: unset; }
+
+  /* Availability chips: a colored dot says the kind, the label says the shops. */
+  .find-avail { list-style: none; display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.15rem; }
+  .find-chip {
+    display: inline-flex; align-items: center; gap: 0.45rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text);
+    padding: 0.28rem 0.6rem 0.28rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(255,255,255,0.02);
+    max-width: 100%;
+  }
+  .find-chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--c, var(--muted)); box-shadow: 0 0 8px var(--c, transparent); flex-shrink: 0; }
+  .find-chip span {
+    color: var(--muted); text-transform: none; letter-spacing: 0;
+    font-family: 'DM Sans', sans-serif; font-size: 0.74rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 34ch;
+  }
+  .find-chip span::before { content: '— '; color: var(--border); }
+  .find-chip.is-stream { --c: var(--teal); }
+  .find-chip.is-free   { --c: var(--lavender); }
+  .find-chip.is-ads    { --c: #7c6fb8; }
+  .find-chip.is-rent   { --c: var(--accent2); }
+  .find-chip.is-buy    { --c: #c98330; }
+  .find-chip.is-cinema { --c: var(--accent); border-color: rgba(232,93,74,0.45); }
+  .find-chip.is-unknown { color: var(--muted); border-style: dashed; }
+  .find-chip.is-unknown i { box-shadow: none; }
+
+  /* Continue / end: a ruled line with a mono label set into it. */
+  .find-more, .find-end {
+    display: grid; grid-template-columns: 1fr auto 1fr;
+    align-items: center; gap: 1rem;
+    padding: 1.75rem 0 0.5rem;
+    color: var(--muted);
+    text-decoration: none;
+  }
+  .find-more-rule { height: 1px; background: var(--border); transition: background 0.25s; }
+  .find-more-label {
+    display: inline-flex; align-items: center; gap: 0.6rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.64rem; letter-spacing: 0.14em; text-transform: uppercase;
+    padding: 0.55rem 1.2rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    transition: border-color 0.25s, color 0.25s, background 0.25s;
+  }
+  .find-more:hover { text-decoration: none; color: var(--text); }
+  .find-more:hover .find-more-label { border-color: var(--accent); background: rgba(232,93,74,0.08); }
+  .find-more:hover .find-more-rule { background: var(--accent); }
+  .find-more-spin {
+    display: none;
+    width: 10px; height: 10px;
+    border: 1.5px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+  .find-more.htmx-request .find-more-spin { display: inline-block; }
+  .find-more.htmx-request { pointer-events: none; }
+  .find-end .find-more-label { border-style: dashed; }
+
+  .find-credit {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.56rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted);
+    text-align: right;
+    margin-top: 1.5rem;
+  }
+
+  @media (max-width: 860px) {
+    .find-form { grid-template-columns: 1fr 1fr; padding: 1.15rem 1.25rem 1.1rem; }
+    .find-form .find-go { grid-column: 1 / -1; justify-self: start; }
+  }
+  @media (max-width: 640px) {
+    .find-hero { grid-template-columns: 1fr; }
+    .find-window { text-align: left; }
+    .find-card { grid-template-columns: 2rem 72px minmax(0, 1fr); gap: 0 0.9rem; padding: 1.2rem 0; }
+    .find-rank { font-size: 1.4rem; }
+    .find-poster { width: 72px; height: 108px; }
+    .find-head { grid-template-columns: 1fr; gap: 0.35rem; }
+    .find-score { text-align: left; display: flex; align-items: baseline; gap: 0.6rem; }
+    .find-score-n { font-size: 1.4rem; }
+    .find-score-v { margin-top: 0; }
+    .find-title { font-size: 1.2rem; }
+    .find-overview { -webkit-line-clamp: 2; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .find-card { animation: none; }
+    .find-poster, .find-seg::after { transition: none; }
+  }
+</style>
+
+<section class="find-hero">
+  <div>
+    <div class="find-kicker">Catalogue · unwatched only</div>
+    <h1 class="find-h1">Find something<br>you <em>haven't</em> seen.</h1>
+    <p class="find-lede">
+      {{ 'TV series' if c.content_type == 'tv' else 'Movies' }} you have not watched, straight from TMDB and ordered by rating.
+      Titles need at least 100 votes. Keep scrolling; the list continues as far as TMDB does.
+    </p>
+  </div>
+  {%- if results is not none and not results.keyword_missing %}
+  <div class="find-window">
+    <b>{{ results.release_start.strftime('%d %b %Y') }}</b> to <b>{{ results.release_end.strftime('%d %b %Y') }}</b><br>
+    {%- if results.keyword_name %}keyword <b>{{ results.keyword_name }}</b><br>{% endif %}
+    {%- if c.genre %}genre <b>{{ c.genre }}</b><br>{% endif %}
+    {%- if c.min_rating %}rated <b>{{ c.min_rating }}+</b><br>{% endif %}
+  </div>
+  {%- endif %}
+</section>
+
+<form id="find-form" class="find-form" method="get" action="/find">
+  <div class="find-field">
+    <span class="find-cap">Type</span>
+    <div class="find-seg" role="radiogroup" aria-label="Content type">
+      <label><input type="radio" name="type" value="movie" {% if c.content_type == 'movie' %}checked{% endif %}>Movies</label>
+      <label><input type="radio" name="type" value="tv" {% if c.content_type == 'tv' %}checked{% endif %}>TV</label>
+    </div>
+  </div>
+
+  <label class="find-field">
+    <span class="find-cap">Released in the last</span>
+    <select name="period">
+      {%- for key, label in period_options %}
+      <option value="{{ key }}" {% if c.period == key %}selected{% endif %}>{{ label }}</option>
+      {%- endfor %}
+    </select>
+  </label>
+
+  <label class="find-field">
+    <span class="find-cap">Genre</span>
+    <select name="genre">
+      <option value="" {% if not c.genre %}selected{% endif %}>Any genre</option>
+      {%- for g in genres %}
+      <option value="{{ g }}" {% if c.genre == g %}selected{% endif %}>{{ g | capitalize }}</option>
+      {%- endfor %}
+    </select>
+  </label>
+
+  <label class="find-field">
+    <span class="find-cap">TMDB keyword · exact</span>
+    <input type="text" name="keyword" value="{{ c.keyword or '' }}" maxlength="80" placeholder="heist, time travel, ...">
+  </label>
+
+  <label class="find-field">
+    <span class="find-cap">Minimum rating</span>
+    <select name="rating">
+      {%- for key, label, value in rating_options %}
+      <option value="{{ key }}" {% if c.min_rating == value %}selected{% endif %}>{{ label }}</option>
+      {%- endfor %}
+    </select>
+  </label>
+
+  <button type="submit" class="find-go">Show results</button>
+</form>
+
+{%- if error %}
+<div class="find-note is-error"><span class="find-cap">Stopped</span><div>{{ error }}</div></div>
+{%- endif %}
+
+{%- if results is not none %}
+  {%- if results.keyword_missing %}
+  <div class="find-note">
+    <span class="find-cap">Keyword</span>
+    <div>No exact TMDB keyword named <strong>{{ c.keyword }}</strong>. TMDB keywords match by name exactly; try the wording TMDB uses on a title page.</div>
+  </div>
+  {%- elif not results.rows and start == 0 %}
+  <div class="find-note">
+    <span class="find-cap">Empty</span>
+    <div>No unwatched {{ 'TV series' if c.content_type == 'tv' else 'movies' }} matched. Widen the period or drop a filter, then press Show results.</div>
+  </div>
+  {%- else %}
+    {%- if results.availability_rate_limited %}
+    <div class="find-note is-warn">
+      <span class="find-cap">Availability</span>
+      <div>TMDB rate limit reached while checking availability. Every title is shown; some are labelled Unknown. Reload in a minute for fresh labels.</div>
+    </div>
+    {%- endif %}
+
+    <div class="find-ledger-head">
+      <span class="find-cap">{{ 'Series' if c.content_type == 'tv' else 'Films' }} · by TMDB rating</span>
+      <span class="find-cap">Where to watch · US</span>
+    </div>
+
+    <div class="find-list">
+      {%- include "_find_rows.html" %}
+    </div>
+
+    <p class="find-credit">Availability data provided by JustWatch</p>
+  {%- endif %}
+{%- endif %}
+
+{% endblock %}
