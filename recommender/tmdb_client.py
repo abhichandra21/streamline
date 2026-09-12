@@ -13,6 +13,15 @@ log = logging.getLogger("recommender.tmdb")
 
 MAX_DISCOVER_PAGES = 20
 
+# Sorts offered to the browse UI. TMDB accepts more; these are the ones that
+# mean something when you are looking for something to watch.
+DISCOVER_SORTS = (
+    "popularity.desc",
+    "vote_average.desc",
+    "primary_release_date.desc",
+    "revenue.desc",
+)
+
 TMDB_BASE = "https://api.themoviedb.org/3"
 
 MOVIE_GENRE_IDS: dict[str, int] = {
@@ -818,14 +827,41 @@ class TmdbClient:
         log.debug("Discover returned %d candidates after %d pages", len(candidates), page - 1)
         return list(candidates.values())
 
-    # Sorts offered to the browse UI. TMDB accepts more; these are the ones
-    # that mean something when you are looking for something to watch.
-    DISCOVER_SORTS = (
-        "popularity.desc",
-        "vote_average.desc",
-        "primary_release_date.desc",
-        "revenue.desc",
-    )
+    def get_provider_options(
+        self, content_type: str, region: str, cache_dir: str, limit: int = 24,
+    ) -> list[dict]:
+        """Return selectable streaming providers for a region, most prominent first.
+
+        with_watch_providers takes numeric ids, while the rest of this app
+        speaks provider names. Rather than hardcode a map that will drift, the
+        list is fetched once and cached. TMDB's own display_priority decides
+        which providers are prominent enough to offer.
+        """
+        prefix = "tv" if content_type == "tv" else "movie"
+        cache_path = Path(cache_dir) / f"options-{prefix}-{region}.json"
+        if cache_path.exists():
+            try:
+                return json.loads(cache_path.read_text())[:limit]
+            except (OSError, json.JSONDecodeError):
+                log.debug("Unreadable provider options cache at %s; refetching", cache_path)
+
+        try:
+            data = self._get(f"watch/providers/{prefix}", params={"watch_region": region})
+        except Exception as exc:
+            log.debug("Provider options fetch failed for %s/%s: %s", prefix, region, exc)
+            return []
+
+        options = [
+            {"id": entry["provider_id"], "name": entry["provider_name"]}
+            for entry in sorted(
+                data.get("results", []),
+                key=lambda e: (e.get("display_priority", 9999), e.get("provider_name", "")),
+            )
+            if entry.get("provider_id") and entry.get("provider_name")
+        ]
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(options))
+        return options[:limit]
 
     def discover_page(
         self,

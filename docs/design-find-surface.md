@@ -276,7 +276,16 @@ Pre-existing defect in shared code. It should be fixed in its own change with it
 
 ## 10. Open questions
 
-Neither blocks slices 1 to 4.
+None remain open.
+
+Both of revision 2's questions concerned the platform facet, and both dissolved the same way.
+`with_watch_providers` needs numeric ids while the rest of the app speaks provider names, so `get_provider_options()` fetches the region's provider list once and caches it, ordered by TMDB's own `display_priority`.
+That makes the facet a checklist of real providers, so it no longer depends on `streaming_platforms` being filled in, and the question of declaring subscriptions is moot for this page.
+A hardcoded name-to-id map was rejected: it would be a second authority for data TMDB already publishes, and it would drift.
+
+`streaming_platforms` still governs the recommend pipeline's platform filter, which this change does not touch.
+
+The original questions, for the record:
 
 1. **Do you want to declare your subscriptions?**
    `streaming_platforms` is `[]`, so a "my platforms" filter has nothing to filter against and would ship inert. One line of config unlocks it.
@@ -301,6 +310,12 @@ Each slice is independently reviewable and leaves the app working. Proofs are th
 7. **The platform facet.** Only after questions 1 and 2 are answered.
 
 Slices 1 to 3 are the useful minimum. Stop there and the feature is worth having.
+
+**All seven are built.** Three decisions the slices did not anticipate:
+
+- No Follow action on `/find` rows; it would have 404'd. Recorded in section 5.
+- Availability is capped at three providers per way to watch, with a count for the rest. A popular title can be on twenty services, and naming them all buries the fact you wanted.
+- `DISCOVER_SORTS` moved to module level in `tmdb_client`, and the sort value is validated against it before reaching TMDB. As a class attribute it was unreadable in tests that patch `TmdbClient`, and it is data about the endpoint rather than client state. The value arrives in the query string and is forwarded to the API, so it is not taken on trust.
 
 ## 12. Verification
 

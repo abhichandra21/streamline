@@ -1,5 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Streamline — Find{% endblock %}
+
+{# A popular title can be on twenty services. Naming them all is a wall of
+   text that buries the one fact you wanted, so each way to watch shows a few
+   and counts the rest. #}
+{% macro ways(label, names, cap=3) -%}
+{{ label }}: {{ names[:cap] | join(", ") }}{% if names | length > cap %} +{{ names | length - cap }} more{% endif %}
+{%- endmacro %}
+
 {% block content %}
 
 <h1 style="font-size:clamp(1.4rem, 3vw, 2rem); margin-bottom:0.35rem;">Find</h1>
@@ -7,12 +15,84 @@
   Look anything up. Your library is marked as you go. No taste profile, no tokens spent.
 </p>
 
+{# Two modes, because TMDB takes free text or facets but never both. #}
+<div class="mono" style="display:flex; gap:1rem; margin-bottom:1.25rem; font-size:0.6rem; letter-spacing:0.08em; text-transform:uppercase;">
+  <a href="/find" style="color:{{ 'var(--text)' if mode != 'browse' else 'var(--muted)' }};">Look up a title</a>
+  <a href="/find?mode=browse&amp;type=movie" style="color:{{ 'var(--text)' if mode == 'browse' else 'var(--muted)' }};">Browse by filter</a>
+</div>
+
+{% if mode == 'browse' %}
+<form action="/find" method="get" style="margin-bottom:2rem;">
+  <input type="hidden" name="mode" value="browse">
+  {% if show_watched %}<input type="hidden" name="watched" value="show">{% endif %}
+  {% if show_availability %}<input type="hidden" name="where" value="1">{% endif %}
+
+  <div style="display:flex; gap:0.6rem; flex-wrap:wrap; align-items:flex-end;">
+    {% set label = "font-family:'JetBrains Mono',monospace; font-size:0.55rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); display:block; margin-bottom:0.25rem;" %}
+    {% set field = "padding:0.45rem 0.5rem; font-size:0.8rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;" %}
+
+    <label><span style="{{ label }}">Type</span>
+      <select name="type" style="{{ field }}">
+        <option value="movie" {% if content_type == 'movie' %}selected{% endif %}>Film</option>
+        <option value="tv" {% if content_type == 'tv' %}selected{% endif %}>TV</option>
+      </select></label>
+
+    <label><span style="{{ label }}">Genre</span>
+      <select name="genre" style="{{ field }}">
+        <option value="">Any</option>
+        {% for g in genre_options %}
+        <option value="{{ g }}" {% if form.genre == g %}selected{% endif %}>{{ g | title }}</option>
+        {% endfor %}
+      </select></label>
+
+    <label><span style="{{ label }}">From</span>
+      <input type="number" name="year_from" value="{{ form.year_from }}" placeholder="1970" min="1870" max="2100" style="{{ field }} width:5.5rem;"></label>
+    <label><span style="{{ label }}">To</span>
+      <input type="number" name="year_to" value="{{ form.year_to }}" placeholder="2026" min="1870" max="2100" style="{{ field }} width:5.5rem;"></label>
+
+    <label><span style="{{ label }}">Language</span>
+      <input type="text" name="language" value="{{ form.language }}" placeholder="en" maxlength="2" style="{{ field }} width:4rem;"></label>
+    <label><span style="{{ label }}">Country</span>
+      <input type="text" name="country" value="{{ form.country }}" placeholder="GB" maxlength="2" style="{{ field }} width:4rem;"></label>
+
+    <label><span style="{{ label }}">Min rating</span>
+      <input type="number" name="min_rating" value="{{ form.min_rating }}" placeholder="7" min="0" max="10" step="0.5" style="{{ field }} width:5rem;"></label>
+    <label><span style="{{ label }}">Min votes</span>
+      <input type="number" name="min_votes" value="{{ form.min_votes }}" placeholder="100" min="0" style="{{ field }} width:5.5rem;"></label>
+
+    <label><span style="{{ label }}">Sort</span>
+      <select name="sort" style="{{ field }}">
+        {% for option in sorts %}
+        <option value="{{ option }}" {% if sort_by == option %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+      </select></label>
+
+    <button type="submit" class="mono" style="font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; padding:0.5rem 1.1rem; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:5px; cursor:pointer;">Browse</button>
+  </div>
+
+  {% if provider_options %}
+  <div style="margin-top:0.9rem;">
+    <span style="font-family:'JetBrains Mono',monospace; font-size:0.55rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">Available on ({{ watch_region }})</span>
+    <div style="display:flex; gap:0.5rem 0.9rem; flex-wrap:wrap; margin-top:0.4rem;">
+      {% for option in provider_options %}
+      <label class="mono" style="font-size:0.6rem; color:var(--body); display:flex; gap:0.25rem; align-items:center;">
+        <input type="checkbox" name="provider" value="{{ option.id }}" {% if option.id in form.providers %}checked{% endif %}>
+        {{ option.name }}
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</form>
+{% else %}
 <form action="/find" method="get" style="display:flex; gap:0.6rem; margin-bottom:2rem;">
+  {% if show_availability %}<input type="hidden" name="where" value="1">{% endif %}
   <input type="search" name="q" value="{{ query }}" placeholder="Title, film or show"
          autofocus autocomplete="off"
          style="flex:1; min-width:0; padding:0.6rem 0.8rem; font-size:0.9rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:5px;">
   <button type="submit" class="mono" style="font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; padding:0 1.1rem; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:5px; cursor:pointer;">Search</button>
 </form>
+{% endif %}
 
 {% if api_key_missing %}
 <p class="mono" style="font-size:0.72rem; color:var(--muted);">
@@ -32,19 +112,35 @@
 </p>
 {% endif %}
 
+{% set base = [] %}
+{% if mode == 'browse' %}
+  {% set _ = base.append('mode=browse&type=' ~ content_type ~ '&sort=' ~ sort_by) %}
+  {% if form.genre %}{% set _ = base.append('genre=' ~ form.genre | urlencode) %}{% endif %}
+  {% if form.year_from %}{% set _ = base.append('year_from=' ~ form.year_from) %}{% endif %}
+  {% if form.year_to %}{% set _ = base.append('year_to=' ~ form.year_to) %}{% endif %}
+  {% if form.language %}{% set _ = base.append('language=' ~ form.language | urlencode) %}{% endif %}
+  {% if form.country %}{% set _ = base.append('country=' ~ form.country | urlencode) %}{% endif %}
+  {% if form.min_rating %}{% set _ = base.append('min_rating=' ~ form.min_rating) %}{% endif %}
+  {% if form.min_votes %}{% set _ = base.append('min_votes=' ~ form.min_votes) %}{% endif %}
+  {% for pid in form.providers %}{% set _ = base.append('provider=' ~ pid) %}{% endfor %}
+{% else %}
+  {% set _ = base.append('q=' ~ query | urlencode) %}
+{% endif %}
+{% set qs = base | join('&') %}
+
 {% if total_count %}
 <div class="mono" style="display:flex; align-items:baseline; gap:0.6rem; flex-wrap:wrap; margin-bottom:1rem; font-size:0.6rem; letter-spacing:0.08em;">
   {% if show_watched %}
-  <a href="/find?q={{ query | urlencode }}{% if show_availability %}&amp;where=1{% endif %}" style="color:var(--teal); text-transform:uppercase;">Hide watched</a>
+  <a href="/find?{{ qs }}{% if show_availability %}&amp;where=1{% endif %}" style="color:var(--teal); text-transform:uppercase;">Hide watched</a>
   <span style="color:var(--muted); text-transform:none; letter-spacing:0.02em;">Showing all {{ total_count }}.</span>
   {% else %}
-  <a href="/find?q={{ query | urlencode }}&amp;watched=show{% if show_availability %}&amp;where=1{% endif %}" style="color:var(--teal); text-transform:uppercase;">{{ hidden_count }} of {{ total_count }} hidden</a>
+  <a href="/find?{{ qs }}&amp;watched=show{% if show_availability %}&amp;where=1{% endif %}" style="color:var(--teal); text-transform:uppercase;">{{ hidden_count }} of {{ total_count }} hidden</a>
   <span style="color:var(--muted); text-transform:none; letter-spacing:0.02em;">Watched titles are hidden on this page. Pages are not backfilled, so a page can come back nearly empty.</span>
   {% endif %}
   {% if show_availability %}
-  <a href="/find?q={{ query | urlencode }}{% if show_watched %}&amp;watched=show{% endif %}" style="color:var(--muted); text-transform:uppercase;">Hide where to watch</a>
+  <a href="/find?{{ qs }}{% if show_watched %}&amp;watched=show{% endif %}" style="color:var(--muted); text-transform:uppercase;">Hide where to watch</a>
   {% else %}
-  <a href="/find?q={{ query | urlencode }}{% if show_watched %}&amp;watched=show{% endif %}&amp;where=1" style="color:var(--teal); text-transform:uppercase;">Where to watch</a>
+  <a href="/find?{{ qs }}{% if show_watched %}&amp;watched=show{% endif %}&amp;where=1" style="color:var(--teal); text-transform:uppercase;">Where to watch</a>
   {% endif %}
 </div>
 {% endif %}
@@ -102,11 +198,11 @@
       {% set a = r.availability %}
       <div class="mono" style="margin-top:0.4rem; font-size:0.58rem; color:var(--muted);">
         {% set parts = [] %}
-        {% if a.stream %}{% set _ = parts.append("Stream: " ~ a.stream | join(", ")) %}{% endif %}
-        {% if a.free %}{% set _ = parts.append("Free: " ~ a.free | join(", ")) %}{% endif %}
-        {% if a.ads %}{% set _ = parts.append("With ads: " ~ a.ads | join(", ")) %}{% endif %}
-        {% if a.rent %}{% set _ = parts.append("Rent: " ~ a.rent | join(", ")) %}{% endif %}
-        {% if a.buy %}{% set _ = parts.append("Buy: " ~ a.buy | join(", ")) %}{% endif %}
+        {% if a.stream %}{% set _ = parts.append(ways("Stream", a.stream)) %}{% endif %}
+        {% if a.free %}{% set _ = parts.append(ways("Free", a.free)) %}{% endif %}
+        {% if a.ads %}{% set _ = parts.append(ways("With ads", a.ads)) %}{% endif %}
+        {% if a.rent %}{% set _ = parts.append(ways("Rent", a.rent)) %}{% endif %}
+        {% if a.buy %}{% set _ = parts.append(ways("Buy", a.buy)) %}{% endif %}
         {% if parts %}{{ parts | join(" · ") }}
         {%- elif a.unknown %}Availability unavailable
         {%- else %}Not available in {{ watch_region }}{% endif %}
@@ -140,6 +236,19 @@
 <p class="mono" style="font-size:0.72rem; color:var(--muted);">
   No matches for "{{ query }}".
 </p>
+{% endif %}
+
+{% if mode == 'browse' and total_pages and total_pages > 1 %}
+{% set tail %}{% if show_watched %}&amp;watched=show{% endif %}{% if show_availability %}&amp;where=1{% endif %}{% endset %}
+<div class="mono" style="display:flex; gap:1rem; align-items:baseline; margin-top:1.5rem; font-size:0.62rem;">
+  {% if page > 1 %}
+  <a href="/find?{{ qs }}&amp;page={{ page - 1 }}{{ tail }}" style="color:var(--teal);">&larr; Previous</a>
+  {% endif %}
+  <span style="color:var(--muted);">Page {{ page }} of {{ total_pages }}{% if total_results %} · {{ total_results }} titles{% endif %}</span>
+  {% if page < total_pages %}
+  <a href="/find?{{ qs }}&amp;page={{ page + 1 }}{{ tail }}" style="color:var(--teal);">Next &rarr;</a>
+  {% endif %}
+</div>
 {% endif %}
 
 {% if show_availability %}

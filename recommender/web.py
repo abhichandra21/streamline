@@ -1128,13 +1128,54 @@ def _annotate_availability(rows: list[dict], tmdb) -> bool:
     return False
 
 
+def _browse_filters() -> tuple[dict, dict]:
+    """Read facets from the query string. Returns (filters, form state).
+
+    Two modes exist because TMDB will not take free text and facets in one
+    request: /search accepts a query and almost nothing else, /discover
+    accepts 39 filters and no query at all.
+    """
+    def _int(name: str) -> int | None:
+        value = request.args.get(name, type=int)
+        return value if value and value > 0 else None
+
+    genres = [g for g in request.args.getlist("genre") if g.strip()]
+    languages = [l for l in request.args.getlist("language") if l.strip()]
+    countries = [c for c in request.args.getlist("country") if c.strip()]
+    providers = [p for p in request.args.getlist("provider", type=int) if p]
+    min_rating = request.args.get("min_rating", type=float)
+
+    filters = {
+        "genres": genres,
+        "languages": languages,
+        "origin_countries": countries,
+        "year_from": _int("year_from"),
+        "year_to": _int("year_to"),
+        "min_rating": min_rating if min_rating and min_rating > 0 else None,
+        "min_votes": _int("min_votes"),
+        "providers": providers,
+    }
+    return filters, {
+        "genre": genres[0] if genres else "",
+        "language": languages[0] if languages else "",
+        "country": countries[0] if countries else "",
+        "year_from": filters["year_from"] or "",
+        "year_to": filters["year_to"] or "",
+        "min_rating": filters["min_rating"] or "",
+        "min_votes": filters["min_votes"] or "",
+        "providers": providers,
+    }
+
+
 @app.route("/find")
 def find() -> str:
-    """Text lookup over TMDB, annotated with what the library already knows.
+    """Lookup and browse over TMDB, annotated with what the library knows.
 
     Deliberately not a recommender: no LLM call, no taste ranking. TMDB's
     order stands.
     """
+    if request.args.get("mode") == "browse":
+        return _find_browse()
     query = (request.args.get("q") or "").strip()
     show_watched = request.args.get("watched") == "show"
     # Availability is one request per row on a cold cache, so it is asked for.
@@ -1174,6 +1215,67 @@ def find() -> str:
         # answers and must never render the same way.
         both_failed=result.hinted_type_failed and result.alternate_type_failed,
         partly_failed=result.hinted_type_failed != result.alternate_type_failed,
+    )
+
+
+def _find_browse() -> str:
+    from recommender.tmdb_client import (
+        DISCOVER_SORTS, MOVIE_GENRE_IDS, TV_GENRE_IDS, TmdbClient,
+    )
+
+    content_type = "tv" if request.args.get("type") == "tv" else "movie"
+    show_watched = request.args.get("watched") == "show"
+    want_availability = request.args.get("where") == "1"
+    page = request.args.get("page", type=int) or 1
+    filters, form = _browse_filters()
+
+    if not config.TMDB_API_KEY:
+        return render_template(
+            "find.html", query="", rows=[], mode="browse",
+            content_type=content_type, form=form, api_key_missing=True,
+        )
+
+    tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+    # The sort reaches TMDB, so only the offered values are honoured.
+    sort_by = request.args.get("sort", "")
+    if sort_by not in DISCOVER_SORTS:
+        sort_by = DISCOVER_SORTS[0]
+
+    result = tmdb.discover_page(
+        content_type, filters=filters, page=page, sort_by=sort_by,
+        watch_region=config.WATCH_REGION,
+    )
+    annotated = _find_annotations(result.rows)
+    hidden_count = sum(1 for row in annotated if row["watched"])
+    rows = annotated if show_watched else [r for r in annotated if not r["watched"]]
+    rate_limited = _annotate_availability(rows, tmdb) if want_availability else False
+
+    return render_template(
+        "find.html",
+        mode="browse",
+        query="",
+        content_type=content_type,
+        form=form,
+        sort_by=sort_by,
+        sorts=DISCOVER_SORTS,
+        provider_options=tmdb.get_provider_options(
+            content_type, config.WATCH_REGION, config.AVAILABILITY_CACHE_DIR,
+        ),
+        genre_options=sorted(
+            TV_GENRE_IDS if content_type == "tv" else MOVIE_GENRE_IDS
+        ),
+        rows=rows,
+        total_count=len(annotated),
+        hidden_count=hidden_count,
+        show_watched=show_watched,
+        show_availability=want_availability,
+        watch_region=config.WATCH_REGION,
+        rate_limited=rate_limited,
+        page=result.page,
+        total_pages=result.total_pages,
+        total_results=result.total_results,
+        both_failed=result.failed,
+        partly_failed=False,
     )
 
 

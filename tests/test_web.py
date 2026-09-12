@@ -2591,6 +2591,22 @@ class TestFindAvailability:
         assert "JustWatch" in with_where
         assert "JustWatch" not in without
 
+    def test_a_title_on_many_services_does_not_become_a_wall_of_text(
+        self, client, tmp_path, monkeypatch,
+    ):
+        calls, fake = self._wire(monkeypatch, tmp_path, availability={
+            "stream": ["Netflix", "Hulu", "Peacock", "Sundance Now", "Plex", "Tubi"],
+            "free": [], "ads": [], "rent": [], "buy": [], "link": "", "unknown": False,
+        })
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._results(1)
+            MockClient.return_value.get_availability.side_effect = fake
+            body = client.get("/find?q=film&where=1").get_data(as_text=True)
+
+        assert "Netflix, Hulu, Peacock" in body
+        assert "+3 more" in body
+        assert "Tubi" not in body
+
     def test_a_rate_limit_stops_the_batch_instead_of_finishing_it(
         self, client, tmp_path, monkeypatch,
     ):
@@ -2617,3 +2633,123 @@ class TestFindAvailability:
             body = client.get("/find?q=film&where=1").get_data(as_text=True)
 
         assert "Film 0" in body
+
+
+class TestFindBrowseMode:
+    """Facets, because TMDB cannot take them and free text in one request."""
+
+    def _wire(self, monkeypatch, tmp_path, watched=()):
+        from recommender.user_store import init_db
+        db = str(tmp_path / "browse.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+        monkeypatch.setattr(web.user_store, "list_show_tracking", lambda _db: [])
+        monkeypatch.setattr(web, "_get_context", lambda: MagicMock(
+            watch_index=MagicMock(is_watched=lambda meta: (meta.content_type, meta.tmdb_id) in watched),
+        ))
+
+    def _page(self, n=3, page=1, total_pages=5, failed=False):
+        from recommender.tmdb_client import DiscoverPage, DiscoverRow
+        return DiscoverPage(
+            rows=[
+                DiscoverRow(
+                    tmdb_id=i, content_type="movie", title=f"Film {i}",
+                    year=2020, poster_path=None,
+                )
+                for i in range(n)
+            ],
+            page=page, total_pages=total_pages, total_results=total_pages * 20,
+            failed=failed,
+        )
+
+    def test_browse_renders_rows_and_passes_the_facets_through(
+        self, client, tmp_path, monkeypatch,
+    ):
+        self._wire(monkeypatch, tmp_path)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.discover_page.return_value = self._page()
+            MockClient.return_value.get_provider_options.return_value = []
+            body = client.get(
+                "/find?mode=browse&type=movie&genre=crime&year_from=2015&year_to=2020"
+                "&language=en&country=GB&min_rating=7&min_votes=250&sort=vote_average.desc"
+            ).get_data(as_text=True)
+            _, kwargs = MockClient.return_value.discover_page.call_args
+
+        assert "Film 0" in body
+        filters = kwargs["filters"] if "filters" in kwargs else None
+        assert filters["genres"] == ["crime"]
+        assert filters["year_from"] == 2015
+        assert filters["year_to"] == 2020
+        assert filters["languages"] == ["en"]
+        assert filters["origin_countries"] == ["GB"]
+        assert filters["min_rating"] == 7.0
+        assert filters["min_votes"] == 250
+        assert kwargs["sort_by"] == "vote_average.desc"
+
+    def test_browse_failure_is_an_error_not_an_empty_catalogue(
+        self, client, tmp_path, monkeypatch,
+    ):
+        self._wire(monkeypatch, tmp_path)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.discover_page.return_value = self._page(n=0, failed=True)
+            MockClient.return_value.get_provider_options.return_value = []
+            body = client.get("/find?mode=browse&type=movie").get_data(as_text=True)
+
+        assert "lookup failed" in body.lower()
+        assert "no matches" not in body.lower()
+
+    def test_browse_paging_is_bounded_by_the_reported_total(
+        self, client, tmp_path, monkeypatch,
+    ):
+        self._wire(monkeypatch, tmp_path)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.discover_page.return_value = self._page(page=5, total_pages=5)
+            MockClient.return_value.get_provider_options.return_value = []
+            body = client.get("/find?mode=browse&type=movie&page=5").get_data(as_text=True)
+
+        assert "page=6" not in body
+        assert "page=4" in body
+        assert "5 of 5" in body
+
+    def test_browse_annotates_and_hides_exactly_like_text_mode(
+        self, client, tmp_path, monkeypatch,
+    ):
+        self._wire(monkeypatch, tmp_path, watched={("movie", 0)})
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.discover_page.return_value = self._page(n=3)
+            MockClient.return_value.get_provider_options.return_value = []
+            hidden = client.get("/find?mode=browse&type=movie").get_data(as_text=True)
+            shown = client.get("/find?mode=browse&type=movie&watched=show").get_data(as_text=True)
+
+        assert "Film 0" not in hidden
+        assert "1 of 3 hidden" in hidden
+        assert "Film 0" in shown
+        assert "Watched" in shown
+
+    def test_browse_offers_the_fetched_providers_as_a_facet(
+        self, client, tmp_path, monkeypatch,
+    ):
+        self._wire(monkeypatch, tmp_path)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.discover_page.return_value = self._page()
+            MockClient.return_value.get_provider_options.return_value = [
+                {"id": 8, "name": "Netflix"}, {"id": 350, "name": "Apple TV+"},
+            ]
+            body = client.get("/find?mode=browse&type=movie&provider=8").get_data(as_text=True)
+            _, kwargs = MockClient.return_value.discover_page.call_args
+
+        assert "Netflix" in body
+        assert "Apple TV+" in body
+        assert kwargs["filters"]["providers"] == [8]
+
+    def test_browse_rejects_a_sort_it_does_not_offer(self, client, tmp_path, monkeypatch):
+        """The sort reaches TMDB, so it is not taken on trust from the query string."""
+        self._wire(monkeypatch, tmp_path)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.discover_page.return_value = self._page()
+            MockClient.return_value.get_provider_options.return_value = []
+            client.get("/find?mode=browse&type=movie&sort=drop%20tables")
+            _, kwargs = MockClient.return_value.discover_page.call_args
+
+        assert kwargs["sort_by"] == "popularity.desc"

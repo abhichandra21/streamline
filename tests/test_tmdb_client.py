@@ -1004,3 +1004,42 @@ def test_discover_page_clamps_the_page_number():
             params = mock_get.call_args.kwargs.get("params") or mock_get.call_args.args[1]
 
     assert params["page"] == 1
+
+
+def test_provider_options_come_from_tmdb_ordered_by_its_own_priority():
+    """with_watch_providers needs numeric ids; nothing in the repo maps names
+    to them, so the map is fetched rather than hardcoded and left to drift."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = {"results": [
+                {"provider_id": 9, "provider_name": "Prime Video", "display_priority": 2},
+                {"provider_id": 8, "provider_name": "Netflix", "display_priority": 0},
+                {"provider_id": 350, "provider_name": "Apple TV+", "display_priority": 1},
+            ]}
+            options = client.get_provider_options("movie", "US", tmp, limit=2)
+
+        assert [o["name"] for o in options] == ["Netflix", "Apple TV+"]
+        assert options[0]["id"] == 8
+
+
+def test_provider_options_are_cached_and_survive_a_later_failure():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = {"results": [
+                {"provider_id": 8, "provider_name": "Netflix", "display_priority": 0},
+            ]}
+            client.get_provider_options("movie", "US", tmp)
+        with patch.object(client, "_get", side_effect=RuntimeError("boom")) as mock_get:
+            options = client.get_provider_options("movie", "US", tmp)
+            assert mock_get.call_count == 0
+
+        assert [o["name"] for o in options] == ["Netflix"]
+
+
+def test_provider_options_failure_is_an_empty_list_not_a_crash():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get", side_effect=RuntimeError("boom")):
+            assert client.get_provider_options("movie", "US", tmp) == []
