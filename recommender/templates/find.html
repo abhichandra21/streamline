@@ -32,6 +32,18 @@
 </p>
 {% endif %}
 
+{% if total_count %}
+<div class="mono" style="display:flex; align-items:baseline; gap:0.6rem; flex-wrap:wrap; margin-bottom:1rem; font-size:0.6rem; letter-spacing:0.08em;">
+  {% if show_watched %}
+  <a href="/find?q={{ query | urlencode }}" style="color:var(--teal); text-transform:uppercase;">Hide watched</a>
+  <span style="color:var(--muted); text-transform:none; letter-spacing:0.02em;">Showing all {{ total_count }}.</span>
+  {% else %}
+  <a href="/find?q={{ query | urlencode }}&amp;watched=show" style="color:var(--teal); text-transform:uppercase;">{{ hidden_count }} of {{ total_count }} hidden</a>
+  <span style="color:var(--muted); text-transform:none; letter-spacing:0.02em;">Watched titles are hidden on this page. Pages are not backfilled, so a page can come back nearly empty.</span>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if rows %}
 <div class="candidate-list">
   {% for r in rows %}
@@ -94,6 +106,10 @@
   </div>
   {% endfor %}
 </div>
+{% elif total_count %}
+<p class="mono" style="font-size:0.72rem; color:var(--muted);">
+  Every match on this page is already in your library.
+</p>
 {% else %}
 <p class="mono" style="font-size:0.72rem; color:var(--muted);">
   No matches for "{{ query }}".

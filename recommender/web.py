@@ -1115,6 +1115,7 @@ def find() -> str:
     order stands.
     """
     query = (request.args.get("q") or "").strip()
+    show_watched = request.args.get("watched") == "show"
     if not query:
         return render_template("find.html", query="", rows=None)
 
@@ -1127,10 +1128,20 @@ def find() -> str:
     tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
     result = tmdb.get_disambiguation_candidates(query, "tv", limit=FIND_RESULT_LIMIT)
 
+    annotated = _find_annotations(result.candidates)
+    # Hiding happens after TMDB has already paged, so it can only ever act on
+    # the rows in hand. The count is what keeps that honest: a nearly empty
+    # page is then information about the library, not an apparent absence.
+    hidden_count = sum(1 for row in annotated if row["watched"])
+    rows = annotated if show_watched else [r for r in annotated if not r["watched"]]
+
     return render_template(
         "find.html",
         query=query,
-        rows=_find_annotations(result.candidates),
+        rows=rows,
+        total_count=len(annotated),
+        hidden_count=hidden_count,
+        show_watched=show_watched,
         # A failed request and a genuinely empty catalogue are different
         # answers and must never render the same way.
         both_failed=result.hinted_type_failed and result.alternate_type_failed,

@@ -2306,13 +2306,15 @@ class TestFindTextMode:
         ))
         return db
 
-    def test_watched_result_is_marked_rather_than_removed(self, client, tmp_path, monkeypatch):
+    def test_watched_result_is_marked_not_silently_dropped(self, client, tmp_path, monkeypatch):
+        """Watched rows are hidden by default; revealing them shows the mark,
+        never a bare row indistinguishable from something unseen."""
         self._wire(monkeypatch, tmp_path, watched={("tv", 1)})
         with patch("recommender.tmdb_client.TmdbClient") as MockClient:
             MockClient.return_value.get_disambiguation_candidates.return_value = self._result(
                 self._candidate(1, "Seen It"), self._candidate(2, "Not Seen"),
             )
-            body = client.get("/find?q=it").get_data(as_text=True)
+            body = client.get("/find?q=it&watched=show").get_data(as_text=True)
 
         assert "Seen It" in body
         assert "Not Seen" in body
@@ -2420,3 +2422,89 @@ class TestFindTextMode:
             MockClient.return_value.get_disambiguation_candidates.assert_not_called()
 
         assert response.status_code == 200
+
+
+class TestFindHideWatched:
+    """Hiding is allowed to be the default only because it states what it did."""
+
+    def _wire(self, monkeypatch, tmp_path, watched=()):
+        from recommender.user_store import init_db
+        db = str(tmp_path / "hide.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+        monkeypatch.setattr(web.user_store, "list_show_tracking", lambda _db: [])
+        monkeypatch.setattr(web, "_get_context", lambda: MagicMock(
+            watch_index=MagicMock(is_watched=lambda meta: (meta.content_type, meta.tmdb_id) in watched),
+        ))
+
+    def _results(self, n):
+        from recommender.tmdb_client import DisambiguationCandidate, DisambiguationResult
+        return DisambiguationResult(candidates=[
+            DisambiguationCandidate(
+                tmdb_id=i, content_type="tv", title=f"Show {i}",
+                year=2020, poster_path=None, score=90.0,
+            )
+            for i in range(n)
+        ])
+
+    def test_watched_rows_are_hidden_by_default_and_counted(
+        self, client, tmp_path, monkeypatch,
+    ):
+        self._wire(monkeypatch, tmp_path, watched={("tv", 0), ("tv", 1)})
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._results(5)
+            body = client.get("/find?q=show").get_data(as_text=True)
+
+        assert "Show 0" not in body
+        assert "Show 2" in body
+        assert "2 of 5" in body
+
+    def test_the_count_is_stated_even_when_nothing_is_hidden(
+        self, client, tmp_path, monkeypatch,
+    ):
+        """A chip that vanishes at zero makes its own presence a signal."""
+        self._wire(monkeypatch, tmp_path)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._results(3)
+            body = client.get("/find?q=show").get_data(as_text=True)
+
+        assert "0 of 3" in body
+
+    def test_revealing_shows_every_row_again(self, client, tmp_path, monkeypatch):
+        self._wire(monkeypatch, tmp_path, watched={("tv", 0), ("tv", 1)})
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._results(5)
+            body = client.get("/find?q=show&watched=show").get_data(as_text=True)
+
+        assert "Show 0" in body
+        assert "Show 4" in body
+        assert "Watched" in body
+
+    def test_a_fully_hidden_page_does_not_claim_there_were_no_matches(
+        self, client, tmp_path, monkeypatch,
+    ):
+        """The lossy failure the design exists to prevent: hiding that looks like absence."""
+        self._wire(monkeypatch, tmp_path, watched={("tv", i) for i in range(4)})
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._results(4)
+            body = client.get("/find?q=show").get_data(as_text=True)
+
+        assert "no matches" not in body.lower()
+        assert "4 of 4" in body
+
+    def test_the_page_says_paging_is_not_backfilled(self, client, tmp_path, monkeypatch):
+        self._wire(monkeypatch, tmp_path, watched={("tv", 0)})
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._results(3)
+            body = client.get("/find?q=show").get_data(as_text=True)
+
+        assert "not backfilled" in body.lower()
+
+    def test_the_reveal_link_preserves_the_query(self, client, tmp_path, monkeypatch):
+        self._wire(monkeypatch, tmp_path, watched={("tv", 0)})
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._results(3)
+            body = client.get("/find?q=slow+horses").get_data(as_text=True)
+
+        assert "q=slow+horses" in body or "q=slow%20horses" in body
