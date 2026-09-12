@@ -60,6 +60,10 @@
         </form>
       </span>
       {% endif %}
+      {% if tracking.state or tracking.can_follow %}
+      <span style="color:var(--border);">·</span>
+      {% include "_track_state.html" %}
+      {% endif %}
     </div>
   </div>
 </div>
