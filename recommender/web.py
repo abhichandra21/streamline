@@ -1056,6 +1056,88 @@ def unfollow_show() -> Response:
     return redirect(url_for("shows_page"), code=303)
 
 
+FIND_RESULT_LIMIT = 20
+
+
+def _find_annotations(candidates: list) -> list[dict]:
+    """Read TMDB results through the local library, loading state once.
+
+    Annotation is why this page exists, so it is never skipped. The reads are
+    hoisted out of the loop deliberately: a per-row database hit would make a
+    screenful of results cost twenty queries.
+    """
+    _ensure_user_store_once()
+    user_state = _load_user_state()
+    try:
+        watch_index = _get_context().watch_index
+    except Exception:
+        watch_index = None
+    # show_tracking is not part of UserStateIndex, so it is read and indexed
+    # separately. Keyed by id alone, matching the table's own primary key.
+    tracking_by_id = {
+        row["tmdb_id"]: row
+        for row in user_store.list_show_tracking(config.EVENT_DB_PATH)
+    }
+
+    rows = []
+    for cand in candidates:
+        watched = bool(watch_index and watch_index.is_watched(cand))
+        if not watched:
+            watched = user_state.is_manually_watched(cand)
+        tracked = tracking_by_id.get(cand.tmdb_id) if cand.content_type == "tv" else None
+        rows.append({
+            "tmdb_id": cand.tmdb_id,
+            "content_type": cand.content_type,
+            "title": cand.title,
+            "year": cand.year,
+            "poster_path": cand.poster_path,
+            "overview": cand.overview,
+            # The original title only earns its place when it differs.
+            "original_title": cand.original_title if cand.original_title != cand.title else "",
+            "original_language": (cand.original_language or "").upper(),
+            "vote_average": cand.vote_average,
+            "vote_count": cand.vote_count,
+            "tmdb_url": f"https://www.themoviedb.org/{'tv' if cand.content_type == 'tv' else 'movie'}/{cand.tmdb_id}",
+            "watched": watched,
+            "rating": user_state.get_rating(cand),
+            "in_watchlist": user_state.is_in_watchlist(cand),
+            "tracking_state": (tracked or {}).get("state"),
+            "tracking_from_season": (tracked or {}).get("tracking_from_season"),
+        })
+    return rows
+
+
+@app.route("/find")
+def find() -> str:
+    """Text lookup over TMDB, annotated with what the library already knows.
+
+    Deliberately not a recommender: no LLM call, no taste ranking. TMDB's
+    order stands.
+    """
+    query = (request.args.get("q") or "").strip()
+    if not query:
+        return render_template("find.html", query="", rows=None)
+
+    if not config.TMDB_API_KEY:
+        return render_template(
+            "find.html", query=query, rows=[], api_key_missing=True,
+        )
+
+    from recommender.tmdb_client import TmdbClient
+    tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+    result = tmdb.get_disambiguation_candidates(query, "tv", limit=FIND_RESULT_LIMIT)
+
+    return render_template(
+        "find.html",
+        query=query,
+        rows=_find_annotations(result.candidates),
+        # A failed request and a genuinely empty catalogue are different
+        # answers and must never render the same way.
+        both_failed=result.hinted_type_failed and result.alternate_type_failed,
+        partly_failed=result.hinted_type_failed != result.alternate_type_failed,
+    )
+
+
 @app.route("/searches")
 def searches() -> str:
     entries = query_history.load()

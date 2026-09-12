@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Find{% endblock %}
+{% block content %}
+
+<h1 style="font-size:clamp(1.4rem, 3vw, 2rem); margin-bottom:0.35rem;">Find</h1>
+<p class="mono" style="font-size:0.62rem; color:var(--muted); margin-bottom:1.5rem;">
+  Look anything up. Your library is marked as you go. No taste profile, no tokens spent.
+</p>
+
+<form action="/find" method="get" style="display:flex; gap:0.6rem; margin-bottom:2rem;">
+  <input type="search" name="q" value="{{ query }}" placeholder="Title, film or show"
+         autofocus autocomplete="off"
+         style="flex:1; min-width:0; padding:0.6rem 0.8rem; font-size:0.9rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:5px;">
+  <button type="submit" class="mono" style="font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; padding:0 1.1rem; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:5px; cursor:pointer;">Search</button>
+</form>
+
+{% if api_key_missing %}
+<p class="mono" style="font-size:0.72rem; color:var(--muted);">
+  TMDB lookup is disabled: no API key configured.
+</p>
+
+{% elif both_failed %}
+<p class="mono" style="font-size:0.72rem; color:var(--accent2);">
+  TMDB lookup failed. Check your connection and try again.
+</p>
+
+{% elif rows is not none %}
+
+{% if partly_failed %}
+<p class="mono" style="font-size:0.65rem; color:var(--muted); margin-bottom:1rem;">
+  One of the two searches failed, so these results may be incomplete.
+</p>
+{% endif %}
+
+{% if rows %}
+<div class="candidate-list">
+  {% for r in rows %}
+  <div class="candidate-card">
+    {% if r.poster_path %}
+    <img src="https://image.tmdb.org/t/p/w185{{ r.poster_path }}" alt="" class="candidate-poster" loading="lazy">
+    {% else %}
+    <div class="candidate-poster candidate-poster--empty"></div>
+    {% endif %}
+
+    <div class="candidate-info">
+      <div class="candidate-name">
+        <a href="/title/{{ r.tmdb_id }}?type={{ r.content_type }}" style="color:inherit;">{{ r.title }}</a>
+        {% if r.year %}<span class="candidate-year">({{ r.year }})</span>{% endif %}
+      </div>
+      <div class="mono candidate-meta">
+        {{ 'TV' if r.content_type == 'tv' else 'Film' }}
+        {%- if r.original_language %} · {{ r.original_language }}{% endif %}
+        {%- if r.vote_count %} · ★ {{ "%.1f"|format(r.vote_average) }} ({{ r.vote_count }}){% endif %}
+      </div>
+      {% if r.original_title %}
+      <div class="candidate-original">{{ r.original_title }}</div>
+      {% endif %}
+      {% if r.overview %}
+      <p class="candidate-overview">{{ r.overview }}</p>
+      {% endif %}
+      <a href="{{ r.tmdb_url }}" target="_blank" rel="noopener" class="mono candidate-link">View on TMDB</a>
+
+      {# Every state that matters is named. Ignored and undecided are not the same thing. #}
+      <div class="mono" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem; font-size:0.58rem; letter-spacing:0.08em; text-transform:uppercase;">
+        {% if r.watched %}
+        <span style="color:var(--teal);">Watched{% if r.rating %} · {{ r.rating }}{% endif %}</span>
+        {% endif %}
+        {% if r.in_watchlist %}
+        <span style="color:var(--teal);">In watchlist</span>
+        {% endif %}
+        {% if r.tracking_state == "following" %}
+        <span style="color:var(--accent2);">Following{% if r.tracking_from_season %} from S{{ r.tracking_from_season }}{% endif %}</span>
+        {% elif r.tracking_state == "ignored" %}
+        <span style="color:var(--muted);">Ignored</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="candidate-actions">
+      {% if not r.watched and not r.in_watchlist %}
+      <span id="find-save-{{ r.content_type }}-{{ r.tmdb_id }}">
+        <form hx-post="/watchlist/save"
+              hx-target="#find-save-{{ r.content_type }}-{{ r.tmdb_id }}" hx-swap="innerHTML"
+              action="/watchlist/save" method="post" style="margin:0;">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="title" value="{{ r.title }}">
+          <input type="hidden" name="content_type" value="{{ r.content_type }}">
+          <input type="hidden" name="tmdb_id" value="{{ r.tmdb_id }}">
+          <button type="submit" class="btn-ghost mono" style="font-size:0.58rem;">+ Watchlist</button>
+        </form>
+      </span>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="mono" style="font-size:0.72rem; color:var(--muted);">
+  No matches for "{{ query }}".
+</p>
+{% endif %}
+
+{% endif %}
+
+{% endblock %}

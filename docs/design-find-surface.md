@@ -159,10 +159,15 @@ Each row is annotated from state loaded **once per request** — one `UserStateI
 | In watchlist | `is_in_watchlist()` | `In watchlist` |
 | Following | `show_tracking.state == "following"`, TV only | `Following from S<n>` |
 | Ignored | `show_tracking.state == "ignored"`, TV only | `Ignored` |
-| No tracking decision | absent from `show_tracking`, TV only | Follow action, where a snapshot exists |
+| No tracking decision | absent from `show_tracking`, TV only | nothing; see below |
 | None of the above | — | Save and Add actions |
 
 `Ignored` and "no decision" are different states and must render differently. Collapsing them, as revision 1 did, throws away the distinction the tracker exists to keep.
+
+**No Follow action on this page**, though revision 2 planned one for undecided TV.
+Implementation showed it would not work: `POST /shows/follow-title` requires the title to be a watched TV entry in the archive and returns 404 otherwise (`web.py:927`), and most search results are not in the archive.
+Following stays on the title page, where that precondition is checkable and already checked.
+The row links there, so the path is one click away.
 
 Row actions post to the existing routes. Nothing new writes to the user store.
 

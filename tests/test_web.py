@@ -2274,3 +2274,149 @@ class TestFollowFromTitlePage:
 
         assert response.status_code == 303
         assert response.headers["Location"].endswith("/title/274479?type=tv")
+
+
+class TestFindTextMode:
+    """Find is a lookup tool: TMDB's results, read through the local library."""
+
+    def _result(self, *candidates, hinted_failed=False, alt_failed=False):
+        from recommender.tmdb_client import DisambiguationResult
+        return DisambiguationResult(
+            candidates=list(candidates),
+            hinted_type_failed=hinted_failed,
+            alternate_type_failed=alt_failed,
+        )
+
+    def _candidate(self, tmdb_id, title, content_type="tv"):
+        from recommender.tmdb_client import DisambiguationCandidate
+        return DisambiguationCandidate(
+            tmdb_id=tmdb_id, content_type=content_type, title=title,
+            year=2022, poster_path=None, score=90.0,
+        )
+
+    def _wire(self, monkeypatch, tmp_path, tracking_rows=(), watched=()):
+        from recommender.user_store import init_db
+        db = str(tmp_path / "find.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+        monkeypatch.setattr(web.user_store, "list_show_tracking", lambda _db: list(tracking_rows))
+        monkeypatch.setattr(web, "_get_context", lambda: MagicMock(
+            watch_index=MagicMock(is_watched=lambda meta: (meta.content_type, meta.tmdb_id) in watched),
+        ))
+        return db
+
+    def test_watched_result_is_marked_rather_than_removed(self, client, tmp_path, monkeypatch):
+        self._wire(monkeypatch, tmp_path, watched={("tv", 1)})
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._result(
+                self._candidate(1, "Seen It"), self._candidate(2, "Not Seen"),
+            )
+            body = client.get("/find?q=it").get_data(as_text=True)
+
+        assert "Seen It" in body
+        assert "Not Seen" in body
+        assert "Watched" in body
+
+    def test_watchlisted_result_says_so(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import save_title
+        db = self._wire(monkeypatch, tmp_path)
+        save_title(db, "On The List", "tv", tmdb_id=3)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._result(
+                self._candidate(3, "On The List"),
+            )
+            body = client.get("/find?q=list").get_data(as_text=True)
+
+        assert "In watchlist" in body
+
+    def test_ignored_is_not_rendered_as_the_same_state_as_undecided(
+        self, client, tmp_path, monkeypatch,
+    ):
+        self._wire(monkeypatch, tmp_path, tracking_rows=[
+            {"tmdb_id": 4, "state": "following", "tracking_from_season": 2, "title": "Followed"},
+            {"tmdb_id": 5, "state": "ignored", "tracking_from_season": 3, "title": "Ignored Show"},
+        ])
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._result(
+                self._candidate(4, "Followed"),
+                self._candidate(5, "Ignored Show"),
+                self._candidate(6, "Undecided"),
+            )
+            body = client.get("/find?q=show").get_data(as_text=True)
+
+        assert "Following from S2" in body
+        assert "Ignored" in body
+        assert body.count("Following from") == 1
+
+    def test_a_failed_lookup_is_an_error_not_an_empty_result(
+        self, client, tmp_path, monkeypatch,
+    ):
+        """The likeliest defect in this feature: a network failure reading as 'nothing found'."""
+        self._wire(monkeypatch, tmp_path)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._result(
+                hinted_failed=True, alt_failed=True,
+            )
+            body = client.get("/find?q=anything").get_data(as_text=True)
+
+        assert "lookup failed" in body.lower()
+        assert "no matches" not in body.lower()
+
+    def test_a_genuinely_empty_result_says_nothing_matched(
+        self, client, tmp_path, monkeypatch,
+    ):
+        self._wire(monkeypatch, tmp_path)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._result()
+            body = client.get("/find?q=zzzz").get_data(as_text=True)
+
+        assert "no matches" in body.lower()
+        assert "failed" not in body.lower()
+
+    def test_partial_failure_warns_that_results_are_incomplete(
+        self, client, tmp_path, monkeypatch,
+    ):
+        self._wire(monkeypatch, tmp_path)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._result(
+                self._candidate(7, "Half Result"), alt_failed=True,
+            )
+            body = client.get("/find?q=half").get_data(as_text=True)
+
+        assert "incomplete" in body.lower()
+        assert "Half Result" in body
+
+    def test_find_asks_for_a_screenful_not_the_pickers_five(
+        self, client, tmp_path, monkeypatch,
+    ):
+        self._wire(monkeypatch, tmp_path)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._result()
+            client.get("/find?q=anything")
+            _, kwargs = MockClient.return_value.get_disambiguation_candidates.call_args
+
+        assert kwargs["limit"] == 20
+
+    def test_local_state_is_read_once_not_once_per_row(self, client, tmp_path, monkeypatch):
+        """Annotation must not cost a database read per result."""
+        self._wire(monkeypatch, tmp_path)
+        tracking_reads = MagicMock(return_value=[])
+        monkeypatch.setattr(web.user_store, "list_show_tracking", tracking_reads)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._result(
+                *[self._candidate(i, f"Show {i}") for i in range(10)]
+            )
+            client.get("/find?q=show")
+
+        assert tracking_reads.call_count == 1
+
+    def test_an_empty_query_renders_the_page_without_searching(
+        self, client, tmp_path, monkeypatch,
+    ):
+        self._wire(monkeypatch, tmp_path)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            response = client.get("/find")
+            MockClient.return_value.get_disambiguation_candidates.assert_not_called()
+
+        assert response.status_code == 200
