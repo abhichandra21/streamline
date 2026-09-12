@@ -8,6 +8,7 @@ from recommender.show_tracker import (
     last_refresh_at,
     load_snapshots,
     merge_archive_entries,
+    next_unstarted_season,
     refresh_is_due,
     refresh_release_cache,
 )
@@ -820,3 +821,52 @@ def test_last_refresh_at_survives_a_missing_or_unreadable_manifest(tmp_path):
     assert last_refresh_at(tmp_path / "nope") is None
     (tmp_path / "manifest.json").write_text("{not json")
     assert last_refresh_at(tmp_path) is None
+
+
+def test_tracking_starts_after_every_season_tmdb_already_knows():
+    snapshot = {"seasons": [
+        {"season_number": 0, "air_date": "2025-08-01"},
+        {"season_number": 1, "air_date": "2025-09-04"},
+        {"season_number": 2, "air_date": None},
+    ]}
+
+    assert next_unstarted_season(snapshot) == 3
+
+
+def test_specials_alone_leave_nothing_to_track_from():
+    assert next_unstarted_season({"seasons": [{"season_number": 0}]}) is None
+    assert next_unstarted_season({"seasons": []}) is None
+    assert next_unstarted_season(None) is None
+
+
+def test_followed_show_with_no_announced_season_reports_it_as_coming():
+    """The Lynley case: in production, but TMDB has no season past the one watched."""
+    archive = [{
+        "tmdb_id": 274479,
+        "title": "A Place of Hiding-Lynley S1",
+        "content_type": "tv",
+        "last_watched": "2026-07-01T11:57:26",
+    }]
+    snapshot = {
+        "tmdb_id": 274479,
+        "title": "Lynley",
+        "status": "Returning Series",
+        "in_production": True,
+        "poster_path": None,
+        "seasons": [{"season_number": 1, "air_date": "2025-09-04", "episodes": []}],
+    }
+    tracking = [{
+        "tmdb_id": 274479,
+        "title": "Lynley",
+        "state": "following",
+        "tracking_from_season": next_unstarted_season(snapshot),
+    }]
+
+    sections = build_sections(
+        archive, tracking, {274479: snapshot}, date(2026, 9, 11), lookback_days=730,
+    )
+
+    assert [card["title"] for card in sections["coming_soon"]] == ["Lynley"]
+    assert sections["coming_soon"][0]["season_number"] == 2
+    assert sections["coming_soon"][0]["next_air_date"] is None
+    assert sections["might_be_back"] == []

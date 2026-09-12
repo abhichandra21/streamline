@@ -924,6 +924,46 @@ def follow_show() -> Response:
     return redirect(url_for("shows_page"), code=303)
 
 
+@app.route("/shows/follow-title", methods=["POST"])
+def follow_show_from_title() -> Response:
+    """Follow a watched show directly, without waiting for a release signal.
+
+    Discovery only surfaces shows TMDB has already announced something for, so
+    it cannot be the only way to say "tell me when this comes back."
+    """
+    try:
+        tmdb_id = _show_action_id()
+    except ValueError as exc:
+        return Response(str(exc), status=400)
+    archive_entries, tracking_rows, _ = _show_page_data()
+    entry = next(
+        (
+            candidate
+            for candidate in archive_entries
+            if candidate.get("tmdb_id") == tmdb_id
+            and candidate.get("content_type") == "tv"
+        ),
+        None,
+    )
+    if entry is None:
+        return Response("Show is not a watched TV title", status=404)
+    if any(row["tmdb_id"] == tmdb_id for row in tracking_rows):
+        return Response("Show is already tracked", status=409)
+
+    snapshot = show_tracker.load_snapshots(config.RELEASE_CACHE_DIR).get(tmdb_id)
+    season_number = show_tracker.next_unstarted_season(snapshot)
+    if season_number is None:
+        return Response("Show has no cached season to track from", status=404)
+
+    user_store.follow_show(
+        config.EVENT_DB_PATH,
+        snapshot.get("title") or entry["title"],
+        tmdb_id,
+        tracking_from_season=season_number,
+    )
+    return redirect(url_for("title_detail", tmdb_id=tmdb_id, type="tv"), code=303)
+
+
 @app.route("/shows/ignore", methods=["POST"])
 def ignore_show() -> Response:
     try:
