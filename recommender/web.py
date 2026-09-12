@@ -1107,6 +1107,27 @@ def _find_annotations(candidates: list) -> list[dict]:
     return rows
 
 
+def _annotate_availability(rows: list[dict], tmdb) -> bool:
+    """Attach availability to each row. Returns True if TMDB cut us off.
+
+    A rate limit aborts the batch rather than firing the remaining requests
+    into an API that has already said no. Every other failure leaves a row's
+    availability unknown, which is a missing label rather than a wrong one.
+    """
+    from recommender.tmdb_client import TmdbRateLimitError
+
+    for row in rows:
+        try:
+            row["availability"] = tmdb.get_availability(
+                row["tmdb_id"], row["content_type"],
+                config.WATCH_REGION, config.AVAILABILITY_CACHE_DIR,
+            )
+        except TmdbRateLimitError:
+            log.warning("TMDB rate limit hit while annotating availability; stopping batch")
+            return True
+    return False
+
+
 @app.route("/find")
 def find() -> str:
     """Text lookup over TMDB, annotated with what the library already knows.
@@ -1116,6 +1137,8 @@ def find() -> str:
     """
     query = (request.args.get("q") or "").strip()
     show_watched = request.args.get("watched") == "show"
+    # Availability is one request per row on a cold cache, so it is asked for.
+    want_availability = request.args.get("where") == "1"
     if not query:
         return render_template("find.html", query="", rows=None)
 
@@ -1135,10 +1158,15 @@ def find() -> str:
     hidden_count = sum(1 for row in annotated if row["watched"])
     rows = annotated if show_watched else [r for r in annotated if not r["watched"]]
 
+    rate_limited = _annotate_availability(rows, tmdb) if want_availability else False
+
     return render_template(
         "find.html",
         query=query,
         rows=rows,
+        show_availability=want_availability,
+        watch_region=config.WATCH_REGION,
+        rate_limited=rate_limited,
         total_count=len(annotated),
         hidden_count=hidden_count,
         show_watched=show_watched,

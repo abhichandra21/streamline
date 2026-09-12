@@ -35,13 +35,24 @@
 {% if total_count %}
 <div class="mono" style="display:flex; align-items:baseline; gap:0.6rem; flex-wrap:wrap; margin-bottom:1rem; font-size:0.6rem; letter-spacing:0.08em;">
   {% if show_watched %}
-  <a href="/find?q={{ query | urlencode }}" style="color:var(--teal); text-transform:uppercase;">Hide watched</a>
+  <a href="/find?q={{ query | urlencode }}{% if show_availability %}&amp;where=1{% endif %}" style="color:var(--teal); text-transform:uppercase;">Hide watched</a>
   <span style="color:var(--muted); text-transform:none; letter-spacing:0.02em;">Showing all {{ total_count }}.</span>
   {% else %}
-  <a href="/find?q={{ query | urlencode }}&amp;watched=show" style="color:var(--teal); text-transform:uppercase;">{{ hidden_count }} of {{ total_count }} hidden</a>
+  <a href="/find?q={{ query | urlencode }}&amp;watched=show{% if show_availability %}&amp;where=1{% endif %}" style="color:var(--teal); text-transform:uppercase;">{{ hidden_count }} of {{ total_count }} hidden</a>
   <span style="color:var(--muted); text-transform:none; letter-spacing:0.02em;">Watched titles are hidden on this page. Pages are not backfilled, so a page can come back nearly empty.</span>
   {% endif %}
+  {% if show_availability %}
+  <a href="/find?q={{ query | urlencode }}{% if show_watched %}&amp;watched=show{% endif %}" style="color:var(--muted); text-transform:uppercase;">Hide where to watch</a>
+  {% else %}
+  <a href="/find?q={{ query | urlencode }}{% if show_watched %}&amp;watched=show{% endif %}&amp;where=1" style="color:var(--teal); text-transform:uppercase;">Where to watch</a>
+  {% endif %}
 </div>
+{% endif %}
+
+{% if rate_limited %}
+<p class="mono" style="font-size:0.65rem; color:var(--accent2); margin-bottom:1rem;">
+  TMDB asked us to slow down, so some rows below have no availability yet. Try again shortly.
+</p>
 {% endif %}
 
 {% if rows %}
@@ -86,6 +97,21 @@
         <span style="color:var(--muted);">Ignored</span>
         {% endif %}
       </div>
+
+      {% if show_availability and r.availability %}
+      {% set a = r.availability %}
+      <div class="mono" style="margin-top:0.4rem; font-size:0.58rem; color:var(--muted);">
+        {% set parts = [] %}
+        {% if a.stream %}{% set _ = parts.append("Stream: " ~ a.stream | join(", ")) %}{% endif %}
+        {% if a.free %}{% set _ = parts.append("Free: " ~ a.free | join(", ")) %}{% endif %}
+        {% if a.ads %}{% set _ = parts.append("With ads: " ~ a.ads | join(", ")) %}{% endif %}
+        {% if a.rent %}{% set _ = parts.append("Rent: " ~ a.rent | join(", ")) %}{% endif %}
+        {% if a.buy %}{% set _ = parts.append("Buy: " ~ a.buy | join(", ")) %}{% endif %}
+        {% if parts %}{{ parts | join(" · ") }}
+        {%- elif a.unknown %}Availability unavailable
+        {%- else %}Not available in {{ watch_region }}{% endif %}
+      </div>
+      {% endif %}
     </div>
 
     <div class="candidate-actions">
@@ -113,6 +139,12 @@
 {% else %}
 <p class="mono" style="font-size:0.72rem; color:var(--muted);">
   No matches for "{{ query }}".
+</p>
+{% endif %}
+
+{% if show_availability %}
+<p class="mono" style="margin-top:2rem; font-size:0.56rem; color:var(--muted);">
+  Availability data provided by JustWatch.
 </p>
 {% endif %}
 

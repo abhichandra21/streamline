@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -784,3 +785,106 @@ def test_get_disambiguation_candidates_caps_at_five():
             mock_search.side_effect = [(many, True), ([], True)]
             result = client.get_disambiguation_candidates("Show", "tv")
         assert len(result.candidates) == 5
+
+
+# --- Availability tests (wider than the flatrate-only provider lookup) ---
+
+def _providers_response(region="US", **buckets):
+    return {
+        "id": 1,
+        "results": {
+            region: {
+                "link": "https://www.themoviedb.org/movie/1/watch",
+                **{
+                    key: [
+                        {"provider_name": name, "provider_id": 100 + i, "display_priority": i}
+                        for i, name in enumerate(names)
+                    ]
+                    for key, names in buckets.items()
+                },
+            }
+        },
+    }
+
+
+def test_availability_reports_rent_and_buy_not_only_subscriptions():
+    """The owner's requirement: what is out there, not only what is included."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = _providers_response(
+                flatrate=["Netflix"], rent=["Apple TV"], buy=["Amazon Video"],
+            )
+            availability = client.get_availability(1, "movie", "US", tmp + "/v2")
+
+    assert availability["stream"] == ["Netflix"]
+    assert availability["rent"] == ["Apple TV"]
+    assert availability["buy"] == ["Amazon Video"]
+
+
+def test_availability_keeps_free_and_ad_supported_separate_from_subscription():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = _providers_response(free=["Tubi"], ads=["Roku Channel"])
+            availability = client.get_availability(1, "movie", "US", tmp + "/v2")
+
+    assert availability["free"] == ["Tubi"]
+    assert availability["ads"] == ["Roku Channel"]
+    assert availability["stream"] == []
+
+
+def test_availability_caches_under_its_own_path_not_the_flatrate_one():
+    """Reusing the old cache would make every existing entry read as 'no rent data'."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        legacy = Path(tmp) / "providers"
+        wide = Path(tmp) / "providers_v2"
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = _providers_response(flatrate=["Netflix"], rent=["Apple TV"])
+            client.get_availability(1, "movie", "US", str(wide))
+
+        assert (wide / "movie" / "US" / "1.json").exists()
+        assert not legacy.exists()
+
+
+def test_availability_is_served_from_cache_without_a_second_request():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = _providers_response(flatrate=["Netflix"])
+            client.get_availability(1, "movie", "US", tmp + "/v2")
+            again = client.get_availability(1, "movie", "US", tmp + "/v2")
+            assert mock_get.call_count == 1
+    assert again["stream"] == ["Netflix"]
+
+
+def test_availability_rate_limit_propagates_so_a_batch_can_stop():
+    """get_watch_providers swallows a 429 and returns []; firing the next
+    nineteen requests into a rate-limited API is worse than a blank column."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get", side_effect=TmdbRateLimitError(2.0)):
+            with pytest.raises(TmdbRateLimitError):
+                client.get_availability(1, "movie", "US", tmp + "/v2")
+
+
+def test_availability_returns_empty_buckets_for_other_failures():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get", side_effect=RuntimeError("boom")):
+            availability = client.get_availability(1, "movie", "US", tmp + "/v2")
+
+    assert availability["stream"] == []
+    assert availability["unknown"] is True
+
+
+def test_availability_for_a_region_with_no_data_is_not_an_error():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = {"id": 1, "results": {}}
+            availability = client.get_availability(1, "movie", "US", tmp + "/v2")
+
+    assert availability["stream"] == []
+    assert availability["unknown"] is False

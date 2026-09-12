@@ -2508,3 +2508,112 @@ class TestFindHideWatched:
             body = client.get("/find?q=slow+horses").get_data(as_text=True)
 
         assert "q=slow+horses" in body or "q=slow%20horses" in body
+
+
+class TestFindAvailability:
+    """Where a title is playable, on what terms, with the attribution TMDB requires."""
+
+    def _wire(self, monkeypatch, tmp_path, availability=None, rate_limit_after=None):
+        from recommender.user_store import init_db
+        from recommender.tmdb_client import TmdbRateLimitError
+        db = str(tmp_path / "avail.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "test-key")
+        monkeypatch.setattr(web.user_store, "list_show_tracking", lambda _db: [])
+        monkeypatch.setattr(web, "_get_context", lambda: MagicMock(
+            watch_index=MagicMock(is_watched=lambda meta: False),
+        ))
+        calls = []
+
+        def fake(tmdb_id, content_type, region, cache_dir):
+            calls.append(tmdb_id)
+            if rate_limit_after is not None and len(calls) > rate_limit_after:
+                raise TmdbRateLimitError(1.0)
+            return availability or {
+                "stream": [], "free": [], "ads": [], "rent": [], "buy": [],
+                "link": "", "unknown": False,
+            }
+
+        return calls, fake
+
+    def _results(self, n):
+        from recommender.tmdb_client import DisambiguationCandidate, DisambiguationResult
+        return DisambiguationResult(candidates=[
+            DisambiguationCandidate(
+                tmdb_id=i, content_type="movie", title=f"Film {i}",
+                year=2020, poster_path=None, score=90.0,
+            )
+            for i in range(n)
+        ])
+
+    def test_availability_is_off_until_asked_for(self, client, tmp_path, monkeypatch):
+        """Twenty rows on a cold cache is twenty requests, so it is opt-in."""
+        calls, fake = self._wire(monkeypatch, tmp_path)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._results(3)
+            MockClient.return_value.get_availability.side_effect = fake
+            client.get("/find?q=film")
+
+        assert calls == []
+
+    def test_requested_availability_labels_each_way_to_watch(
+        self, client, tmp_path, monkeypatch,
+    ):
+        calls, fake = self._wire(monkeypatch, tmp_path, availability={
+            "stream": ["Netflix"], "free": [], "ads": [], "rent": ["Apple TV"],
+            "buy": ["Amazon Video"], "link": "", "unknown": False,
+        })
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._results(1)
+            MockClient.return_value.get_availability.side_effect = fake
+            body = client.get("/find?q=film&where=1").get_data(as_text=True)
+
+        assert "Netflix" in body
+        assert "Apple TV" in body
+        assert "Amazon Video" in body
+        assert "Rent" in body and "Buy" in body
+
+    def test_justwatch_is_credited_wherever_availability_appears(
+        self, client, tmp_path, monkeypatch,
+    ):
+        """TMDB's terms: attribute JustWatch or lose API access."""
+        calls, fake = self._wire(monkeypatch, tmp_path, availability={
+            "stream": ["Netflix"], "free": [], "ads": [], "rent": [], "buy": [],
+            "link": "", "unknown": False,
+        })
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._results(1)
+            MockClient.return_value.get_availability.side_effect = fake
+            with_where = client.get("/find?q=film&where=1").get_data(as_text=True)
+            without = client.get("/find?q=film").get_data(as_text=True)
+
+        assert "JustWatch" in with_where
+        assert "JustWatch" not in without
+
+    def test_a_rate_limit_stops_the_batch_instead_of_finishing_it(
+        self, client, tmp_path, monkeypatch,
+    ):
+        """Nineteen more requests into a 429 is worse than a blank column."""
+        calls, fake = self._wire(monkeypatch, tmp_path, rate_limit_after=2)
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._results(10)
+            MockClient.return_value.get_availability.side_effect = fake
+            body = client.get("/find?q=film&where=1").get_data(as_text=True)
+
+        assert len(calls) == 3
+        assert "asked us to slow down" in body.lower()
+
+    def test_rows_still_render_when_availability_is_unknown(
+        self, client, tmp_path, monkeypatch,
+    ):
+        calls, fake = self._wire(monkeypatch, tmp_path, availability={
+            "stream": [], "free": [], "ads": [], "rent": [], "buy": [],
+            "link": "", "unknown": True,
+        })
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._results(1)
+            MockClient.return_value.get_availability.side_effect = fake
+            body = client.get("/find?q=film&where=1").get_data(as_text=True)
+
+        assert "Film 0" in body

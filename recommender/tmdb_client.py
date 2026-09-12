@@ -856,6 +856,69 @@ class TmdbClient:
         cache_path.write_text(json.dumps({"providers": providers}))
         return providers
 
+    # TMDB's watch/providers buckets, mapped to the names this app shows.
+    AVAILABILITY_BUCKETS = {
+        "flatrate": "stream",
+        "free": "free",
+        "ads": "ads",
+        "rent": "rent",
+        "buy": "buy",
+    }
+
+    def get_availability(
+        self,
+        tmdb_id: int,
+        content_type: str,
+        region: str,
+        cache_dir: str,
+    ) -> dict:
+        """Return where a title can be watched, and on what terms.
+
+        Wider than get_watch_providers, which reports subscriptions only
+        because query_engine depends on it meaning "on my subscription".
+        Widening that method in place would silently change which
+        recommendations survive its platform filter, and would make every
+        existing cache entry read as "no rent data" rather than "not fetched",
+        so this keeps its own cache path.
+
+        TmdbRateLimitError is deliberately not caught: a caller annotating a
+        page of results needs to stop rather than fire the rest of the batch
+        into a rate-limited API. Other failures return empty buckets with
+        unknown=True, since a missing label is not a wrong answer.
+        """
+        empty = {name: [] for name in self.AVAILABILITY_BUCKETS.values()}
+        if not content_type:
+            return {**empty, "link": "", "unknown": True}
+
+        cache_path = Path(cache_dir) / content_type / region / f"{tmdb_id}.json"
+        if cache_path.exists():
+            try:
+                return json.loads(cache_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                log.debug("Unreadable availability cache at %s; refetching", cache_path)
+
+        endpoint = f"{'tv' if content_type == 'tv' else 'movie'}/{tmdb_id}/watch/providers"
+        try:
+            data = self._get(endpoint)
+        except TmdbRateLimitError:
+            raise
+        except Exception as exc:
+            log.debug("Availability fetch failed for %s/%d: %s", content_type, tmdb_id, exc)
+            return {**empty, "link": "", "unknown": True}
+
+        region_data = (data.get("results") or {}).get(region, {})
+        availability = {**empty, "link": region_data.get("link", ""), "unknown": False}
+        for tmdb_key, name in self.AVAILABILITY_BUCKETS.items():
+            availability[name] = [
+                entry["provider_name"]
+                for entry in region_data.get(tmdb_key, [])
+                if entry.get("provider_name")
+            ]
+
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(availability))
+        return availability
+
     def clear_cache(self) -> None:
         """Delete all cached TMDB responses."""
         if self.cache_dir.exists():
