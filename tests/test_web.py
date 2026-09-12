@@ -2440,6 +2440,54 @@ class TestFindTextMode:
         assert response.status_code == 200
 
 
+class TestFindStaysOutOfTheRecommendersLane:
+    """Find answers "I know roughly what I want"; recommend and the wizard
+    answer "decide for me". The division only holds if Find never reaches for
+    the profile or the model, so that is asserted structurally rather than
+    trusted."""
+
+    def test_no_llm_call_and_no_taste_profile_read_in_the_find_path(self):
+        import ast
+        import inspect
+        import textwrap
+
+        def code_only(fn):
+            """Executable statements, with docstrings and comments dropped.
+
+            Reading the raw source would match the docstring that promises no
+            LLM call, so the promise would assert itself.
+            """
+            tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+            for node in ast.walk(tree):
+                body = getattr(node, "body", None)
+                if (
+                    isinstance(node, (ast.FunctionDef, ast.Module))
+                    and body
+                    and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)
+                ):
+                    node.body = body[1:]
+            return ast.unparse(tree)
+
+        path = "".join(
+            code_only(fn)
+            for fn in (
+                web.find,
+                web._find_browse,
+                web._find_annotations,
+                web._annotate_availability,
+                web._browse_filters,
+            )
+        )
+
+        for forbidden in (
+            "llm", "LLM", "taste_profile", "TASTE_PROFILE",
+            "rank_candidates", "parse_intent", "enrich",
+        ):
+            assert forbidden not in path, f"{forbidden} reached the Find path"
+
+
 class TestFindHideWatched:
     """Hiding is allowed to be the default only because it states what it did."""
 
