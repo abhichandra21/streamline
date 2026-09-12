@@ -2320,6 +2320,22 @@ class TestFindTextMode:
         assert "Not Seen" in body
         assert "Watched" in body
 
+    def test_an_unseen_row_offers_both_claims_a_user_can_make(self, client, tmp_path, monkeypatch):
+        """"I want to see this" and "I have seen this" are different claims, so
+        they are different actions on their own existing routes."""
+        self._wire(monkeypatch, tmp_path, watched={("tv", 9)})
+        with patch("recommender.tmdb_client.TmdbClient") as MockClient:
+            MockClient.return_value.get_disambiguation_candidates.return_value = self._result(
+                self._candidate(8, "Unseen"), self._candidate(9, "Seen"),
+            )
+            body = client.get("/find?q=s&watched=show").get_data(as_text=True)
+
+        assert "/watchlist/save" in body
+        assert "/archive/add" in body
+        # Offered on the unseen row, withheld from the one already archived.
+        assert "find-seen-tv-8" in body
+        assert "find-seen-tv-9" not in body
+
     def test_watchlisted_result_says_so(self, client, tmp_path, monkeypatch):
         from recommender.user_store import save_title
         db = self._wire(monkeypatch, tmp_path)

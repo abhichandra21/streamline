@@ -1,6 +1,7 @@
 # Design: the Find surface
 
-Status: proposed, revision 2. Revised after an external source-and-contract review; see section 13 for what changed.
+Status: **implemented**, revision 3. All seven slices are built and on `feature/find-surface`; see PR #87.
+Revision 2 revised the proposal after an external source-and-contract review (section 13). Revision 3 corrects this document to describe what was actually built, so the contract a reviewer reads is the contract the code keeps (section 14).
 Written for external review. A reviewer needs no prior context beyond this file and the source it cites.
 
 ## 1. Intent contract
@@ -63,7 +64,7 @@ This is mostly assembly. The delta is a page, a route, one new thin Discover met
 
 | Capability | Where | Fit |
 |---|---|---|
-| Text search across both content types, deduped by `(content_type, tmdb_id)`, ranked, with per-type failure flags | `tmdb_client.get_disambiguation_candidates()` | Direct fit. Truncates to 5 in three places; needs a limit parameter. |
+| Text search across both content types, deduped by `(content_type, tmdb_id)`, ranked, with per-type failure flags | `tmdb_client.get_disambiguation_candidates()` | Direct fit. Truncated to 5 in three places; a `limit` argument now reaches all three. |
 | A result row carrying id, type, title, year, poster, overview, original title, original language, vote average, vote count | `tmdb_client.DisambiguationCandidate` | Everything a search row needs. No detail fetch required. |
 | Discover with genre, origin country, original language, year range | `tmdb_client.search_by_filters()` | **Not** a fit as-is. See section 6. |
 | Cached flatrate provider names | `tmdb_client.get_watch_providers()` | Fit for the "on my subscription" meaning only. Not wide enough for this page. See section 6. |
@@ -190,10 +191,14 @@ Read the body at `tmdb_client.py:675`. It is a candidate generator for the recom
 A paged browse UI needs the opposite: one page, TMDB's order preserved, a total so paging can be bounded, no detail hydration, and request failure distinguishable from zero results.
 
 ```
-discover_page(content_type, filters: dict, page: int, sort_by: str) -> DiscoverPage
+discover_page(content_type, filters: dict, page: int = 1,
+              sort_by: str = "popularity.desc",
+              watch_region: str = "US") -> DiscoverPage
 ```
 
-returning rows plus `page`, `total_pages`, `total_results`, and a `failed` flag.
+returning `DiscoverRow` rows plus `page`, `total_pages`, `total_results`, and a `failed` flag.
+`DiscoverRow` deliberately is not a `TmdbMetadata`: hydrating one would reintroduce the per-row request this method exists to avoid. It carries the same fields a search candidate does, so `_find_annotations` reads both without knowing which it has.
+`sort_by` is validated by the caller against the module-level `DISCOVER_SORTS` before it reaches TMDB.
 `search_by_filters` is left untouched, because the recommend pipeline depends on its hydrating behaviour and this change must not reach into that path.
 
 ### `get_availability()` rather than widening `get_watch_providers()`
@@ -205,7 +210,21 @@ Two further reasons it cannot be edited in place:
 - **Cache schema.** Existing entries are `{"providers": ["Netflix", ...]}` — flatrate names, no monetization types. Widening the shape would make every cached file read as "no rent or buy data" rather than "not fetched yet", which is a silent wrong answer.
 - **Strict reader.** `query_engine` is the only consumer and reads the list positionally by name membership.
 
-So: a new `get_availability(tmdb_id, content_type, region)` returning types plus provider names, cached under a **separate path** (`providers_v2/` or a `version` key), leaving the existing cache and method untouched.
+So: a new
+
+```
+get_availability(tmdb_id, content_type, region, cache_dir) -> dict
+```
+
+returning `{stream, free, ads, rent, buy, link, unknown}`, cached under a **separate path** — `config.AVAILABILITY_CACHE_DIR`, which is `recommender/cache/availability/` — leaving the existing `providers/` cache and `get_watch_providers()` untouched.
+
+The provider ids that `with_watch_providers` needs come from a third method:
+
+```
+get_provider_options(content_type, region, cache_dir, limit=24) -> list[dict]
+```
+
+fetched once per region and cached, ordered by TMDB's `display_priority`. See section 10.
 
 ## 7. Ordering, boundaries and cost
 
@@ -236,15 +255,15 @@ TMDB's limit is around 40 requests per second and `TmdbRateLimitError` already e
 |---|---|
 | Nav | A `/find` entry in `base.html`, desktop rail and mobile tabs, with an `on_find` flag matching the existing pattern. |
 | Attribution | Visible JustWatch credit wherever availability appears, per TMDB's terms. Required, with a test. |
-| Config | `watch_region` already exists and is used. `streaming_platforms` is `[]`; see section 10. |
-| Help | `/help` gains a short section stating that Find is a lookup tool, does not use the taste profile, and costs no tokens. Without it the two surfaces are indistinguishable to a user. |
+| Config | `watch_region` already exists and is used. `AVAILABILITY_CACHE_DIR` is new, pointing at `recommender/cache/availability/`. `streaming_platforms` is untouched and still governs the recommender's platform filter only; see section 10. |
+| Help | `/help` has a section stating that Find is a lookup tool, does not use the taste profile, and costs no tokens, plus what hiding does to paging and that cinema listings are unavailable. Without it the two surfaces are indistinguishable to a user. |
 | Settings | No change. |
 | CLI | No change. `/find` is web-only by design; the CLI's job is querying the recommender. |
 | Logs | Query string and facet set at debug level, consistent with existing TMDB logging. |
 
 ## 9. Newly discovered work, classified
 
-**Required for correctness, inside this feature.**
+**Required for correctness, inside this feature. All built and tested.**
 
 - `discover_page()` reports request failure separately from zero results.
 - The hide chip states its count and its page-local scope, including when zero are hidden.
@@ -338,3 +357,57 @@ All eight findings from the external review identified something real. Resolutio
 | 6 | Confirmed. Tracking is loaded once and indexed; `ignored` and "no decision" render distinctly. |
 | 7 | Confirmed, and the review was incomplete: there are three truncation points, not two. |
 | 8 | The review's repository facts were right and revision 1 failed to cite the runtime. The risk statement itself was correct and stands, now verified against the live host. This also surfaced that the committed systemd unit is stale relative to the deployed one, logged as unrelated work. |
+
+## 14. The contract, as built
+
+What a reviewer should hold the code to. Every row was checked against the source on `feature/find-surface`, not against revision 2's intent.
+
+### Surfaces
+
+| Path | Behaviour |
+|---|---|
+| `GET /find` | Text lookup. `q` required; empty `q` renders the page and issues no request. |
+| `GET /find?mode=browse` | Faceted browse. `type`, `genre`, `year_from`, `year_to`, `language`, `country`, `min_rating`, `min_votes`, `sort`, repeated `provider`, `page`. |
+| `watched=show` | Reveals watched rows. Absent means hidden. Applies to both modes. |
+| `where=1` | Adds availability. Absent means off. Applies to both modes. |
+
+No new write routes. Row actions post to `POST /watchlist/save` and `POST /archive/add`, both unchanged.
+
+### Client methods
+
+| Method | Contract |
+|---|---|
+| `get_disambiguation_candidates(..., limit=5)` | Default 5 keeps the manual-add picker unchanged. `/find` passes 20. The limit reaches all three former truncation points. |
+| `discover_page(...)` | Exactly one request. No hydration. TMDB's order preserved. Reports `total_pages`; `failed` distinguishes a broken request from an empty catalogue. |
+| `get_availability(...)` | All five monetization buckets. Own cache path. `TmdbRateLimitError` propagates; other failures return empty buckets with `unknown=True`. |
+| `get_provider_options(...)` | Region's providers by `display_priority`, cached; `[]` on failure. |
+| `get_watch_providers(...)` | **Unchanged.** Still flatrate-only, still what `query_engine` filters against. |
+| `search_by_filters(...)` | **Unchanged.** Still the recommender's hydrating candidate generator. |
+
+### Invariants a reviewer should try to break
+
+1. A TMDB failure never renders as an empty result set, in either mode.
+2. A fully hidden page never says "no matches"; it says everything on it is already in the library.
+3. The hide chip states its count even at zero.
+4. Hiding is page-local and the page says so. Pages are not backfilled.
+5. Availability is off unless asked for, and a rate limit stops the batch rather than finishing it.
+6. JustWatch is credited whenever availability is shown, and only then.
+7. `sort` never reaches TMDB unvalidated.
+8. Local state is read once per request, never once per row.
+9. Chip, availability and paging links carry the full facet set, so a toggle never silently drops a filter.
+10. No LLM call and no taste-profile read anywhere in this path.
+
+### Deliberately absent
+
+- Theatrical showtimes. TMDB has no such data.
+- A Follow action on Find rows. It would 404; see section 5.
+- A content-type control in text mode. The backend always searches both.
+- Local over-fetching to backfill hidden rows. Rejected in section 5, not deferred.
+- Any fix to the `UserStateIndex` identity inconsistency, or to the stale systemd unit. Both section 9.
+
+### Test coverage
+
+53 tests across `tests/test_tmdb_client.py` and `tests/test_web.py`, 770 passing overall.
+The two hardest-tested paths are the two likeliest to fail silently: failure rendering as emptiness, and a widened availability cache misreading existing flatrate entries.
+
+Verified in the running app against live TMDB, not only in tests: both modes, all annotation states, the provider facet, paging bounds, availability labelling and attribution, and both row actions with their writes confirmed in `data/streamline.db` and then undone.
