@@ -205,6 +205,74 @@ class TestYourShows:
             web.config.EVENT_DB_PATH, "Returning Show", 20, tracking_from_season=2,
         )
 
+    def test_watched_show_can_be_followed_without_a_release_signal(self, client, monkeypatch):
+        """The Lynley case: nothing announced, so no card, so no other way in."""
+        archive = [{
+            "tmdb_id": 274479,
+            "title": "A Place of Hiding-Lynley S1",
+            "content_type": "tv",
+        }]
+        monkeypatch.setattr(web, "_show_page_data", lambda: (archive, [], _show_sections()))
+        monkeypatch.setattr(web.show_tracker, "load_snapshots", lambda _dir: {
+            274479: {"title": "Lynley", "seasons": [{"season_number": 1}]},
+        })
+        follow = MagicMock()
+        monkeypatch.setattr(web.user_store, "follow_show", follow)
+
+        response = client.post("/shows/follow-title", data=_csrf_form(
+            tmdb_id="274479", title="Untrusted", tracking_from_season="99",
+        ))
+
+        assert response.status_code == 303
+        assert "/title/274479" in response.headers["Location"]
+        # TMDB's name, not the messy archive title that gets stored and displayed.
+        follow.assert_called_once_with(
+            web.config.EVENT_DB_PATH, "Lynley", 274479, tracking_from_season=2,
+        )
+
+    def test_following_from_the_title_page_will_not_overwrite_existing_tracking(
+        self, client, monkeypatch,
+    ):
+        archive = [{"tmdb_id": 10, "title": "Ready Show", "content_type": "tv"}]
+        tracking = [{"tmdb_id": 10, "title": "Ready Show", "state": "ignored"}]
+        monkeypatch.setattr(web, "_show_page_data", lambda: (archive, tracking, _show_sections()))
+        follow = MagicMock()
+        monkeypatch.setattr(web.user_store, "follow_show", follow)
+
+        response = client.post("/shows/follow-title", data=_csrf_form(tmdb_id="10"))
+
+        assert response.status_code == 409
+        follow.assert_not_called()
+
+    def test_following_from_the_title_page_refuses_movies_and_unwatched_shows(
+        self, client, monkeypatch,
+    ):
+        archive = [{"tmdb_id": 60, "title": "A Movie", "content_type": "movie"}]
+        monkeypatch.setattr(web, "_show_page_data", lambda: (archive, [], _show_sections()))
+        follow = MagicMock()
+        monkeypatch.setattr(web.user_store, "follow_show", follow)
+
+        movie = client.post("/shows/follow-title", data=_csrf_form(tmdb_id="60"))
+        unwatched = client.post("/shows/follow-title", data=_csrf_form(tmdb_id="70"))
+
+        assert movie.status_code == 404
+        assert unwatched.status_code == 404
+        follow.assert_not_called()
+
+    def test_following_from_the_title_page_needs_a_cached_season_to_start_from(
+        self, client, monkeypatch,
+    ):
+        archive = [{"tmdb_id": 80, "title": "Uncached Show", "content_type": "tv"}]
+        monkeypatch.setattr(web, "_show_page_data", lambda: (archive, [], _show_sections()))
+        monkeypatch.setattr(web.show_tracker, "load_snapshots", lambda _dir: {})
+        follow = MagicMock()
+        monkeypatch.setattr(web.user_store, "follow_show", follow)
+
+        response = client.post("/shows/follow-title", data=_csrf_form(tmdb_id="80"))
+
+        assert response.status_code == 404
+        follow.assert_not_called()
+
     def test_ignore_candidate_prevents_future_suggestions(self, client, monkeypatch):
         archive = [{"tmdb_id": 20, "title": "Returning Show", "content_type": "tv"}]
         monkeypatch.setattr(web, "_show_page_data", lambda: (archive, [], _show_sections()))

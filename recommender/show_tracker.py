@@ -615,3 +615,19 @@ def build_sections(
             })
 
     return sections
+
+
+def next_unstarted_season(snapshot: dict | None) -> int | None:
+    """Return the season to start tracking a show you have finished watching.
+
+    Anything TMDB already knows about is behind you, so tracking starts at the
+    season after the highest known one. Season 0 holds specials and never
+    counts. None means the snapshot has no usable season, so following would be
+    a guess rather than a record of intent.
+    """
+    regular_seasons = [
+        season["season_number"]
+        for season in (snapshot or {}).get("seasons", [])
+        if isinstance(season.get("season_number"), int) and season["season_number"] > 0
+    ]
+    return max(regular_seasons) + 1 if regular_seasons else None
