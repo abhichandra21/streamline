@@ -734,6 +734,45 @@ def test_get_disambiguation_candidates_reports_per_type_failure():
         assert result.candidates == []
 
 
+def test_get_disambiguation_candidates_honours_a_higher_limit():
+    """The Find page asks for more rows than the manual-add picker needs."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        many = [
+            _make_tv_search_result(i, f"Show {i}", "2010-01-01", vote_count=100 - i, popularity=10)
+            for i in range(8)
+        ]
+        with patch.object(client, "_search_candidates_or_error") as mock_search:
+            mock_search.side_effect = [(many, True), ([], True)]
+            result = client.get_disambiguation_candidates("Show", "tv", limit=20)
+        assert len(result.candidates) == 8
+
+
+def test_disambiguation_limit_reaches_the_per_endpoint_truncation():
+    """A post-merge cap alone still loses rows, since each endpoint truncates first."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        many = [
+            _make_tv_search_result(i, f"Show {i}", "2010-01-01", vote_count=100 - i, popularity=10)
+            for i in range(8)
+        ]
+        with patch.object(client, "_get") as mock_get:
+            mock_get.side_effect = [{"results": many}, {"results": []}]
+            result = client.get_disambiguation_candidates("Show", "tv", limit=20)
+        assert len(result.candidates) == 8
+
+
+def test_search_candidates_keeps_its_five_row_default():
+    """The manual-add picker's contract does not move."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        many = [_make_tv_search_result(i, f"Show {i}") for i in range(8)]
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = {"results": many}
+            results = client._search_candidates("Show", "tv")
+        assert len(results) == 5
+
+
 def test_get_disambiguation_candidates_caps_at_five():
     with tempfile.TemporaryDirectory() as tmp:
         client = make_client(tmp)

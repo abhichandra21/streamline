@@ -192,6 +192,7 @@ class TmdbClient:
 
     def _search_candidates_or_error(
         self, title: str, content_type: str, hints: MatchHints | None = None,
+        limit: int = 5,
     ) -> tuple[list[dict], bool]:
         """Like _search_candidates, but reports whether the request itself
         succeeded (True, even with zero results) or failed due to a
@@ -206,7 +207,7 @@ class TmdbClient:
             hinted_params = {**params, year_param: hints.release_year}
             try:
                 data = self._get(endpoint, hinted_params)
-                results = data.get("results", [])[:5]
+                results = data.get("results", [])[:limit]
                 if results:
                     return results, True
             except Exception as exc:
@@ -215,20 +216,22 @@ class TmdbClient:
         # Fall back to unhinted search
         try:
             data = self._get(endpoint, params)
-            return data.get("results", [])[:5], True
+            return data.get("results", [])[:limit], True
         except Exception as exc:
             log.debug("TMDB search error for %r (%s): %s", title, content_type, exc)
             return [], False
 
     def _search_candidates(
         self, title: str, content_type: str, hints: MatchHints | None = None,
+        limit: int = 5,
     ) -> list[dict]:
-        """Return up to 5 TMDB search results. Uses year hint when available."""
-        results, _ = self._search_candidates_or_error(title, content_type, hints)
+        """Return up to `limit` TMDB search results. Uses year hint when available."""
+        results, _ = self._search_candidates_or_error(title, content_type, hints, limit)
         return results
 
     def get_disambiguation_candidates(
         self, title: str, content_type_hint: str, hints: MatchHints | None = None,
+        limit: int = 5,
     ) -> DisambiguationResult:
         """Search both content types for `title` and return a ranked, deduped
         candidate list plus per-type search-failure flags.
@@ -239,8 +242,9 @@ class TmdbClient:
         """
         alt_type = "movie" if content_type_hint == "tv" else "tv"
 
-        hinted_raw, hinted_ok = self._search_candidates_or_error(title, content_type_hint, hints)
-        alt_raw, alt_ok = self._search_candidates_or_error(title, alt_type, hints)
+        hinted_raw, hinted_ok = self._search_candidates_or_error(
+            title, content_type_hint, hints, limit)
+        alt_raw, alt_ok = self._search_candidates_or_error(title, alt_type, hints, limit)
 
         merged: dict[tuple[str, int], DisambiguationCandidate] = {}
         for ct, raw_list in ((content_type_hint, hinted_raw), (alt_type, alt_raw)):
@@ -264,7 +268,7 @@ class TmdbClient:
                     vote_count=raw.get("vote_count") or 0,
                 )
 
-        ranked = sorted(merged.values(), key=lambda c: c.score, reverse=True)[:5]
+        ranked = sorted(merged.values(), key=lambda c: c.score, reverse=True)[:limit]
         return DisambiguationResult(
             candidates=ranked,
             hinted_type_failed=not hinted_ok,
