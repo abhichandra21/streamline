@@ -213,8 +213,8 @@ class TestYourShows:
             "content_type": "tv",
         }]
         monkeypatch.setattr(web, "_show_page_data", lambda: (archive, [], _show_sections()))
-        monkeypatch.setattr(web.show_tracker, "load_snapshots", lambda _dir: {
-            274479: {"title": "Lynley", "seasons": [{"season_number": 1}]},
+        monkeypatch.setattr(web.show_tracker, "load_snapshot", lambda _dir, _id: {
+            "title": "Lynley", "seasons": [{"season_number": 1}],
         })
         follow = MagicMock()
         monkeypatch.setattr(web.user_store, "follow_show", follow)
@@ -264,7 +264,7 @@ class TestYourShows:
     ):
         archive = [{"tmdb_id": 80, "title": "Uncached Show", "content_type": "tv"}]
         monkeypatch.setattr(web, "_show_page_data", lambda: (archive, [], _show_sections()))
-        monkeypatch.setattr(web.show_tracker, "load_snapshots", lambda _dir: {})
+        monkeypatch.setattr(web.show_tracker, "load_snapshot", lambda _dir, _id: None)
         follow = MagicMock()
         monkeypatch.setattr(web.user_store, "follow_show", follow)
 
@@ -2166,3 +2166,111 @@ class TestArchiveDisambiguatePartial:
         html = self._render()
         assert "value=\"unmatched\"" in html
         assert "save as unmatched" in html
+
+
+class TestFollowFromTitlePage:
+    """The title page is the only place intent can be recorded without a signal."""
+
+    def _page(self, monkeypatch, tracking_rows, snapshot, content_type="tv"):
+        from recommender.tmdb_client import TmdbMetadata
+
+        meta = TmdbMetadata(tmdb_id=274479, content_type=content_type, title="Lynley")
+        monkeypatch.setattr(web, "_load_enrichments", lambda: {})
+        monkeypatch.setattr(web, "_ensure_user_store_once", lambda: None)
+        monkeypatch.setattr(web.user_store, "list_show_tracking", lambda _db: tracking_rows)
+        monkeypatch.setattr(web.show_tracker, "load_snapshot", lambda _dir, _id: snapshot)
+        user_state = MagicMock()
+        user_state.is_manually_watched.return_value = True
+        user_state.is_in_watchlist.return_value = False
+        user_state.is_dismissed.return_value = False
+        user_state.get_rating.return_value = None
+        monkeypatch.setattr(web, "_load_user_state", lambda: user_state)
+        monkeypatch.setattr(web, "_get_context", lambda: MagicMock(
+            tmdb_client=MagicMock(get_cached_by_id=lambda tmdb_id, ct: meta),
+            watch_index=MagicMock(tmdb_keys={(content_type, 274479)}),
+        ))
+
+    def test_untracked_show_offers_the_season_it_would_start_from(self, client, monkeypatch):
+        self._page(monkeypatch, [], {"seasons": [{"season_number": 1}]})
+
+        html = client.get("/title/274479?type=tv").get_data(as_text=True)
+
+        assert "+ Follow from S2" in html
+        assert "/shows/follow-title" in html
+
+    def test_followed_show_states_it_rather_than_offering_again(self, client, monkeypatch):
+        self._page(
+            monkeypatch,
+            [{"tmdb_id": 274479, "state": "following", "tracking_from_season": 2}],
+            {"seasons": [{"season_number": 1}]},
+        )
+
+        html = client.get("/title/274479?type=tv").get_data(as_text=True)
+
+        assert "Following from S2" in html
+        assert "+ Follow from" not in html
+
+    def test_ignored_show_is_named_as_untracked_without_a_follow_button(
+        self, client, monkeypatch,
+    ):
+        self._page(
+            monkeypatch,
+            [{"tmdb_id": 274479, "state": "ignored", "tracking_from_season": 2}],
+            {"seasons": [{"season_number": 1}]},
+        )
+
+        html = client.get("/title/274479?type=tv").get_data(as_text=True)
+
+        assert "Not tracked" in html
+        assert "/shows/follow-title" not in html
+
+    def test_no_control_without_a_snapshot_to_derive_a_season_from(self, client, monkeypatch):
+        self._page(monkeypatch, [], None)
+
+        html = client.get("/title/274479?type=tv").get_data(as_text=True)
+
+        assert "/shows/follow-title" not in html
+
+    def test_movies_are_never_offered_a_follow_control(self, client, monkeypatch):
+        self._page(monkeypatch, [], {"seasons": [{"season_number": 1}]}, content_type="movie")
+
+        html = client.get("/title/274479?type=movie").get_data(as_text=True)
+
+        assert "/shows/follow-title" not in html
+
+    def test_htmx_follow_swaps_the_button_for_the_followed_state(self, client, monkeypatch):
+        archive = [{"tmdb_id": 274479, "title": "Lynley S1", "content_type": "tv"}]
+        monkeypatch.setattr(web, "_show_page_data", lambda: (archive, [], _show_sections()))
+        monkeypatch.setattr(web, "_ensure_user_store_once", lambda: None)
+        monkeypatch.setattr(web.show_tracker, "load_snapshot", lambda _dir, _id: {
+            "title": "Lynley", "seasons": [{"season_number": 1}],
+        })
+        monkeypatch.setattr(web.user_store, "follow_show", MagicMock())
+        # The row the follow just wrote, as the re-read would see it.
+        monkeypatch.setattr(web.user_store, "list_show_tracking", lambda _db: [
+            {"tmdb_id": 274479, "state": "following", "tracking_from_season": 2},
+        ])
+
+        response = client.post(
+            "/shows/follow-title",
+            data=_csrf_form(tmdb_id="274479"),
+            headers={"HX-Request": "true"},
+        )
+
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "Following from S2" in html
+        assert "+ Follow from" not in html
+
+    def test_no_javascript_follow_still_lands_back_on_the_title_page(self, client, monkeypatch):
+        archive = [{"tmdb_id": 274479, "title": "Lynley S1", "content_type": "tv"}]
+        monkeypatch.setattr(web, "_show_page_data", lambda: (archive, [], _show_sections()))
+        monkeypatch.setattr(web.show_tracker, "load_snapshot", lambda _dir, _id: {
+            "title": "Lynley", "seasons": [{"season_number": 1}],
+        })
+        monkeypatch.setattr(web.user_store, "follow_show", MagicMock())
+
+        response = client.post("/shows/follow-title", data=_csrf_form(tmdb_id="274479"))
+
+        assert response.status_code == 303
+        assert response.headers["Location"].endswith("/title/274479?type=tv")

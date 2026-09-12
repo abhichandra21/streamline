@@ -113,6 +113,14 @@ def load_snapshots(cache_dir: str | Path) -> dict[int, dict]:
     return snapshots
 
 
+def load_snapshot(cache_dir: str | Path, tmdb_id: int) -> dict | None:
+    """Read one cached snapshot without scanning the whole release cache."""
+    snapshot = _read_json(_snapshot_path(cache_dir, tmdb_id))
+    if not snapshot or snapshot.get("tmdb_id") != tmdb_id:
+        return None
+    return snapshot
+
+
 def _snapshot_is_fresh(snapshot: dict | None, now: datetime, max_age: timedelta) -> bool:
     fetched_at = _parse_datetime((snapshot or {}).get("fetched_at"))
     return bool(fetched_at and now - fetched_at < max_age)

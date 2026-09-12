@@ -950,7 +950,7 @@ def follow_show_from_title() -> Response:
     if any(row["tmdb_id"] == tmdb_id for row in tracking_rows):
         return Response("Show is already tracked", status=409)
 
-    snapshot = show_tracker.load_snapshots(config.RELEASE_CACHE_DIR).get(tmdb_id)
+    snapshot = show_tracker.load_snapshot(config.RELEASE_CACHE_DIR, tmdb_id)
     season_number = show_tracker.next_unstarted_season(snapshot)
     if season_number is None:
         return Response("Show has no cached season to track from", status=404)
@@ -961,6 +961,12 @@ def follow_show_from_title() -> Response:
         tmdb_id,
         tracking_from_season=season_number,
     )
+    if _is_htmx():
+        return render_template(
+            "_track_state.html",
+            tmdb_id=tmdb_id,
+            tracking=_title_tracking_state(tmdb_id, "tv"),
+        )
     return redirect(url_for("title_detail", tmdb_id=tmdb_id, type="tv"), code=303)
 
 
@@ -1443,7 +1449,41 @@ def title_detail(tmdb_id: int) -> str:
     return render_template(
         "title.html", meta=meta, description=description, overview=overview,
         tmdb_id=tmdb_id, ct=ct, poster=poster, user_state=state,
+        tracking=_title_tracking_state(tmdb_id, ct),
     )
+
+
+def _title_tracking_state(tmdb_id: int, content_type: str) -> dict:
+    """Follow state for a TV title: how it is tracked, or whether it could be.
+
+    from_season is what following would start from, so the button can say it
+    out loud. can_follow is false without a cached snapshot, because then the
+    starting season would be a guess.
+    """
+    if content_type != "tv":
+        return {"state": None, "from_season": None, "can_follow": False}
+    _ensure_user_store_once()
+    row = next(
+        (
+            tracked
+            for tracked in user_store.list_show_tracking(config.EVENT_DB_PATH)
+            if tracked["tmdb_id"] == tmdb_id
+        ),
+        None,
+    )
+    if row:
+        return {
+            "state": row.get("state"),
+            "from_season": row.get("tracking_from_season"),
+            "can_follow": False,
+        }
+    snapshot = show_tracker.load_snapshot(config.RELEASE_CACHE_DIR, tmdb_id)
+    from_season = show_tracker.next_unstarted_season(snapshot)
+    return {
+        "state": None,
+        "from_season": from_season,
+        "can_follow": from_season is not None,
+    }
 
 
 def _load_user_state():

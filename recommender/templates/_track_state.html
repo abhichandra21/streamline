@@ -1,0 +1,20 @@
+{# Follow control for a TV title. Swapped in place after following. #}
+<span id="title-track">
+  {% if tracking.state == "following" %}
+  <a href="/shows" class="mono" style="font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--accent2); transition:opacity 0.15s;"
+     onmouseover="this.style.opacity='0.7'" onmouseout="this.style.opacity='1'"
+  >Following{% if tracking.from_season %} from S{{ tracking.from_season }}{% endif %}</a>
+  {% elif tracking.state == "ignored" %}
+  <span class="mono" style="font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted);">Not tracked</span>
+  {% elif tracking.can_follow %}
+  <form hx-post="/shows/follow-title" hx-target="#title-track" hx-swap="outerHTML"
+        action="/shows/follow-title" method="post" style="margin:0; display:inline;">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="tmdb_id" value="{{ tmdb_id }}">
+    <button type="submit" class="mono" style="font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; background:none; border:none; cursor:pointer; padding:0; color:var(--teal); transition:opacity 0.15s;"
+      onmouseover="this.style.opacity='0.7'" onmouseout="this.style.opacity='1'"
+      title="Tell Streamline to watch for season {{ tracking.from_season }}"
+    >+ Follow from S{{ tracking.from_season }}</button>
+  </form>
+  {% endif %}
+</span>
