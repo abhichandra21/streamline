@@ -888,3 +888,119 @@ def test_availability_for_a_region_with_no_data_is_not_an_error():
 
     assert availability["stream"] == []
     assert availability["unknown"] is False
+
+
+# --- discover_page tests (a browser, not a candidate generator) ---
+
+def _discover_response(page, total_pages, *titles):
+    return {
+        "page": page,
+        "total_pages": total_pages,
+        "total_results": total_pages * 20,
+        "results": [
+            {
+                "id": 1000 + i,
+                "title": title,
+                "release_date": "2020-01-01",
+                "poster_path": None,
+                "overview": "",
+                "original_language": "en",
+                "original_title": title,
+                "vote_average": 7.5,
+                "vote_count": 500,
+            }
+            for i, title in enumerate(titles)
+        ],
+    }
+
+
+def test_discover_page_preserves_tmdb_ordering():
+    """search_by_filters returns dict values and loses the sort; paging needs it kept."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = _discover_response(1, 3, "First", "Second", "Third")
+            result = client.discover_page("movie", {}, page=1, sort_by="vote_average.desc")
+
+    assert [row.title for row in result.rows] == ["First", "Second", "Third"]
+
+
+def test_discover_page_reports_the_total_so_paging_can_be_bounded():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = _discover_response(2, 7, "A")
+            result = client.discover_page("movie", {}, page=2, sort_by="popularity.desc")
+
+    assert result.page == 2
+    assert result.total_pages == 7
+    assert result.failed is False
+
+
+def test_discover_page_fetches_one_page_and_no_details():
+    """Hydrating every row is what makes search_by_filters unusable here."""
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = _discover_response(1, 5, *[f"T{i}" for i in range(20)])
+            client.discover_page("movie", {}, page=1, sort_by="popularity.desc")
+
+    assert mock_get.call_count == 1
+    assert mock_get.call_args.args[0] == "discover/movie"
+
+
+def test_discover_page_distinguishes_failure_from_an_empty_catalogue():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get", side_effect=RuntimeError("boom")):
+            failed = client.discover_page("movie", {}, page=1, sort_by="popularity.desc")
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = _discover_response(1, 0)
+            empty = client.discover_page("movie", {}, page=1, sort_by="popularity.desc")
+
+    assert failed.failed is True
+    assert failed.rows == []
+    assert empty.failed is False
+    assert empty.rows == []
+
+
+def test_discover_page_maps_filters_to_tmdb_parameters():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = _discover_response(1, 1, "X")
+            client.discover_page("tv", {
+                "genres": ["crime"],
+                "languages": ["en"],
+                "origin_countries": ["GB"],
+                "year_from": 2015,
+                "year_to": 2020,
+                "min_rating": 7.0,
+                "min_votes": 250,
+                "providers": [8, 9],
+            }, page=1, sort_by="vote_average.desc")
+            params = mock_get.call_args.kwargs.get("params") or mock_get.call_args.args[1]
+
+    assert params["with_original_language"] == "en"
+    assert params["with_origin_country"] == "GB"
+    assert params["first_air_date.gte"] == "2015-01-01"
+    assert params["first_air_date.lte"] == "2020-12-31"
+    assert params["vote_average.gte"] == 7.0
+    assert params["vote_count.gte"] == 250
+    assert params["sort_by"] == "vote_average.desc"
+    assert params["with_watch_providers"] == "8|9"
+    assert params["watch_region"]
+    # Rentals count as available; the owner asked what is out there, not what
+    # is included. So no monetization constraint is sent.
+    assert "with_watch_monetization_types" not in params
+
+
+def test_discover_page_clamps_the_page_number():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, "_get") as mock_get:
+            mock_get.return_value = _discover_response(1, 1, "X")
+            client.discover_page("movie", {}, page=0, sort_by="popularity.desc")
+            params = mock_get.call_args.kwargs.get("params") or mock_get.call_args.args[1]
+
+    assert params["page"] == 1

@@ -79,6 +79,35 @@ class DisambiguationCandidate:
 
 
 @dataclass
+class DiscoverRow:
+    """One row of a Discover page, straight from the list response.
+
+    Deliberately not a TmdbMetadata: hydrating full details for every row is
+    what makes search_by_filters unusable for browsing.
+    """
+    tmdb_id: int
+    content_type: str
+    title: str
+    year: int | None
+    poster_path: str | None
+    overview: str = ""
+    original_title: str = ""
+    original_language: str = ""
+    vote_average: float = 0.0
+    vote_count: int = 0
+
+
+@dataclass
+class DiscoverPage:
+    """A page of Discover results, with enough to page and to report failure."""
+    rows: list[DiscoverRow] = field(default_factory=list)
+    page: int = 1
+    total_pages: int = 0
+    total_results: int = 0
+    failed: bool = False
+
+
+@dataclass
 class DisambiguationResult:
     """Result of searching both content types for a manual-add title."""
     candidates: list[DisambiguationCandidate] = field(default_factory=list)
@@ -788,6 +817,88 @@ class TmdbClient:
 
         log.debug("Discover returned %d candidates after %d pages", len(candidates), page - 1)
         return list(candidates.values())
+
+    # Sorts offered to the browse UI. TMDB accepts more; these are the ones
+    # that mean something when you are looking for something to watch.
+    DISCOVER_SORTS = (
+        "popularity.desc",
+        "vote_average.desc",
+        "primary_release_date.desc",
+        "revenue.desc",
+    )
+
+    def discover_page(
+        self,
+        content_type: str,
+        filters: dict,
+        page: int = 1,
+        sort_by: str = "popularity.desc",
+        watch_region: str = "US",
+    ) -> DiscoverPage:
+        """Fetch one page of Discover results, in TMDB's order.
+
+        Unlike search_by_filters, which exists to fill a candidate pool for the
+        recommender, this makes exactly one request, hydrates nothing, keeps
+        TMDB's ordering, reports the total so paging can be bounded, and
+        distinguishes a failed request from an empty catalogue.
+        """
+        prefix = "tv" if content_type == "tv" else "movie"
+        genre_map = TV_GENRE_IDS if content_type == "tv" else MOVIE_GENRE_IDS
+        date_field = "first_air_date" if content_type == "tv" else "primary_release_date"
+
+        params: dict = {"page": max(1, int(page or 1)), "sort_by": sort_by}
+
+        genres = filters.get("genres") or []
+        ids = [str(genre_map[g.lower()]) for g in genres if g.lower() in genre_map]
+        if ids:
+            params["with_genres"] = ",".join(ids)
+        if filters.get("origin_countries"):
+            params["with_origin_country"] = "|".join(filters["origin_countries"])
+        if filters.get("languages"):
+            params["with_original_language"] = "|".join(filters["languages"])
+        if filters.get("year_from"):
+            params[f"{date_field}.gte"] = f"{filters['year_from']}-01-01"
+        if filters.get("year_to"):
+            params[f"{date_field}.lte"] = f"{filters['year_to']}-12-31"
+        if filters.get("min_rating"):
+            params["vote_average.gte"] = filters["min_rating"]
+        if filters.get("min_votes"):
+            params["vote_count.gte"] = filters["min_votes"]
+        if filters.get("providers"):
+            # No with_watch_monetization_types: rentals and purchases count as
+            # available here, because the question is what is out there.
+            params["with_watch_providers"] = "|".join(str(p) for p in filters["providers"])
+            params["watch_region"] = watch_region
+
+        try:
+            data = self._get(f"discover/{prefix}", params=params)
+        except Exception as exc:
+            log.warning("Discover page fetch failed (%s, page %s): %s", content_type, page, exc)
+            return DiscoverPage(page=params["page"], failed=True)
+
+        rows = []
+        for item in data.get("results", []):
+            date_str = item.get("first_air_date") or item.get("release_date") or ""
+            title = item.get("name") or item.get("title") or ""
+            rows.append(DiscoverRow(
+                tmdb_id=item["id"],
+                content_type=content_type,
+                title=title,
+                year=int(date_str[:4]) if len(date_str) >= 4 else None,
+                poster_path=item.get("poster_path"),
+                overview=item.get("overview") or "",
+                original_title=item.get("original_name") or item.get("original_title") or "",
+                original_language=item.get("original_language") or "",
+                vote_average=item.get("vote_average") or 0.0,
+                vote_count=item.get("vote_count") or 0,
+            ))
+
+        return DiscoverPage(
+            rows=rows,
+            page=data.get("page", params["page"]),
+            total_pages=data.get("total_pages", 0),
+            total_results=data.get("total_results", 0),
+        )
 
     def get_candidates(self, content_type: str, size: int = 500) -> list[TmdbMetadata]:
         """
