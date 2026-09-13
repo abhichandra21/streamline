@@ -273,46 +273,31 @@
   }
   .find-card:hover .find-overview { -webkit-line-clamp: unset; }
 
-  /* Availability chips: a colored dot says the kind, the label says the shops. */
-  .find-avail { list-style: none; display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.15rem; }
-  .find-chip {
+  /* Per-card actions: cinema badge, where-to-watch link, Save. */
+  .find-cinema {
     display: inline-flex; align-items: center; gap: 0.45rem;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 0.6rem; letter-spacing: 0.06em; text-transform: uppercase;
+    font-size: 0.58rem; letter-spacing: 0.1em; text-transform: uppercase;
     color: var(--text);
-    padding: 0.28rem 0.6rem 0.28rem 0.5rem;
-    border: 1px solid var(--border);
+    padding: 0.35rem 0.75rem 0.35rem 0.6rem;
+    border: 1px solid rgba(232,93,74,0.45);
     border-radius: 999px;
-    background: rgba(255,255,255,0.02);
-    max-width: 100%;
   }
-  .find-chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--c, var(--muted)); box-shadow: 0 0 8px var(--c, transparent); flex-shrink: 0; }
-  .find-chip span {
-    color: var(--muted); text-transform: none; letter-spacing: 0;
-    font-family: 'DM Sans', sans-serif; font-size: 0.74rem;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    max-width: 34ch;
+  .find-cinema i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .find-where {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.58rem; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--muted);
+    text-decoration: none;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid transparent;
+    transition: color 0.2s, border-color 0.2s;
   }
-  .find-chip span::before { content: '— '; color: var(--border); }
-  .find-chip em {
-    font-style: normal; color: var(--muted);
-    font-family: 'DM Sans', sans-serif; font-size: 0.72rem;
-  }
-  .find-chip a { display: inline-flex; align-items: center; gap: 0.45rem; color: inherit; text-decoration: none; }
-  .find-chip a:hover { text-decoration: none; }
-  .find-chip:has(a):hover { border-color: var(--accent2); }
-  .find-chip:has(a):hover span { color: var(--body); }
-  .find-chip.is-stream { --c: var(--teal); }
-  .find-chip.is-free   { --c: var(--lavender); }
-  .find-chip.is-ads    { --c: #7c6fb8; }
-  .find-chip.is-rent   { --c: var(--accent2); }
-  .find-chip.is-buy    { --c: #c98330; }
-  .find-chip.is-cinema { --c: var(--accent); border-color: rgba(232,93,74,0.45); }
-  .find-chip.is-unknown { color: var(--muted); border-style: dashed; }
-  .find-chip.is-unknown i { box-shadow: none; }
+  .find-where::after { content: ' \2197'; }
+  .find-where:hover { color: var(--accent2); border-bottom-color: var(--accent2); text-decoration: none; }
 
   /* Save to watchlist: one quiet outline button per card, coral when saved. */
-  .find-actions { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.25rem; }
+  .find-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem 1rem; margin-top: 0.35rem; }
   .find-save form { margin: 0; display: inline; }
   .find-save button {
     font-family: 'JetBrains Mono', monospace;
@@ -361,14 +346,6 @@
   .find-more.htmx-request .find-more-spin { display: inline-block; }
   .find-more.htmx-request { pointer-events: none; }
   .find-end .find-more-label { border-style: dashed; }
-
-  .find-credit {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.56rem; letter-spacing: 0.1em; text-transform: uppercase;
-    color: var(--muted);
-    text-align: right;
-    margin-top: 1.5rem;
-  }
 
   @media (max-width: 860px) {
     .find-form { grid-template-columns: 1fr 1fr; padding: 1.15rem 1.25rem 1.1rem; }
@@ -483,24 +460,23 @@
     <div>No unwatched {{ 'TV series' if criteria.content_type == 'tv' else 'movies' }} matched. Widen the period or drop a filter, then press Show results.</div>
   </div>
   {%- else %}
-    {%- if results.availability_rate_limited %}
+    {%- if results.now_playing_rate_limited %}
     <div class="find-note is-warn">
-      <span class="find-cap">Availability</span>
-      <div>TMDB rate limit reached while checking availability. Every title is shown; some are labelled Unknown. Reload in a minute for fresh labels.</div>
+      <span class="find-cap">Cinemas</span>
+      <div>TMDB rate limit reached while reading cinema listings. Every title is shown; In theaters badges are missing for this batch.</div>
     </div>
     {%- endif %}
 
     <div class="find-ledger-head">
       {%- set sort_label = dict(sort_options).get(criteria.sort, 'Rating') %}
       <span class="find-cap">{{ 'Series' if criteria.content_type == 'tv' else 'Films' }} · by {{ sort_label | lower }}</span>
-      <span class="find-cap">Where to watch · US</span>
+      <span class="find-cap">Unwatched</span>
     </div>
 
     <div class="find-list">
       {%- include "_find_rows.html" %}
     </div>
 
-    <p class="find-credit">Availability data provided by JustWatch</p>
   {%- endif %}
 {%- endif %}
 

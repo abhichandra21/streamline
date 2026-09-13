@@ -13,7 +13,6 @@
 {%- else %}
 {%- for row in results.rows %}
 {%- set title = row.title %}
-{%- set avail = row.availability %}
 {%- set rank = start + loop.index %}
 <article class="find-card" style="--i:{{ loop.index0 }};">
   <div class="find-rank"><span>{{ rank }}</span></div>
@@ -42,21 +41,15 @@
     <p class="find-overview">{{ title.overview }}</p>
     {%- endif %}
 
-    <ul class="find-avail" aria-label="Where to watch">
-      {%- for chip in find_chips(row) %}
-      <li class="find-chip is-{{ chip.kind }}">
-        {%- if chip.link %}<a href="{{ chip.link }}" target="_blank" rel="noopener" title="See every option on JustWatch">{% endif -%}
-        <i></i>{{ chip.label }}
-        {%- if chip.names %}<span>{{ chip.names | join(' · ') }}</span>{% endif %}
-        {%- if chip.extra %}<em>+{{ chip.extra }}</em>{% endif %}
-        {%- if chip.link %}</a>{% endif %}
-      </li>
-      {%- endfor %}
-    </ul>
 
     {%- set wl_id = 'find-wl-' ~ title.content_type ~ '-' ~ title.tmdb_id %}
     {%- set saved = title.tmdb_id in saved_ids %}
     <div class="find-actions">
+      {%- if row.in_theaters %}
+      <span class="find-cinema"><i></i>In theaters</span>
+      {%- endif %}
+      <a class="find-where" href="https://www.themoviedb.org/{{ title.content_type }}/{{ title.tmdb_id }}/watch?locale=US"
+         target="_blank" rel="noopener">Where to watch</a>
       <span id="{{ wl_id }}" class="find-save{% if saved %} is-saved{% endif %}">
         <form method="post" action="{{ '/watchlist/unsave' if saved else '/watchlist/save' }}"
               hx-post="{{ '/watchlist/unsave' if saved else '/watchlist/save' }}" hx-target="#{{ wl_id }}" hx-swap="outerHTML">

@@ -864,144 +864,11 @@ def test_discover_catalog_page_omits_optional_filters_and_handles_missing_fields
     assert row.vote_average == 0.0 and row.vote_count == 0
 
 
-# ── Find availability and cinema status ───────────────────────────────────────
-
-def _providers_response(region_data: dict | None) -> dict:
-    results = {} if region_data is None else {"US": region_data}
-    return {"id": 5, "results": results}
-
+# ── Find cinema status ───────────────────────────────────────
 
 def _age_file(path, seconds: int) -> None:
     old = time.time() - seconds
     os.utime(path, (old, old))
-
-
-def test_config_has_availability_cache_dir():
-    import config
-    assert config.AVAILABILITY_CACHE_DIR.endswith("recommender/cache/availability")
-
-
-def test_get_catalog_availability_maps_all_five_buckets(tmp_path):
-    from recommender.tmdb_client import CatalogAvailability, TmdbClient
-    client = TmdbClient(api_key="k", cache_dir=str(tmp_path / "tmdb"))
-    response = _providers_response({
-        "flatrate": [{"provider_name": "Netflix"}, {"provider_name": "Max"}],
-        "free": [{"provider_name": "Tubi"}],
-        "ads": [{"provider_name": "Peacock"}],
-        "rent": [{"provider_name": "Apple TV"}],
-        "buy": [{"provider_name": "Amazon Video"}],
-    })
-    with patch.object(client, "_get", return_value=response) as mock_get:
-        avail = client.get_catalog_availability(5, "movie", "US", str(tmp_path / "avail"))
-    mock_get.assert_called_once_with("movie/5/watch/providers")
-    assert isinstance(avail, CatalogAvailability)
-    assert avail.stream == ("Netflix", "Max")
-    assert avail.free == ("Tubi",)
-    assert avail.with_ads == ("Peacock",)
-    assert avail.rent == ("Apple TV",)
-    assert avail.buy == ("Amazon Video",)
-    assert avail.unknown is False
-    assert avail.link is None
-
-
-def test_get_catalog_availability_keeps_the_justwatch_link_and_caches_it(tmp_path):
-    from recommender.tmdb_client import TmdbClient
-    client = TmdbClient(api_key="k", cache_dir=str(tmp_path / "tmdb"))
-    cache_dir = tmp_path / "avail"
-    data = _providers_response({"link": "https://www.themoviedb.org/movie/5/watch?locale=US",
-                                "flatrate": [{"provider_name": "Netflix"}]})
-    with patch.object(client, "_get", return_value=data):
-        avail = client.get_catalog_availability(5, "movie", "US", str(cache_dir))
-    assert avail.link == "https://www.themoviedb.org/movie/5/watch?locale=US"
-    with patch.object(client, "_get", side_effect=AssertionError("cache")):
-        assert client.get_catalog_availability(5, "movie", "US", str(cache_dir)).link == avail.link
-
-
-def test_get_catalog_availability_uses_tv_endpoint(tmp_path):
-    from recommender.tmdb_client import TmdbClient
-    client = TmdbClient(api_key="k", cache_dir=str(tmp_path / "tmdb"))
-    with patch.object(client, "_get", return_value=_providers_response({"flatrate": []})) as mock_get:
-        client.get_catalog_availability(7, "tv", "US", str(tmp_path / "avail"))
-    mock_get.assert_called_once_with("tv/7/watch/providers")
-
-
-def test_get_catalog_availability_no_region_data_is_unknown_not_unavailable(tmp_path):
-    from recommender.tmdb_client import TmdbClient
-    client = TmdbClient(api_key="k", cache_dir=str(tmp_path / "tmdb"))
-    with patch.object(client, "_get", return_value=_providers_response(None)):
-        avail = client.get_catalog_availability(5, "movie", "US", str(tmp_path / "avail"))
-    assert avail.unknown is True
-    assert avail.stream == () and avail.free == () and avail.with_ads == ()
-    assert avail.rent == () and avail.buy == ()
-
-
-def test_get_catalog_availability_empty_region_buckets_is_known_and_empty(tmp_path):
-    """TMDB answered for the region but listed nothing: that is a real answer, not Unknown."""
-    from recommender.tmdb_client import TmdbClient
-    client = TmdbClient(api_key="k", cache_dir=str(tmp_path / "tmdb"))
-    with patch.object(client, "_get", return_value=_providers_response({"link": "https://x"})):
-        avail = client.get_catalog_availability(5, "movie", "US", str(tmp_path / "avail"))
-    assert avail.unknown is False
-    assert avail.stream == ()
-
-
-def test_get_catalog_availability_rate_limit_propagates(tmp_path):
-    from recommender.tmdb_client import TmdbClient
-    client = TmdbClient(api_key="k", cache_dir=str(tmp_path / "tmdb"))
-    with patch.object(client, "_get", side_effect=TmdbRateLimitError(3.0)):
-        with pytest.raises(TmdbRateLimitError):
-            client.get_catalog_availability(5, "movie", "US", str(tmp_path / "avail"))
-    assert not list((tmp_path / "avail").rglob("*.json")) if (tmp_path / "avail").exists() else True
-
-
-def test_get_catalog_availability_other_failure_returns_unknown_and_is_not_cached(tmp_path):
-    from recommender.tmdb_client import TmdbClient
-    client = TmdbClient(api_key="k", cache_dir=str(tmp_path / "tmdb"))
-    cache_dir = tmp_path / "avail"
-    with patch.object(client, "_get", side_effect=requests.ConnectionError("boom")):
-        avail = client.get_catalog_availability(5, "movie", "US", str(cache_dir))
-    assert avail.unknown is True
-    assert not cache_dir.exists() or not list(cache_dir.rglob("*.json"))
-
-    # The next call retries TMDB instead of reading a cached failure.
-    with patch.object(client, "_get", return_value=_providers_response({"rent": [{"provider_name": "Apple TV"}]})) as mock_get:
-        avail = client.get_catalog_availability(5, "movie", "US", str(cache_dir))
-    assert mock_get.call_count == 1
-    assert avail.rent == ("Apple TV",) and avail.unknown is False
-
-
-def test_get_catalog_availability_cache_expires_after_24_hours(tmp_path):
-    from recommender.tmdb_client import TmdbClient
-    client = TmdbClient(api_key="k", cache_dir=str(tmp_path / "tmdb"))
-    cache_dir = tmp_path / "avail"
-    fresh = _providers_response({"flatrate": [{"provider_name": "Netflix"}]})
-    with patch.object(client, "_get", return_value=fresh) as mock_get:
-        client.get_catalog_availability(5, "movie", "US", str(cache_dir))
-        client.get_catalog_availability(5, "movie", "US", str(cache_dir))
-    assert mock_get.call_count == 1, "second call within 24h must hit the cache"
-
-    cached_files = list(cache_dir.rglob("*.json"))
-    assert len(cached_files) == 1
-    _age_file(cached_files[0], 24 * 3600 + 60)
-
-    later = _providers_response({"rent": [{"provider_name": "Apple TV"}]})
-    with patch.object(client, "_get", return_value=later) as mock_get:
-        avail = client.get_catalog_availability(5, "movie", "US", str(cache_dir))
-    assert mock_get.call_count == 1
-    assert avail.rent == ("Apple TV",) and avail.stream == ()
-
-
-def test_get_catalog_availability_cache_is_separate_from_watch_providers_cache(tmp_path):
-    from recommender.tmdb_client import TmdbClient
-    client = TmdbClient(api_key="k", cache_dir=str(tmp_path / "tmdb"))
-    providers_dir = tmp_path / "providers"
-    avail_dir = tmp_path / "avail"
-    with patch.object(client, "_get", return_value=_providers_response({"flatrate": [{"provider_name": "Netflix"}]})):
-        assert client.get_watch_providers(5, "movie", "US", str(providers_dir)) == ["Netflix"]
-        client.get_catalog_availability(5, "movie", "US", str(avail_dir))
-    old = json.loads((providers_dir / "movie" / "US" / "5.json").read_text())
-    assert old == {"providers": ["Netflix"]}, "flatrate-only contract must be unchanged"
-    assert list(avail_dir.rglob("*.json")), "availability uses its own cache tree"
 
 
 def test_get_now_playing_ids_collects_every_page_and_caches(tmp_path):
@@ -1105,3 +972,8 @@ def test_get_never_exposes_the_api_key_in_connection_errors(tmp_path):
             client._get("discover/movie", {"page": 1})
     assert "SECRETKEY123" not in str(info.value)
     assert "ConnectionError" in str(info.value)
+
+
+def test_config_has_find_cache_dir():
+    import config
+    assert config.FIND_CACHE_DIR.endswith("recommender/cache/find")

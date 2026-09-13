@@ -2,8 +2,8 @@
 
 Deterministic and LLM-free. Reads TMDB Discover pages in the requested sort order, drops
 anything already watched (imported history or manual archive), and returns one
-batch plus a cursor that says where to resume. Availability is fetched only for
-the batch rows and is display-only: it never removes or reorders a title.
+batch plus a cursor that says where to resume. The only extra TMDB read is the
+US now-playing list, used for a display-only "In theaters" badge on Movies.
 """
 
 import logging
@@ -14,12 +14,7 @@ from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
 
-from recommender.tmdb_client import (
-    CatalogAvailability,
-    CatalogTitle,
-    TmdbClient,
-    TmdbRateLimitError,
-)
+from recommender.tmdb_client import CatalogTitle, TmdbClient, TmdbRateLimitError
 
 log = logging.getLogger("recommender.catalog_finder")
 
@@ -80,7 +75,6 @@ class FindCriteria:
 @dataclass(frozen=True)
 class FindRow:
     title: CatalogTitle
-    availability: CatalogAvailability
     # True/False only when the full US now-playing list was read. None means
     # the list was unavailable (or not applicable, for TV): unknown, not "no".
     in_theaters: bool | None = None
@@ -95,8 +89,8 @@ class FindResults:
     keyword_name: str | None = None
     # The user asked for a keyword TMDB does not know. No Discover call was made.
     keyword_missing: bool = False
-    # TMDB rate limited the availability calls. Rows are complete; some are Unknown.
-    availability_rate_limited: bool = False
+    # TMDB rate limited the now-playing read. Rows are complete; cinema status is unknown.
+    now_playing_rate_limited: bool = False
     pages_read: int = 0
     catalog_exhausted: bool = False
     # Where the next batch starts, or None when TMDB has nothing more.
@@ -137,7 +131,7 @@ def find_unwatched_titles(
     watch_index,
     user_state,
     criteria: FindCriteria,
-    availability_cache_dir: str,
+    cache_dir: str,
     region: str = "US",
     today: date | None = None,
     limit: int = DEFAULT_LIMIT,
@@ -200,54 +194,42 @@ def find_unwatched_titles(
             break
     exhausted = next_cursor is None
 
-    rows, rate_limited = _annotate_availability(tmdb, titles, criteria.content_type, region,
-                                                availability_cache_dir)
+    rows, rate_limited = _annotate_cinema(tmdb, titles, criteria.content_type, region, cache_dir)
     return FindResults(
         criteria=criteria,
         release_start=release_start,
         release_end=release_end,
         rows=tuple(rows),
         keyword_name=keyword_name,
-        availability_rate_limited=rate_limited,
+        now_playing_rate_limited=rate_limited,
         pages_read=pages_read,
         catalog_exhausted=exhausted,
         next_cursor=next_cursor,
     )
 
 
-def _annotate_availability(
+def _annotate_cinema(
     tmdb: TmdbClient,
     titles: list[CatalogTitle],
     content_type: str,
     region: str,
     cache_dir: str,
 ) -> tuple[list[FindRow], bool]:
-    """Attach availability and cinema status to the final rows.
+    """Attach cinema status to the batch rows (Movies only, one cached read).
 
-    On a TMDB rate limit, stop calling TMDB, keep every row, and label whatever
-    is left Unknown. The caller surfaces the flag as a visible warning.
+    On a TMDB rate limit, keep every row with cinema status unknown and return
+    the flag so the page can say so.
     """
-    unknown = CatalogAvailability(unknown=True)
     now_playing: set[int] | None = None
     rate_limited = False
-
     if content_type == "movie" and titles:
         try:
             now_playing = tmdb.get_now_playing_ids(region, cache_dir)
         except TmdbRateLimitError as exc:
             log.warning("TMDB rate limited the now-playing list (retry after %s s)", exc.retry_after_seconds)
             rate_limited = True
-
-    rows: list[FindRow] = []
-    for title in titles:
-        availability = unknown
-        if not rate_limited:
-            try:
-                availability = tmdb.get_catalog_availability(title.tmdb_id, content_type, region, cache_dir)
-            except TmdbRateLimitError as exc:
-                log.warning("TMDB rate limited availability at %s/%d (retry after %s s)",
-                            content_type, title.tmdb_id, exc.retry_after_seconds)
-                rate_limited = True
-        in_theaters = None if now_playing is None else title.tmdb_id in now_playing
-        rows.append(FindRow(title=title, availability=availability, in_theaters=in_theaters))
+    rows = [
+        FindRow(title=title, in_theaters=None if now_playing is None else title.tmdb_id in now_playing)
+        for title in titles
+    ]
     return rows, rate_limited

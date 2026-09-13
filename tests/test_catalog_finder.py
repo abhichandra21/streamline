@@ -6,12 +6,7 @@ import pytest
 
 from recommender import catalog_finder as cf
 from recommender.catalog_finder import FindCriteria, FindResults, find_unwatched_titles, release_window
-from recommender.tmdb_client import (
-    CatalogAvailability,
-    CatalogPage,
-    CatalogTitle,
-    TmdbRateLimitError,
-)
+from recommender.tmdb_client import CatalogPage, CatalogTitle, TmdbRateLimitError
 
 TODAY = date(2026, 9, 12)
 
@@ -42,16 +37,12 @@ class FakeUserState:
 class FakeTmdb:
     """Scripted TmdbClient stand-in. pages maps page number -> list of CatalogTitle."""
 
-    def __init__(self, pages: dict[int, list[CatalogTitle]], keyword=None, now_playing=None,
-                 availability=None, availability_errors=None):
+    def __init__(self, pages: dict[int, list[CatalogTitle]], keyword=None, now_playing=None):
         self.pages = pages
         self.keyword = keyword
         self.now_playing = now_playing if now_playing is not None else set()
-        self.availability = availability or {}
-        self.availability_errors = availability_errors or {}
         self.discover_calls: list[dict] = []
         self.keyword_calls: list[str] = []
-        self.availability_calls: list[int] = []
         self.now_playing_calls = 0
 
     def search_keyword_exact(self, query):
@@ -75,12 +66,6 @@ class FakeTmdb:
             raise self.now_playing
         return self.now_playing
 
-    def get_catalog_availability(self, tmdb_id, content_type, region, cache_dir):
-        self.availability_calls.append(tmdb_id)
-        if tmdb_id in self.availability_errors:
-            raise self.availability_errors[tmdb_id]
-        return self.availability.get(tmdb_id, CatalogAvailability(unknown=True))
-
 
 def _run(tmdb, criteria=FindCriteria(), watch_index=None, user_state=None, **kwargs) -> FindResults:
     return find_unwatched_titles(
@@ -88,7 +73,7 @@ def _run(tmdb, criteria=FindCriteria(), watch_index=None, user_state=None, **kwa
         watch_index or FakeWatchIndex(),
         user_state or FakeUserState(),
         criteria,
-        availability_cache_dir="/tmp/unused",
+        cache_dir="/tmp/unused",
         today=TODAY,
         **kwargs,
     )
@@ -318,35 +303,25 @@ def test_missing_keyword_returns_no_rows_and_never_broadens():
     assert results.keyword_missing is True
     assert results.rows == ()
     assert tmdb.discover_calls == [], "must not run Discover without the keyword the user asked for"
-    assert tmdb.availability_calls == []
+    assert tmdb.now_playing_calls == 0
 
 
-# ── Availability annotation ───────────────────────────────────────────────────
+# ── Cinema status ─────────────────────────────────────────────────────────────
 
-def test_availability_is_fetched_only_for_final_rows():
-    tmdb = FakeTmdb(
-        {1: [_title(i) for i in range(1, 13)]},
-        availability={1: CatalogAvailability(stream=("Netflix",)), 3: CatalogAvailability(rent=("Apple TV",))},
-        now_playing={2},
-    )
+def test_now_playing_is_read_once_and_marks_only_listed_movies():
+    tmdb = FakeTmdb({1: [_title(i) for i in range(1, 13)]}, now_playing={2})
     results = _run(tmdb, watch_index=FakeWatchIndex({4}))
-    assert tmdb.availability_calls == [1, 2, 3, 5, 6, 7, 8, 9, 10, 11]
     assert tmdb.now_playing_calls == 1
     by_id = {r.title.tmdb_id: r for r in results.rows}
-    assert by_id[1].availability.stream == ("Netflix",)
-    assert by_id[3].availability.rent == ("Apple TV",)
     assert by_id[2].in_theaters is True
     assert by_id[1].in_theaters is False
-    assert by_id[5].availability.unknown is True
-    assert results.availability_rate_limited is False
+    assert results.now_playing_rate_limited is False
 
 
-def test_availability_never_changes_inclusion_or_order():
+def test_cinema_status_never_changes_inclusion_or_order():
     titles = [_title(i) for i in range(1, 11)]
-    tmdb_a = FakeTmdb({1: titles}, availability={i: CatalogAvailability(stream=("Netflix",)) for i in range(1, 11)})
-    tmdb_b = FakeTmdb({1: titles}, availability={})   # everything Unknown
-    ids_a = [r.title.tmdb_id for r in _run(tmdb_a).rows]
-    ids_b = [r.title.tmdb_id for r in _run(tmdb_b).rows]
+    ids_a = [r.title.tmdb_id for r in _run(FakeTmdb({1: titles}, now_playing=set(range(1, 11)))).rows]
+    ids_b = [r.title.tmdb_id for r in _run(FakeTmdb({1: titles}, now_playing=set())).rows]
     assert ids_a == ids_b == list(range(1, 11))
 
 
@@ -364,35 +339,12 @@ def test_unreadable_now_playing_list_is_unknown_not_negative():
     assert results.rows[0].in_theaters is None
 
 
-def test_complete_now_playing_list_gives_a_definite_answer():
-    tmdb = FakeTmdb({1: [_title(1), _title(2)]}, now_playing={2})
-    results = _run(tmdb)
-    assert results.rows[0].in_theaters is False
-    assert results.rows[1].in_theaters is True
-
-
-def test_rate_limit_during_availability_keeps_every_result_and_flags_warning():
-    tmdb = FakeTmdb(
-        {1: [_title(i) for i in range(1, 11)]},
-        availability={1: CatalogAvailability(stream=("Netflix",)), 2: CatalogAvailability(buy=("Amazon Video",))},
-        availability_errors={3: TmdbRateLimitError(5.0)},
-    )
-    results = _run(tmdb)
-    assert [r.title.tmdb_id for r in results.rows] == list(range(1, 11))
-    assert tmdb.availability_calls == [1, 2, 3], "stop calling TMDB once it rate limits"
-    assert results.rows[0].availability.stream == ("Netflix",)
-    assert results.rows[1].availability.buy == ("Amazon Video",)
-    assert all(r.availability.unknown for r in results.rows[2:])
-    assert results.availability_rate_limited is True
-
-
-def test_rate_limit_on_now_playing_skips_availability_and_flags_warning():
+def test_rate_limit_on_now_playing_keeps_every_result_and_flags_warning():
     tmdb = FakeTmdb({1: [_title(1), _title(2)]}, now_playing=TmdbRateLimitError(None))
     results = _run(tmdb)
     assert [r.title.tmdb_id for r in results.rows] == [1, 2]
-    assert tmdb.availability_calls == []
-    assert all(r.availability.unknown and r.in_theaters is None for r in results.rows)
-    assert results.availability_rate_limited is True
+    assert all(r.in_theaters is None for r in results.rows)
+    assert results.now_playing_rate_limited is True
 
 
 def test_results_carry_criteria_and_window():

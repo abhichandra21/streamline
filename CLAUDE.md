@@ -87,7 +87,7 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `UsageStats` — accumulated token counts and cost per query
 
 ### Cache Layout
-All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ identity-keyed index.json), `providers/`, `availability/` (Find page: full watch-availability buckets on a 24h TTL and US now-playing ids on a 6h TTL), `watch_index.json`, `taste_profile.txt` (+ timestamped backups), `feedback.json`. User-managed state (watchlist, ratings, manual archive) lives in the same SQLite database as imported watch events (`events.db`).
+All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ identity-keyed index.json), `providers/`, `find/` (Find page: US now-playing ids on a 6h TTL), `watch_index.json`, `taste_profile.txt` (+ timestamped backups), `feedback.json`. User-managed state (watchlist, ratings, manual archive) lives in the same SQLite database as imported watch events (`events.db`).
 
 ## Configuration
 

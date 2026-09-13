@@ -14,9 +14,8 @@ log = logging.getLogger("recommender.tmdb")
 
 MAX_DISCOVER_PAGES = 20
 
-# Find page availability is display-only but must be fresh: catalogue rows are
-# unhydrated, so these are the only per-title calls and they get short TTLs.
-AVAILABILITY_TTL_SECONDS = 24 * 3600
+# The Find page's US now-playing list changes daily at most; a short TTL keeps
+# "In theaters" honest without a call per request.
 NOW_PLAYING_TTL_SECONDS = 6 * 3600
 
 TMDB_BASE = "https://api.themoviedb.org/3"
@@ -72,23 +71,6 @@ class CatalogPage:
     rows: tuple[CatalogTitle, ...]
     page: int
     total_pages: int
-
-
-@dataclass(frozen=True)
-class CatalogAvailability:
-    """Watch availability buckets for one region, straight from TMDB/JustWatch.
-
-    unknown=True means TMDB returned no data for the region. That is never the
-    same as "not available anywhere"; the page must say Unknown, not nothing.
-    """
-    stream: tuple[str, ...] = ()
-    free: tuple[str, ...] = ()
-    with_ads: tuple[str, ...] = ()
-    rent: tuple[str, ...] = ()
-    buy: tuple[str, ...] = ()
-    unknown: bool = False
-    # TMDB's per-title JustWatch page for the region, when it supplies one.
-    link: str | None = None
 
 
 @dataclass
@@ -995,65 +977,6 @@ class TmdbClient:
         except (OSError, json.JSONDecodeError) as exc:
             log.warning("Corrupt cache file %s, treating as a cache miss: %s", path, exc)
             return None
-
-    def get_catalog_availability(
-        self,
-        tmdb_id: int,
-        content_type: str,
-        region: str,
-        cache_dir: str,
-    ) -> CatalogAvailability:
-        """Return every availability bucket for a title in the region (24h cache).
-
-        Rate limits propagate so the caller can stop its batch. Any other failure
-        returns Unknown and is not cached, so the next request retries TMDB.
-        """
-        cache_path = Path(cache_dir) / content_type / region / f"{tmdb_id}.json"
-        cached = self._read_fresh_cache(cache_path, AVAILABILITY_TTL_SECONDS)
-        if cached is not None:
-            return self._availability_from_cache(cached)
-
-        prefix = "tv" if content_type == "tv" else "movie"
-        try:
-            data = self._get(f"{prefix}/{tmdb_id}/watch/providers")
-        except TmdbRateLimitError:
-            raise
-        except Exception as exc:
-            log.debug("Availability fetch failed for %s/%d: %s", content_type, tmdb_id, type(exc).__name__)
-            return CatalogAvailability(unknown=True)
-
-        region_data = (data.get("results") or {}).get(region)
-        if region_data is None:
-            record = {"unknown": True}
-        else:
-            def names(bucket: str) -> list[str]:
-                return [p["provider_name"] for p in region_data.get(bucket) or [] if p.get("provider_name")]
-            record = {
-                "unknown": False,
-                "link": region_data.get("link") or None,
-                "stream": names("flatrate"),
-                "free": names("free"),
-                "with_ads": names("ads"),
-                "rent": names("rent"),
-                "buy": names("buy"),
-            }
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps(record))
-        return self._availability_from_cache(record)
-
-    @staticmethod
-    def _availability_from_cache(record: dict) -> CatalogAvailability:
-        if record.get("unknown"):
-            return CatalogAvailability(unknown=True)
-        return CatalogAvailability(
-            stream=tuple(record.get("stream") or ()),
-            free=tuple(record.get("free") or ()),
-            with_ads=tuple(record.get("with_ads") or ()),
-            rent=tuple(record.get("rent") or ()),
-            buy=tuple(record.get("buy") or ()),
-            unknown=False,
-            link=record.get("link") or None,
-        )
 
     def get_now_playing_ids(self, region: str, cache_dir: str) -> set[int] | None:
         """Return every movie id on TMDB's now-playing list for the region (6h cache).
