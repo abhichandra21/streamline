@@ -1863,9 +1863,13 @@ def _local_redirect_target() -> str | None:
     if _is_htmx():
         return None
     target = (request.form.get("redirect") or "").strip()
-    if target.startswith("/") and not target.startswith("//"):
-        return target
-    return None
+    # Browsers treat a backslash like a slash, so "/\\evil" would resolve as
+    # "//evil". Reject it and any control characters outright.
+    if not target.startswith("/") or target.startswith("//"):
+        return None
+    if "\\" in target or any(ord(ch) < 32 for ch in target):
+        return None
+    return target
 
 
 @app.route("/watchlist/save", methods=["POST"])
