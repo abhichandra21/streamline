@@ -2681,6 +2681,20 @@ class TestFindRendering(TestFind):
         body = client.get("/find?start=-4").get_data(as_text=True)
         assert ">1<" in body
 
+    def test_htmx_continuation_error_returns_a_fragment_with_a_retry(self, client, find_env, monkeypatch):
+        import requests
+
+        def finder(*_a, **_k):
+            raise requests.ConnectionError("down")
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        resp = client.get("/find?period=1y&cursor=1.12&start=10", headers={"HX-Request": "true"})
+        body = resp.get_data(as_text=True)
+        assert resp.status_code == 200
+        assert "<html" not in body and "<aside" not in body and 'id="find-form"' not in body
+        assert "TMDB request failed" in body
+        assert 'class="find-more"' in body and "Try again" in body
+        assert 'href="/find?period=1y&amp;cursor=1.12&amp;start=10"' in body
+
     def test_htmx_first_load_still_renders_the_full_page(self, client, find_env):
         body = client.get("/find", headers={"HX-Request": "true"}).get_data(as_text=True)
         assert '<form id="find-form"' in body

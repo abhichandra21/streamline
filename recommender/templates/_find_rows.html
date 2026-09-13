@@ -1,7 +1,17 @@
 {#- One batch of Find results plus the control that fetches the next one.
     Included by find.html on first load and returned alone for HTMX continuations,
-    so the appended markup is identical to the first-paint markup. -#}
+    so the appended markup is identical to the first-paint markup. When a
+    continuation fails, this renders the error and a retry in place of Show more. -#}
 {%- set c = criteria %}
+{%- if results is none %}
+<div class="find-note is-error"><span class="find-cap">Stopped</span><div>{{ error }}</div></div>
+<a class="find-more" href="{{ return_to }}"
+   hx-get="{{ return_to }}" hx-swap="outerHTML" hx-indicator="this">
+  <span class="find-more-rule"></span>
+  <span class="find-more-label"><span class="find-more-spin" aria-hidden="true"></span>Try again</span>
+  <span class="find-more-rule"></span>
+</a>
+{%- else %}
 {%- for r in results.rows %}
 {%- set t = r.title %}
 {%- set a = r.availability %}
@@ -95,4 +105,5 @@
   <span class="find-more-label">End of the catalogue</span>
   <span class="find-more-rule"></span>
 </div>
+{%- endif %}
 {%- endif %}

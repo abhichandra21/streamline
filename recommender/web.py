@@ -1281,7 +1281,8 @@ def find_page() -> str:
         log.warning("Find: TMDB request failed: %s", type(exc).__name__)
         page["error"] = f"TMDB request failed ({type(exc).__name__}). Check the network and try again."
 
-    if cursor and _is_htmx() and page["results"] is not None:
+    if cursor and _is_htmx():
+        # Continuation: only the next batch, or an error in place of Show more.
         return render_template("_find_rows.html", **page)
     return render_template("find.html", **page)
 
