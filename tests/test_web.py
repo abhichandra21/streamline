@@ -2317,8 +2317,12 @@ class TestFollowFromTitlePage:
 
 # ── Find page ─────────────────────────────────────────────────────────────────
 
-class TestFind:
-    """GET /find: deterministic, LLM-free, validated criteria, explicit errors."""
+class FindTestSupport:
+    """Shared builders and the healthy-environment fixture for the Find tests.
+
+    Not a test class: the two Find classes below mix it in instead of
+    inheriting from each other, so no test is collected twice.
+    """
 
     @staticmethod
     def _results(criteria, rows=(), **flags):
@@ -2385,6 +2389,10 @@ class TestFind:
             return self._results(criteria, rows=[self._row(1), self._row(2)], next_cursor="1.12")
         monkeypatch.setattr(web, "find_unwatched_titles", fake_finder)
         return calls
+
+
+class TestFind(FindTestSupport):
+    """GET /find: deterministic, LLM-free, validated criteria, explicit errors."""
 
     def test_bare_find_uses_movie_last_six_months(self, client, find_env):
         from recommender.catalog_finder import FindCriteria
@@ -2542,7 +2550,7 @@ class TestFind:
         assert resp.status_code == 200
 
 
-class TestFindRendering(TestFind):
+class TestFindRendering(FindTestSupport):
     """The narrow page: one GET form, at most 10 cards, availability labels, nothing else."""
 
     def test_form_has_the_complete_filter_set_and_nothing_more(self, client, find_env):
