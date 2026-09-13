@@ -354,14 +354,21 @@ def test_now_playing_is_not_requested_for_tv():
     tmdb = FakeTmdb({1: [_title(1, "tv")]}, now_playing={1})
     results = _run(tmdb, criteria=FindCriteria(content_type="tv"))
     assert tmdb.now_playing_calls == 0
-    assert results.rows[0].in_theaters is False
+    assert results.rows[0].in_theaters is None
 
 
-def test_unreadable_now_playing_list_means_no_theater_labels():
-    tmdb = FakeTmdb({1: [_title(1)]}, now_playing=None)
+def test_unreadable_now_playing_list_is_unknown_not_negative():
+    tmdb = FakeTmdb({1: [_title(1)]})
     tmdb.now_playing = None
     results = _run(tmdb)
+    assert results.rows[0].in_theaters is None
+
+
+def test_complete_now_playing_list_gives_a_definite_answer():
+    tmdb = FakeTmdb({1: [_title(1), _title(2)]}, now_playing={2})
+    results = _run(tmdb)
     assert results.rows[0].in_theaters is False
+    assert results.rows[1].in_theaters is True
 
 
 def test_rate_limit_during_availability_keeps_every_result_and_flags_warning():
@@ -384,7 +391,7 @@ def test_rate_limit_on_now_playing_skips_availability_and_flags_warning():
     results = _run(tmdb)
     assert [r.title.tmdb_id for r in results.rows] == [1, 2]
     assert tmdb.availability_calls == []
-    assert all(r.availability.unknown and not r.in_theaters for r in results.rows)
+    assert all(r.availability.unknown and r.in_theaters is None for r in results.rows)
     assert results.availability_rate_limited is True
 
 

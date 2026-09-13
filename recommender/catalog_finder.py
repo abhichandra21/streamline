@@ -81,7 +81,9 @@ class FindCriteria:
 class FindRow:
     title: CatalogTitle
     availability: CatalogAvailability
-    in_theaters: bool = False
+    # True/False only when the full US now-playing list was read. None means
+    # the list was unavailable (or not applicable, for TV): unknown, not "no".
+    in_theaters: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -226,12 +228,12 @@ def _annotate_availability(
     is left Unknown. The caller surfaces the flag as a visible warning.
     """
     unknown = CatalogAvailability(unknown=True)
-    now_playing: set[int] = set()
+    now_playing: set[int] | None = None
     rate_limited = False
 
     if content_type == "movie" and titles:
         try:
-            now_playing = tmdb.get_now_playing_ids(region, cache_dir) or set()
+            now_playing = tmdb.get_now_playing_ids(region, cache_dir)
         except TmdbRateLimitError as exc:
             log.warning("TMDB rate limited the now-playing list (retry after %s s)", exc.retry_after_seconds)
             rate_limited = True
@@ -246,6 +248,6 @@ def _annotate_availability(
                 log.warning("TMDB rate limited availability at %s/%d (retry after %s s)",
                             content_type, title.tmdb_id, exc.retry_after_seconds)
                 rate_limited = True
-        rows.append(FindRow(title=title, availability=availability,
-                            in_theaters=title.tmdb_id in now_playing))
+        in_theaters = None if now_playing is None else title.tmdb_id in now_playing
+        rows.append(FindRow(title=title, availability=availability, in_theaters=in_theaters))
     return rows, rate_limited
