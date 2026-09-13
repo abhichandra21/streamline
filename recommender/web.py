@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import requests
 import yaml
 from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
 from markupsafe import Markup, escape
@@ -35,7 +36,10 @@ from recommender.query_engine import RecommendContext, ask, _safe_query_intent
 from recommender import wizard
 from recommender import wizard_flow
 from recommender.structured_profile import load_structured_profile
-from recommender.tmdb_client import TmdbClient
+from recommender.tmdb_client import MOVIE_GENRE_IDS, TV_GENRE_IDS, TmdbClient, TmdbRateLimitError
+from recommender.catalog_finder import (
+    FindCriteria, PERIOD_OPTIONS, RATING_OPTIONS, SORT_OPTIONS, find_unwatched_titles,
+)
 
 def _events_loader_fallback() -> list:
     events = load_events(config.EVENT_DB_PATH)
@@ -1148,6 +1152,164 @@ def poll_job(job_id: str) -> str:
     return render_template("_results.html", results=result["items"], query=result["query"], error=None)
 
 
+# ── Find (deterministic unwatched catalogue) ─────────────────────────────────
+
+FIND_KEYWORD_MAX_CHARS = 80
+_FIND_PERIOD_KEYS = {key for key, _label in PERIOD_OPTIONS}
+_FIND_RATINGS = {key: value for key, _label, value in RATING_OPTIONS}
+_FIND_RATING_KEYS = {value: key for key, _label, value in RATING_OPTIONS}
+_FIND_SORT_KEYS = {key for key, _label in SORT_OPTIONS}
+
+
+def _find_genres(content_type: str) -> list[str]:
+    genre_map = TV_GENRE_IDS if content_type == "tv" else MOVIE_GENRE_IDS
+    return sorted(genre_map)
+
+
+def _find_criteria(args) -> FindCriteria:
+    """Validate the Find query string. Unknown values revert to their defaults
+    so nothing unexpected ever reaches TMDB."""
+    content_type = args.get("type", "movie")
+    if content_type not in ("movie", "tv"):
+        content_type = "movie"
+
+    period = args.get("period", "6m")
+    if period not in _FIND_PERIOD_KEYS:
+        period = "6m"
+
+    genre = (args.get("genre") or "").strip().lower() or None
+    if genre is not None and genre not in _find_genres(content_type):
+        genre = None
+
+    keyword = (args.get("keyword") or "").strip()[:FIND_KEYWORD_MAX_CHARS] or None
+
+    min_rating = _FIND_RATINGS.get(args.get("rating", "any"))
+
+    sort = args.get("sort", "rating")
+    if sort not in _FIND_SORT_KEYS:
+        sort = "rating"
+
+    return FindCriteria(content_type=content_type, period=period, genre=genre,
+                        keyword=keyword, min_rating=min_rating, sort=sort)
+
+
+def _find_start(args) -> int:
+    """Rows already shown before this batch; drives the running numbers."""
+    try:
+        return max(0, int(args.get("start", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+# Ids already shown are carried in the Show more URL so a TMDB reorder between
+# clicks cannot serve a title twice. Only the most recent ones are kept; a
+# reorder moves titles a few places, not hundreds, and the URL stays bounded.
+FIND_SHOWN_MAX = 300
+
+
+def _find_shown(args) -> list[int]:
+    """Ordered, de-duplicated TMDB ids from the shown= query field."""
+    out: list[int] = []
+    seen: set[int] = set()
+    for raw in (args.get("shown") or "").split(","):
+        raw = raw.strip()
+        if raw.isdigit() and int(raw) not in seen:
+            seen.add(int(raw))
+            out.append(int(raw))
+    return out[-FIND_SHOWN_MAX:]
+
+
+def _find_url(criteria: FindCriteria, cursor: str, start: int, shown: list[int]) -> str:
+    params = {
+        "type": criteria.content_type,
+        "period": criteria.period,
+        "genre": criteria.genre or "",
+        "keyword": criteria.keyword or "",
+        "rating": _FIND_RATING_KEYS.get(criteria.min_rating, "any"),
+        "sort": criteria.sort,
+        "cursor": cursor,
+        "start": start,
+        "shown": ",".join(str(i) for i in shown[-FIND_SHOWN_MAX:]),
+    }
+    return url_for("find_page", **params)
+
+
+def _find_saved_ids(rows, user_state) -> set[int]:
+    """TMDB ids among the batch rows that are already on the watchlist."""
+    return {r.title.tmdb_id for r in rows if user_state.is_in_watchlist(r.title)}
+
+
+@app.route("/find")
+def find_page() -> str:
+    """Highest-rated unwatched titles for a few explicit criteria, one batch at a time.
+
+    Reads the watch index and manual archive directly and talks only to TMDB.
+    No LLM, no taste profile, no shared recommendation context. A cursor
+    continues the list; with HTMX only the next batch is returned and appended,
+    without it the same URL renders a full page.
+    """
+    criteria = _find_criteria(request.args)
+    cursor = request.args.get("cursor") or None
+    start = _find_start(request.args)
+    shown = _find_shown(request.args)
+    page = {
+        "criteria": criteria,
+        "genres": _find_genres(criteria.content_type),
+        "period_options": PERIOD_OPTIONS,
+        "rating_options": RATING_OPTIONS,
+        "sort_options": SORT_OPTIONS,
+        "results": None,
+        "error": None,
+        "start": start,
+        "more_url": None,
+        "saved_ids": set(),
+        # Plain-form fallback for the save buttons: come back to this exact list.
+        "return_to": request.full_path.rstrip("?"),
+    }
+
+    if not config.TMDB_API_KEY:
+        page["error"] = "TMDB_API_KEY is not set. Add it to the environment (or .env) and restart the web UI."
+        return render_template("find.html", **page)
+
+    try:
+        watch_index = wi.load(config.WATCH_INDEX_PATH)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        log.warning("Find: watch index unavailable at %s: %s", config.WATCH_INDEX_PATH, exc)
+        page["error"] = "Watch index is missing or unreadable. Run ./recommend setup, then reload this page."
+        return render_template("find.html", **page)
+    user_state = _load_user_state()
+
+    tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+    try:
+        results = find_unwatched_titles(
+            tmdb, watch_index, user_state, criteria, config.FIND_CACHE_DIR,
+            cursor=cursor, exclude=frozenset(shown),
+        )
+        page["results"] = results
+        page["saved_ids"] = _find_saved_ids(results.rows, user_state)
+        if results.next_cursor:
+            page["more_url"] = _find_url(
+                criteria, results.next_cursor, start + len(results.rows),
+                shown + [r.title.tmdb_id for r in results.rows],
+            )
+    except TmdbRateLimitError as exc:
+        wait = f" Try again in about {int(exc.retry_after_seconds)} seconds." if exc.retry_after_seconds else ""
+        page["error"] = f"TMDB rate limit reached while reading the catalogue.{wait}"
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "error"
+        log.warning("Find: TMDB returned HTTP %s", status)
+        page["error"] = f"TMDB request failed with HTTP {status}. Try again in a moment."
+    except (requests.RequestException, ValueError, KeyError) as exc:
+        # Never echo the exception text: request errors can carry the full URL.
+        log.warning("Find: TMDB request failed: %s", type(exc).__name__)
+        page["error"] = f"TMDB request failed ({type(exc).__name__}). Check the network and try again."
+
+    if cursor and _is_htmx():
+        # Continuation: only the next batch, or an error in place of Show more.
+        return render_template("_find_rows.html", **page)
+    return render_template("find.html", **page)
+
+
 @app.route("/wizard")
 def wizard_page() -> str:
     return render_template("wizard.html", max_questions=config.WIZARD_MAX_QUESTIONS)
@@ -1692,8 +1854,26 @@ def watchlist_export():
     )
 
 
+def _local_redirect_target() -> str | None:
+    """A same-site path from the form's redirect field, or None.
+
+    Plain (non-HTMX) forms use it to land back where they were submitted.
+    Only absolute local paths are accepted so this can never leave the site.
+    """
+    if _is_htmx():
+        return None
+    target = (request.form.get("redirect") or "").strip()
+    # Browsers treat a backslash like a slash, so "/\\evil" would resolve as
+    # "//evil". Reject it and any control characters outright.
+    if not target.startswith("/") or target.startswith("//"):
+        return None
+    if "\\" in target or any(ord(ch) < 32 for ch in target):
+        return None
+    return target
+
+
 @app.route("/watchlist/save", methods=["POST"])
-def watchlist_save() -> str:
+def watchlist_save():
     title = (request.form.get("title") or "").strip()
     ct = request.form.get("content_type", "tv")
     tmdb_id = request.form.get("tmdb_id", type=int)
@@ -1703,13 +1883,16 @@ def watchlist_save() -> str:
         return "Missing title", 400
     _ensure_user_store_once()
     user_store.save_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+    back = _local_redirect_target()
+    if back:
+        return redirect(back)
     if mode == "toggle" and target_id:
         return _watchlist_saved_fragment(title, ct, tmdb_id, target_id)
     return '<span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>'
 
 
 @app.route("/watchlist/unsave", methods=["POST"])
-def watchlist_unsave() -> str:
+def watchlist_unsave():
     title = (request.form.get("title") or "").strip()
     ct = request.form.get("content_type", "tv")
     tmdb_id = request.form.get("tmdb_id", type=int)
@@ -1718,6 +1901,9 @@ def watchlist_unsave() -> str:
         return "Missing title", 400
     _ensure_user_store_once()
     user_store.remove_saved_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+    back = _local_redirect_target()
+    if back:
+        return redirect(back)
     return _watchlist_save_fragment(title, ct, tmdb_id, target_id)
 
 

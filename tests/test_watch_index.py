@@ -217,3 +217,17 @@ def test_deduplicate_merges_provenance_across_typed_identity():
     merged = deduped.entries[0]
     assert merged["platforms"] == ["netflix", "prime"]
     assert merged["last_watched"] == "2026-02-01T00:00:00"
+
+
+@pytest.mark.parametrize("payload", ["{}", '{"a": 1}', "[1, 2]", "null", '"text"', '[{"title": "ok"}, 3]', '[{"tmdb_id": 5}]'])
+def test_load_rejects_anything_but_a_list_of_entry_dicts(tmp_path, payload):
+    path = tmp_path / "watch_index.json"
+    path.write_text(payload)
+    with pytest.raises(ValueError):
+        wi.load(str(path))
+
+
+def test_load_accepts_an_empty_list(tmp_path):
+    path = tmp_path / "watch_index.json"
+    path.write_text("[]")
+    assert wi.load(str(path)).entries == []

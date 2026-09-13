@@ -17,16 +17,17 @@ def _normalize(title: str) -> str:
 class UserStateIndex:
     """Immutable snapshot. Build a new instance to see mutations."""
 
-    # manual_archive: TMDB IDs and (normalized_title, content_type) tuples
-    _archive_tmdb_ids: set[int] = field(default_factory=set)
+    # manual_archive: typed (content_type, tmdb_id) keys and (normalized_title, content_type) tuples.
+    # The TMDB key is typed so a movie and TV show sharing a numeric id don't collide.
+    _archive_tmdb_keys: set[tuple[str, int]] = field(default_factory=set)
     _archive_titles: set[tuple[str, str]] = field(default_factory=set)
 
-    # dismissed: same dual-key pattern
-    _dismissed_tmdb_ids: set[int] = field(default_factory=set)
+    # dismissed: same typed dual-key pattern
+    _dismissed_tmdb_keys: set[tuple[str, int]] = field(default_factory=set)
     _dismissed_titles: set[tuple[str, str]] = field(default_factory=set)
 
-    # watchlist: same dual-key pattern
-    _watchlist_tmdb_ids: set[int] = field(default_factory=set)
+    # watchlist: same typed dual-key pattern
+    _watchlist_tmdb_keys: set[tuple[str, int]] = field(default_factory=set)
     _watchlist_titles: set[tuple[str, str]] = field(default_factory=set)
 
     # ratings: keyed by (content_type, tmdb_id) or (normalized_title, content_type).
@@ -49,7 +50,7 @@ class UserStateIndex:
             ).fetchall():
                 tmdb_id, norm, ct = row
                 if tmdb_id is not None:
-                    idx._archive_tmdb_ids.add(tmdb_id)
+                    idx._archive_tmdb_keys.add((ct, tmdb_id))
                 else:
                     idx._archive_titles.add((norm, ct))
 
@@ -60,12 +61,12 @@ class UserStateIndex:
                 tmdb_id, norm, ct, status = row
                 if status == "dismissed":
                     if tmdb_id is not None:
-                        idx._dismissed_tmdb_ids.add(tmdb_id)
+                        idx._dismissed_tmdb_keys.add((ct, tmdb_id))
                     else:
                         idx._dismissed_titles.add((norm, ct))
                 elif status == "watchlist":
                     if tmdb_id is not None:
-                        idx._watchlist_tmdb_ids.add(tmdb_id)
+                        idx._watchlist_tmdb_keys.add((ct, tmdb_id))
                     else:
                         idx._watchlist_titles.add((norm, ct))
 
@@ -83,19 +84,20 @@ class UserStateIndex:
 
         return idx
 
-    def _match_tmdb_first(self, meta, tmdb_set: set, title_set: set) -> bool:
-        if meta.tmdb_id is not None and meta.tmdb_id in tmdb_set:
-            return True
+    def _match_typed(self, meta, tmdb_keys: set[tuple[str, int]], title_set: set) -> bool:
+        """Typed TMDB identity when the candidate has an id; typed title otherwise."""
+        if meta.tmdb_id is not None:
+            return (meta.content_type, meta.tmdb_id) in tmdb_keys
         return (_normalize(meta.title), meta.content_type) in title_set
 
     def is_manually_watched(self, meta) -> bool:
-        return self._match_tmdb_first(meta, self._archive_tmdb_ids, self._archive_titles)
+        return self._match_typed(meta, self._archive_tmdb_keys, self._archive_titles)
 
     def is_dismissed(self, meta) -> bool:
-        return self._match_tmdb_first(meta, self._dismissed_tmdb_ids, self._dismissed_titles)
+        return self._match_typed(meta, self._dismissed_tmdb_keys, self._dismissed_titles)
 
     def is_in_watchlist(self, meta) -> bool:
-        return self._match_tmdb_first(meta, self._watchlist_tmdb_ids, self._watchlist_titles)
+        return self._match_typed(meta, self._watchlist_tmdb_keys, self._watchlist_titles)
 
     def has_rating(self, meta) -> bool:
         return self.get_rating(meta) is not None

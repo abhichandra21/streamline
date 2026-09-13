@@ -261,7 +261,14 @@ def save(index: WatchIndex, path: str) -> None:
 
 
 def load(path: str) -> WatchIndex:
+    """Load the exclusion index. Raises ValueError when the file is not a list of
+    entry dicts with titles, so callers cannot mistake a corrupt file for an
+    empty history and treat everything as unwatched."""
     entries = json.loads(Path(path).read_text())
+    if not isinstance(entries, list) or not all(
+        isinstance(e, dict) and isinstance(e.get("title"), str) for e in entries
+    ):
+        raise ValueError(f"Watch index at {path} is not a list of title entries")
     tmdb_ids = {e["tmdb_id"] for e in entries if e.get("tmdb_id")}
     tmdb_keys = {
         (e.get("content_type", "movie"), e["tmdb_id"])

@@ -826,6 +826,7 @@
 
   {%- set on_home     = request.path == '/' %}
   {%- set on_wizard   = request.path == '/wizard' %}
+  {%- set on_find     = request.path == '/find' %}
   {%- set on_searches = request.path == '/searches' %}
   {%- set on_list     = request.path == '/watchlist' %}
   {%- set on_shows    = request.path.startswith('/shows') %}
@@ -853,6 +854,8 @@
           <svg viewBox="0 0 24 24"><use href="#ico-home"/></svg><span class="nav-label">Home</span></a>
         <a href="/wizard" title="Mood Match" class="nav-link {% if on_wizard %}active{% endif %}">
           <svg viewBox="0 0 24 24"><use href="#ico-wand"/></svg><span class="nav-label">Mood Match</span></a>
+        <a href="/find" title="Find" class="nav-link {% if on_find %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><use href="#ico-search"/></svg><span class="nav-label">Find</span></a>
         <a href="/searches" title="Searches" class="nav-link {% if on_searches %}active{% endif %}">
           <svg viewBox="0 0 24 24"><use href="#ico-search"/></svg><span class="nav-label">Searches</span></a>
       </nav>
@@ -917,12 +920,17 @@
     <a href="/watchlist" class="tab {% if on_list %}active{% endif %}">
       {% if watchlist_count %}<span class="tab-badge">{{ watchlist_count }}</span>{% endif %}
       <svg viewBox="0 0 24 24"><use href="#ico-mark"/></svg><span>List</span></a>
-    <a href="#nav-more" class="tab {% if on_searches or on_archive or on_settings or on_logs or on_help %}active{% endif %}">
+    <a href="#nav-more" class="tab {% if on_find or on_searches or on_archive or on_settings or on_logs or on_help %}active{% endif %}">
       <svg viewBox="0 0 24 24"><use href="#ico-more"/></svg><span>More</span></a>
   </nav>
 
   <div id="nav-more" class="nav-sheet">
     <div class="nav-sheet-grab"></div>
+    <div class="nav-section">Discover</div>
+    <nav class="nav-group">
+      <a href="/find" class="nav-link {% if on_find %}active{% endif %}">
+        <svg viewBox="0 0 24 24"><use href="#ico-search"/></svg><span class="nav-label">Find</span></a>
+    </nav>
     <div class="nav-section">Library</div>
     <nav class="nav-group">
       <a href="/searches" class="nav-link {% if on_searches %}active{% endif %}">

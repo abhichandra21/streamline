@@ -1,9 +1,11 @@
 import json
 import os
 import tempfile
+import time
 from unittest.mock import patch, MagicMock
 
 import pytest
+import requests
 
 from recommender.tmdb_client import (
     MatchHints,
@@ -745,3 +747,233 @@ def test_get_disambiguation_candidates_caps_at_five():
             mock_search.side_effect = [(many, True), ([], True)]
             result = client.get_disambiguation_candidates("Show", "tv")
         assert len(result.candidates) == 5
+
+
+# ── Find catalogue reads ──────────────────────────────────────────────────────
+
+def _discover_row(tmdb_id: int, content_type: str = "movie") -> dict:
+    row = {
+        "id": tmdb_id,
+        "poster_path": f"/p{tmdb_id}.jpg",
+        "overview": f"Overview {tmdb_id}",
+        "vote_average": 8.1,
+        "vote_count": 250,
+    }
+    if content_type == "tv":
+        row["name"] = f"Show {tmdb_id}"
+        row["first_air_date"] = "2026-05-01"
+    else:
+        row["title"] = f"Film {tmdb_id}"
+        row["release_date"] = "2026-05-01"
+    return row
+
+
+def test_search_keyword_exact_matches_case_insensitive_name_only(tmp_path):
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="k", cache_dir=str(tmp_path))
+    with patch.object(client, "_get", return_value={"results": [
+        {"id": 1, "name": "heist movie"},
+        {"id": 123, "name": "Heist"},
+    ]}) as mock_get:
+        assert client.search_keyword_exact("heist") == (123, "Heist")
+    mock_get.assert_called_once_with("search/keyword", params={"query": "heist", "page": 1})
+
+
+def test_search_keyword_exact_returns_none_without_exact_match(tmp_path):
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="k", cache_dir=str(tmp_path))
+    with patch.object(client, "_get", return_value={"results": [{"id": 1, "name": "heist movie"}]}):
+        assert client.search_keyword_exact("heist") is None
+    with patch.object(client, "_get", return_value={"results": []}):
+        assert client.search_keyword_exact("   ") is None
+
+
+def test_discover_catalog_page_movie_sends_exact_params(tmp_path):
+    from datetime import date
+    from recommender.tmdb_client import CatalogPage, CatalogTitle, TmdbClient
+    client = TmdbClient(api_key="k", cache_dir=str(tmp_path))
+    response = {"page": 2, "total_pages": 7, "results": [_discover_row(5), _discover_row(6)]}
+    with patch.object(client, "_get", return_value=response) as mock_get:
+        page = client.discover_catalog_page(
+            "movie", date(2026, 3, 12), date(2026, 9, 12),
+            genre="crime", keyword_id=123, min_rating=7.5, page=2, region="US",
+        )
+    endpoint, kwargs = mock_get.call_args.args[0], mock_get.call_args.kwargs
+    params = kwargs.get("params") or mock_get.call_args.args[1]
+    assert endpoint == "discover/movie"
+    assert params["sort_by"] == "vote_average.desc"
+    assert params["vote_count.gte"] == 100
+    assert params["vote_average.gte"] == 7.5
+    assert params["with_genres"] == "80"
+    assert params["with_keywords"] == "123"
+    assert params["primary_release_date.gte"] == "2026-03-12"
+    assert params["primary_release_date.lte"] == "2026-09-12"
+    assert params["region"] == "US"
+    assert params["page"] == 2
+    assert "first_air_date.gte" not in params
+
+    assert isinstance(page, CatalogPage)
+    assert page.page == 2 and page.total_pages == 7
+    assert [r.tmdb_id for r in page.rows] == [5, 6]
+    first = page.rows[0]
+    assert isinstance(first, CatalogTitle)
+    assert first == CatalogTitle(
+        tmdb_id=5, content_type="movie", title="Film 5", year=2026,
+        poster_path="/p5.jpg", overview="Overview 5", vote_average=8.1, vote_count=250,
+    )
+    # No detail hydration: exactly one request and nothing written to the metadata cache.
+    assert mock_get.call_count == 1
+    assert not (tmp_path / "movie").exists()
+
+
+def test_discover_catalog_page_tv_uses_first_air_date_without_region(tmp_path):
+    from datetime import date
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="k", cache_dir=str(tmp_path))
+    response = {"page": 1, "total_pages": 1, "results": [_discover_row(9, "tv")]}
+    with patch.object(client, "_get", return_value=response) as mock_get:
+        page = client.discover_catalog_page("tv", date(2025, 9, 12), date(2026, 9, 12), genre="crime")
+    endpoint = mock_get.call_args.args[0]
+    params = mock_get.call_args.kwargs.get("params") or mock_get.call_args.args[1]
+    assert endpoint == "discover/tv"
+    assert params["first_air_date.gte"] == "2025-09-12"
+    assert params["first_air_date.lte"] == "2026-09-12"
+    assert params["with_genres"] == "80"
+    assert "region" not in params
+    assert "primary_release_date.gte" not in params
+    assert "vote_average.gte" not in params
+    assert "with_keywords" not in params
+    assert page.rows[0].title == "Show 9"
+    assert page.rows[0].content_type == "tv"
+    assert page.rows[0].year == 2026
+
+
+def test_discover_catalog_page_omits_optional_filters_and_handles_missing_fields(tmp_path):
+    from datetime import date
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="k", cache_dir=str(tmp_path))
+    response = {"page": 1, "total_pages": 1, "results": [{"id": 1, "title": "Bare"}]}
+    with patch.object(client, "_get", return_value=response) as mock_get:
+        page = client.discover_catalog_page("movie", date(2026, 1, 1), date(2026, 2, 1))
+    params = mock_get.call_args.kwargs.get("params") or mock_get.call_args.args[1]
+    assert "with_genres" not in params
+    assert "with_keywords" not in params
+    assert "vote_average.gte" not in params
+    row = page.rows[0]
+    assert row.year is None and row.poster_path is None and row.overview == ""
+    assert row.vote_average == 0.0 and row.vote_count == 0
+
+
+# ── Find cinema status ───────────────────────────────────────
+
+def _age_file(path, seconds: int) -> None:
+    old = time.time() - seconds
+    os.utime(path, (old, old))
+
+
+def test_get_now_playing_ids_collects_every_page_and_caches(tmp_path):
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="k", cache_dir=str(tmp_path / "tmdb"))
+    cache_dir = tmp_path / "avail"
+    pages = {
+        1: {"page": 1, "total_pages": 3, "results": [{"id": 1}, {"id": 2}]},
+        2: {"page": 2, "total_pages": 3, "results": [{"id": 3}]},
+        3: {"page": 3, "total_pages": 3, "results": [{"id": 4}]},
+    }
+
+    def fake_get(endpoint, params=None):
+        assert endpoint == "movie/now_playing"
+        assert params["region"] == "US"
+        return pages[params["page"]]
+
+    with patch.object(client, "_get", side_effect=fake_get) as mock_get:
+        ids = client.get_now_playing_ids("US", str(cache_dir))
+    assert ids == {1, 2, 3, 4}
+    assert mock_get.call_count == 3
+
+    with patch.object(client, "_get", side_effect=AssertionError("must use cache")):
+        assert client.get_now_playing_ids("US", str(cache_dir)) == {1, 2, 3, 4}
+
+
+def test_get_now_playing_ids_cache_expires_after_6_hours(tmp_path):
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="k", cache_dir=str(tmp_path / "tmdb"))
+    cache_dir = tmp_path / "avail"
+    with patch.object(client, "_get", return_value={"page": 1, "total_pages": 1, "results": [{"id": 1}]}):
+        assert client.get_now_playing_ids("US", str(cache_dir)) == {1}
+    cached_files = list(cache_dir.rglob("*.json"))
+    assert len(cached_files) == 1
+    _age_file(cached_files[0], 6 * 3600 + 60)
+    with patch.object(client, "_get", return_value={"page": 1, "total_pages": 1, "results": [{"id": 9}]}) as mock_get:
+        assert client.get_now_playing_ids("US", str(cache_dir)) == {9}
+    assert mock_get.call_count == 1
+
+
+def test_get_now_playing_ids_partial_failure_returns_none_and_is_not_cached(tmp_path):
+    """A missing id may only mean 'not in theaters' when every page was read."""
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="k", cache_dir=str(tmp_path / "tmdb"))
+    cache_dir = tmp_path / "avail"
+
+    def fake_get(endpoint, params=None):
+        if params["page"] == 1:
+            return {"page": 1, "total_pages": 2, "results": [{"id": 1}]}
+        raise requests.ConnectionError("boom")
+
+    with patch.object(client, "_get", side_effect=fake_get):
+        assert client.get_now_playing_ids("US", str(cache_dir)) is None
+    assert not cache_dir.exists() or not list(cache_dir.rglob("*.json"))
+
+
+def test_get_now_playing_ids_rate_limit_propagates(tmp_path):
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="k", cache_dir=str(tmp_path / "tmdb"))
+    with patch.object(client, "_get", side_effect=TmdbRateLimitError(None)):
+        with pytest.raises(TmdbRateLimitError):
+            client.get_now_playing_ids("US", str(tmp_path / "avail"))
+
+
+def test_discover_catalog_page_sort_by_defaults_to_rating_and_is_overridable(tmp_path):
+    from datetime import date
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="k", cache_dir=str(tmp_path))
+    response = {"page": 1, "total_pages": 1, "results": []}
+    with patch.object(client, "_get", return_value=response) as mock_get:
+        client.discover_catalog_page("movie", date(2026, 1, 1), date(2026, 2, 1))
+        client.discover_catalog_page("movie", date(2026, 1, 1), date(2026, 2, 1), sort_by="popularity.desc")
+        client.discover_catalog_page("tv", date(2026, 1, 1), date(2026, 2, 1), sort_by="first_air_date.desc")
+    sorts = [c.kwargs.get("params", c.args[1] if len(c.args) > 1 else {})["sort_by"] for c in mock_get.call_args_list]
+    assert sorts == ["vote_average.desc", "popularity.desc", "first_air_date.desc"]
+    # The 100-vote floor applies to every sort.
+    assert all((c.kwargs.get("params") or c.args[1])["vote_count.gte"] == 100 for c in mock_get.call_args_list)
+
+
+def test_get_never_exposes_the_api_key_in_http_errors(tmp_path):
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="SECRETKEY123", cache_dir=str(tmp_path))
+    response = requests.Response()
+    response.status_code = 500
+    response.reason = "Server Error"
+    response.url = "https://api.themoviedb.org/3/discover/movie?api_key=SECRETKEY123&page=1"
+    with patch("recommender.tmdb_client.requests.get", return_value=response):
+        with pytest.raises(requests.HTTPError) as info:
+            client._get("discover/movie", {"page": 1})
+    assert "SECRETKEY123" not in str(info.value)
+    assert "500" in str(info.value) and "discover/movie" in str(info.value)
+    assert info.value.response is response
+
+
+def test_get_never_exposes_the_api_key_in_connection_errors(tmp_path):
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="SECRETKEY123", cache_dir=str(tmp_path))
+    err = requests.ConnectionError("Max retries exceeded with url: /3/discover/movie?api_key=SECRETKEY123")
+    with patch("recommender.tmdb_client.requests.get", side_effect=err):
+        with pytest.raises(requests.RequestException) as info:
+            client._get("discover/movie", {"page": 1})
+    assert "SECRETKEY123" not in str(info.value)
+    assert "ConnectionError" in str(info.value)
+
+
+def test_config_has_find_cache_dir():
+    import config
+    assert config.FIND_CACHE_DIR.endswith("recommender/cache/find")

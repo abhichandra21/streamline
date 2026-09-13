@@ -132,3 +132,30 @@ def test_is_in_watchlist(tmp_path):
 
     assert idx.is_in_watchlist(FakeMeta("Upcoming Show", "tv", tmdb_id=777))
     assert not idx.is_in_watchlist(FakeMeta("Other", "tv"))
+
+
+def test_manual_archive_tmdb_id_is_content_type_aware(tmp_path):
+    from recommender.user_state import UserStateIndex
+
+    db = str(tmp_path / "state.db")
+    init_db(db)
+    add_to_archive(db, "TV Example", "tv", tmdb_id=42)
+    index = UserStateIndex.load(db)
+
+    assert index.is_manually_watched(FakeMeta("TV Example", "tv", 42))
+    assert not index.is_manually_watched(FakeMeta("Movie Example", "movie", 42))
+
+
+def test_watchlist_and_dismissed_tmdb_ids_are_content_type_aware(tmp_path):
+    from recommender.user_state import UserStateIndex
+
+    db = str(tmp_path / "state.db")
+    init_db(db)
+    save_title(db, "Saved Show", "tv", tmdb_id=42)
+    dismiss_title(db, "Dropped Show", "tv", tmdb_id=43)
+    index = UserStateIndex.load(db)
+
+    assert index.is_in_watchlist(FakeMeta("Saved Show", "tv", 42))
+    assert not index.is_in_watchlist(FakeMeta("Same Number Movie", "movie", 42))
+    assert index.is_dismissed(FakeMeta("Dropped Show", "tv", 43))
+    assert not index.is_dismissed(FakeMeta("Same Number Movie", "movie", 43))
