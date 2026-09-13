@@ -2632,6 +2632,21 @@ class TestFindRendering(TestFind):
 
     # ── Paging: the list keeps going batch by batch ──
 
+    def test_shown_ids_are_excluded_and_carried_forward(self, client, find_env):
+        body = client.get("/find?cursor=1.12&start=10&shown=7,8,9,x,-1,").get_data(as_text=True)
+        assert find_env["finder"][0]["exclude"] == frozenset({7, 8, 9})
+        more = body[body.index('class="find-more"'):]
+        href = more[more.index('href="') + 6:]
+        href = href[:href.index('"')].replace("&amp;", "&")
+        assert "shown=7,8,9,1,2" in href
+        assert "start=12" in href
+
+    def test_shown_ids_are_capped_to_keep_the_url_bounded(self, client, find_env):
+        ids = ",".join(str(i) for i in range(1000, 1400))
+        body = client.get(f"/find?cursor=1.12&start=400&shown={ids}").get_data(as_text=True)
+        assert len(find_env["finder"][0]["exclude"]) == 300
+        assert 1399 in find_env["finder"][0]["exclude"] and 1000 not in find_env["finder"][0]["exclude"]
+
     def test_cursor_is_passed_to_the_finder(self, client, find_env):
         client.get("/find?period=1y&cursor=3.7")
         assert find_env["finder"][0]["cursor"] == "3.7"
@@ -2645,7 +2660,7 @@ class TestFindRendering(TestFind):
         href = more[more.index('href="') + 6:]
         href = href[:href.index('"')].replace("&amp;", "&")
         assert href.startswith("/find?")
-        for part in ("type=tv", "period=2y", "genre=crime", "keyword=heist", "rating=8", "cursor=1.12", "start=2", "sort=rating"):
+        for part in ("type=tv", "period=2y", "genre=crime", "keyword=heist", "rating=8", "cursor=1.12", "start=2", "sort=rating", "shown=1,2"):
             assert part in href, part
         # Progressive enhancement: HTMX appends, the bare link still works.
         assert 'hx-get="' in more and 'hx-swap="outerHTML"' in more

@@ -249,6 +249,15 @@ def test_invalid_cursor_starts_from_the_beginning():
         assert tmdb.discover_calls[0]["page"] == 1
 
 
+def test_exclude_ids_are_skipped_so_a_reordered_title_is_not_shown_twice():
+    """Between two clicks TMDB reordered: a title shown in batch one now sits after the cursor."""
+    page1 = [_title(i) for i in range(1, 21)]
+    tmdb = FakeTmdb({1: page1})
+    results = _run(tmdb, cursor="1.10", exclude=frozenset({11, 12, 5}))
+    assert [r.title.tmdb_id for r in results.rows] == [13, 14, 15, 16, 17, 18, 19, 20]
+    assert results.catalog_exhausted is True
+
+
 def test_cursor_past_total_pages_returns_nothing_more():
     tmdb = FakeTmdb({1: [_title(1)]})
     results = _run(tmdb, cursor="5.0")

@@ -140,7 +140,14 @@ def find_unwatched_titles(
     today: date | None = None,
     limit: int = DEFAULT_LIMIT,
     cursor: str | None = None,
+    exclude: frozenset[int] = frozenset(),
 ) -> FindResults:
+    """One batch of unwatched titles.
+
+    exclude holds TMDB ids already shown in earlier batches. TMDB may reorder
+    between requests, so the cursor alone cannot guarantee a title is not
+    served twice; the caller carries the shown ids forward.
+    """
     release_start, release_end = release_window(criteria.period, today)
 
     keyword_id: int | None = None
@@ -155,7 +162,7 @@ def find_unwatched_titles(
 
     sort_by = discover_sort_by(criteria.sort, criteria.content_type)
     titles: list[CatalogTitle] = []
-    seen: set[int] = set()
+    seen: set[int] = set(exclude)
     page, offset = parse_cursor(cursor)
     pages_read = 0
     next_cursor: str | None = None

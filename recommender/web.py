@@ -1201,7 +1201,25 @@ def _find_start(args) -> int:
         return 0
 
 
-def _find_url(criteria: FindCriteria, cursor: str, start: int) -> str:
+# Ids already shown are carried in the Show more URL so a TMDB reorder between
+# clicks cannot serve a title twice. Only the most recent ones are kept; a
+# reorder moves titles a few places, not hundreds, and the URL stays bounded.
+FIND_SHOWN_MAX = 300
+
+
+def _find_shown(args) -> list[int]:
+    """Ordered, de-duplicated TMDB ids from the shown= query field."""
+    out: list[int] = []
+    seen: set[int] = set()
+    for raw in (args.get("shown") or "").split(","):
+        raw = raw.strip()
+        if raw.isdigit() and int(raw) not in seen:
+            seen.add(int(raw))
+            out.append(int(raw))
+    return out[-FIND_SHOWN_MAX:]
+
+
+def _find_url(criteria: FindCriteria, cursor: str, start: int, shown: list[int]) -> str:
     params = {
         "type": criteria.content_type,
         "period": criteria.period,
@@ -1211,6 +1229,7 @@ def _find_url(criteria: FindCriteria, cursor: str, start: int) -> str:
         "sort": criteria.sort,
         "cursor": cursor,
         "start": start,
+        "shown": ",".join(str(i) for i in shown[-FIND_SHOWN_MAX:]),
     }
     return url_for("find_page", **params)
 
@@ -1232,6 +1251,7 @@ def find_page() -> str:
     criteria = _find_criteria(request.args)
     cursor = request.args.get("cursor") or None
     start = _find_start(request.args)
+    shown = _find_shown(request.args)
     page = {
         "criteria": criteria,
         "genres": _find_genres(criteria.content_type),
@@ -1263,12 +1283,15 @@ def find_page() -> str:
     try:
         results = find_unwatched_titles(
             tmdb, watch_index, user_state, criteria, config.AVAILABILITY_CACHE_DIR,
-            cursor=cursor,
+            cursor=cursor, exclude=frozenset(shown),
         )
         page["results"] = results
         page["saved_ids"] = _find_saved_ids(results.rows, user_state)
         if results.next_cursor:
-            page["more_url"] = _find_url(criteria, results.next_cursor, start + len(results.rows))
+            page["more_url"] = _find_url(
+                criteria, results.next_cursor, start + len(results.rows),
+                shown + [r.title.tmdb_id for r in results.rows],
+            )
     except TmdbRateLimitError as exc:
         wait = f" Try again in about {int(exc.retry_after_seconds)} seconds." if exc.retry_after_seconds else ""
         page["error"] = f"TMDB rate limit reached while reading the catalogue.{wait}"
