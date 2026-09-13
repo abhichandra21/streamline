@@ -2455,11 +2455,14 @@ class TestFind:
         assert "Run ./recommend setup" in body
         assert find_env["finder"] == []
 
-    def test_corrupt_watch_index_says_run_setup(self, client, find_env, monkeypatch, tmp_path):
+    @pytest.mark.parametrize("payload", ["{not json", "{}", "[1, 2]", '{"a": 1}', "null"])
+    def test_corrupt_watch_index_says_run_setup(self, client, find_env, monkeypatch, tmp_path, payload):
         bad = tmp_path / "bad.json"
-        bad.write_text("{not json")
+        bad.write_text(payload)
         monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(bad))
-        resp = client.get("/find")
+        with patch("recommender.tmdb_client.requests.get", side_effect=AssertionError("no TMDB")):
+            resp = client.get("/find")
+        assert resp.status_code == 200
         assert "Run ./recommend setup" in resp.get_data(as_text=True)
         assert find_env["finder"] == []
 
