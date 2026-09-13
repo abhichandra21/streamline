@@ -2551,7 +2551,7 @@ class TestFind(FindTestSupport):
 
 
 class TestFindRendering(FindTestSupport):
-    """The narrow page: one GET form, at most 10 cards, availability labels, nothing else."""
+    """The narrow page: one GET form, batches of 10 cards, availability labels, a Save per card, Show more."""
 
     def test_form_has_the_complete_filter_set_and_nothing_more(self, client, find_env):
         from recommender.catalog_finder import PERIOD_OPTIONS, RATING_OPTIONS
@@ -2574,7 +2574,7 @@ class TestFindRendering(FindTestSupport):
         for g in MOVIE_GENRE_IDS:
             assert f'value="{g}"' in body
 
-        # No natural language, provider, country, language, actions, or paging.
+        # No natural language, provider, country, language, archive actions, or numbered paging.
         assert 'name="q"' not in body
         assert 'name="provider"' not in body
         assert 'name="country"' not in body

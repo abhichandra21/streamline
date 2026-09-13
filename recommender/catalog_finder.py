@@ -1,6 +1,6 @@
-"""Find page collector: highest-rated unwatched titles for a small set of criteria, in batches.
+"""Find page collector: unwatched titles for a small set of criteria, sorted as asked, in batches.
 
-Deterministic and LLM-free. Reads TMDB Discover pages in TMDB order, drops
+Deterministic and LLM-free. Reads TMDB Discover pages in the requested sort order, drops
 anything already watched (imported history or manual archive), and returns one
 batch plus a cursor that says where to resume. Availability is fetched only for
 the batch rows and is display-only: it never removes or reorders a title.

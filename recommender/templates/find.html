@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Streamline — Find{% endblock %}
 {% block content %}
-{%- set c = criteria %}
 
 <style>
   /* ── Find: an editorial index of what you have not seen ────────────────
@@ -391,8 +390,8 @@
     <div class="find-kicker">Catalogue · unwatched only</div>
     <h1 class="find-h1">Find something<br>you <em>haven't</em> seen.</h1>
     <p class="find-lede">
-      {%- set lede_sort = dict(sort_options).get(c.sort, 'Rating') | lower %}
-      {{ 'TV series' if c.content_type == 'tv' else 'Movies' }} you have not watched, straight from TMDB and ordered by {{ lede_sort }}.
+      {%- set lede_sort = dict(sort_options).get(criteria.sort, 'Rating') | lower %}
+      {{ 'TV series' if criteria.content_type == 'tv' else 'Movies' }} you have not watched, straight from TMDB and ordered by {{ lede_sort }}.
       Titles need at least 100 votes. Keep scrolling; the list continues as far as TMDB does.
     </p>
   </div>
@@ -400,8 +399,8 @@
   <div class="find-window">
     <b>{{ results.release_start.strftime('%d %b %Y') }}</b> to <b>{{ results.release_end.strftime('%d %b %Y') }}</b><br>
     {%- if results.keyword_name %}keyword <b>{{ results.keyword_name }}</b><br>{% endif %}
-    {%- if c.genre %}genre <b>{{ c.genre }}</b><br>{% endif %}
-    {%- if c.min_rating %}rated <b>{{ c.min_rating }}+</b><br>{% endif %}
+    {%- if criteria.genre %}genre <b>{{ criteria.genre }}</b><br>{% endif %}
+    {%- if criteria.min_rating %}rated <b>{{ criteria.min_rating }}+</b><br>{% endif %}
   </div>
   {%- endif %}
 </section>
@@ -410,8 +409,8 @@
   <div class="find-field">
     <span class="find-cap">Type</span>
     <div class="find-seg" role="radiogroup" aria-label="Content type">
-      <label><input type="radio" name="type" value="movie" {% if c.content_type == 'movie' %}checked{% endif %}>Movies</label>
-      <label><input type="radio" name="type" value="tv" {% if c.content_type == 'tv' %}checked{% endif %}>TV</label>
+      <label><input type="radio" name="type" value="movie" {% if criteria.content_type == 'movie' %}checked{% endif %}>Movies</label>
+      <label><input type="radio" name="type" value="tv" {% if criteria.content_type == 'tv' %}checked{% endif %}>TV</label>
     </div>
   </div>
 
@@ -419,7 +418,7 @@
     <span class="find-cap">Released in the last</span>
     <select name="period">
       {%- for key, label in period_options %}
-      <option value="{{ key }}" {% if c.period == key %}selected{% endif %}>{{ label }}</option>
+      <option value="{{ key }}" {% if criteria.period == key %}selected{% endif %}>{{ label }}</option>
       {%- endfor %}
     </select>
   </label>
@@ -427,23 +426,23 @@
   <label class="find-field">
     <span class="find-cap">Genre</span>
     <select name="genre">
-      <option value="" {% if not c.genre %}selected{% endif %}>Any genre</option>
+      <option value="" {% if not criteria.genre %}selected{% endif %}>Any genre</option>
       {%- for g in genres %}
-      <option value="{{ g }}" {% if c.genre == g %}selected{% endif %}>{{ g | capitalize }}</option>
+      <option value="{{ g }}" {% if criteria.genre == g %}selected{% endif %}>{{ g | capitalize }}</option>
       {%- endfor %}
     </select>
   </label>
 
   <label class="find-field">
     <span class="find-cap">TMDB keyword · exact</span>
-    <input type="text" name="keyword" value="{{ c.keyword or '' }}" maxlength="80" placeholder="heist, time travel, ...">
+    <input type="text" name="keyword" value="{{ criteria.keyword or '' }}" maxlength="80" placeholder="heist, time travel, ...">
   </label>
 
   <label class="find-field">
     <span class="find-cap">Minimum rating</span>
     <select name="rating">
       {%- for key, label, value in rating_options %}
-      <option value="{{ key }}" {% if c.min_rating == value %}selected{% endif %}>{{ label }}</option>
+      <option value="{{ key }}" {% if criteria.min_rating == value %}selected{% endif %}>{{ label }}</option>
       {%- endfor %}
     </select>
   </label>
@@ -452,7 +451,7 @@
     <span class="find-cap">Sort by</span>
     <select name="sort">
       {%- for key, label in sort_options %}
-      <option value="{{ key }}" {% if c.sort == key %}selected{% endif %}>{{ label }}</option>
+      <option value="{{ key }}" {% if criteria.sort == key %}selected{% endif %}>{{ label }}</option>
       {%- endfor %}
     </select>
   </label>
@@ -468,12 +467,12 @@
   {%- if results.keyword_missing %}
   <div class="find-note">
     <span class="find-cap">Keyword</span>
-    <div>No exact TMDB keyword named <strong>{{ c.keyword }}</strong>. TMDB keywords match by name exactly; try the wording TMDB uses on a title page.</div>
+    <div>No exact TMDB keyword named <strong>{{ criteria.keyword }}</strong>. TMDB keywords match by name exactly; try the wording TMDB uses on a title page.</div>
   </div>
   {%- elif not results.rows and start == 0 %}
   <div class="find-note">
     <span class="find-cap">Empty</span>
-    <div>No unwatched {{ 'TV series' if c.content_type == 'tv' else 'movies' }} matched. Widen the period or drop a filter, then press Show results.</div>
+    <div>No unwatched {{ 'TV series' if criteria.content_type == 'tv' else 'movies' }} matched. Widen the period or drop a filter, then press Show results.</div>
   </div>
   {%- else %}
     {%- if results.availability_rate_limited %}
@@ -484,8 +483,8 @@
     {%- endif %}
 
     <div class="find-ledger-head">
-      {%- set sort_label = dict(sort_options).get(c.sort, 'Rating') %}
-      <span class="find-cap">{{ 'Series' if c.content_type == 'tv' else 'Films' }} · by {{ sort_label | lower }}</span>
+      {%- set sort_label = dict(sort_options).get(criteria.sort, 'Rating') %}
+      <span class="find-cap">{{ 'Series' if criteria.content_type == 'tv' else 'Films' }} · by {{ sort_label | lower }}</span>
       <span class="find-cap">Where to watch · US</span>
     </div>
 
