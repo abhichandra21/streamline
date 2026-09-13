@@ -57,6 +57,24 @@
       <li class="find-chip is-unknown"><i></i>Unknown</li>
       {%- endif %}
     </ul>
+
+    {%- set wl_id = 'find-wl-' ~ t.content_type ~ '-' ~ t.tmdb_id %}
+    {%- set saved = t.tmdb_id in saved_ids %}
+    <div class="find-actions">
+      <span id="{{ wl_id }}" class="find-save{% if saved %} is-saved{% endif %}">
+        <form method="post" action="{{ '/watchlist/unsave' if saved else '/watchlist/save' }}"
+              hx-post="{{ '/watchlist/unsave' if saved else '/watchlist/save' }}" hx-target="#{{ wl_id }}" hx-swap="outerHTML">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="title" value="{{ t.title }}">
+          <input type="hidden" name="content_type" value="{{ t.content_type }}">
+          <input type="hidden" name="tmdb_id" value="{{ t.tmdb_id }}">
+          <input type="hidden" name="mode" value="toggle">
+          <input type="hidden" name="target_id" value="{{ wl_id }}">
+          <input type="hidden" name="redirect" value="{{ return_to }}">
+          <button type="submit" title="{{ 'Remove from watchlist' if saved else 'Save to watchlist' }}">{{ 'Saved' if saved else '+ Save' }}</button>
+        </form>
+      </span>
+    </div>
   </div>
 </article>
 {%- endfor %}

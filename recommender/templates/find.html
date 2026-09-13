@@ -49,8 +49,8 @@
   .find-form {
     position: relative;
     display: grid;
-    /* Two ruled rows of three: type / period / genre, then keyword / rating / go. */
-    grid-template-columns: 11.5rem minmax(0, 1fr) minmax(0, 1fr);
+    /* Two rows: type / period / genre / keyword, then rating / sort / go. */
+    grid-template-columns: 11.5rem repeat(3, minmax(0, 1fr));
     gap: 1.25rem 1.5rem;
     align-items: end;
     padding: 1.25rem 1.5rem 1.35rem;
@@ -148,7 +148,7 @@
     white-space: nowrap;
     transition: background 0.2s, color 0.2s, transform 0.15s;
   }
-  .find-form .find-go { justify-self: end; }
+  .find-form .find-go { justify-self: end; grid-column: 4; }
   .find-go:hover { background: var(--text); color: var(--bg); transform: translateY(-1px); }
   .find-go:active { transform: translateY(0); }
 
@@ -304,6 +304,25 @@
   .find-chip.is-unknown { color: var(--muted); border-style: dashed; }
   .find-chip.is-unknown i { box-shadow: none; }
 
+  /* Save to watchlist: one quiet outline button per card, coral when saved. */
+  .find-actions { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.25rem; }
+  .find-save form { margin: 0; display: inline; }
+  .find-save button {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.58rem; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.35rem 0.85rem;
+    cursor: pointer;
+    transition: border-color 0.2s, color 0.2s, background 0.2s;
+  }
+  .find-save button:hover { border-color: var(--accent); color: var(--text); background: rgba(232,93,74,0.08); }
+  .find-save.is-saved button { border-color: var(--teal); color: var(--teal); }
+  .find-save.is-saved button:hover { background: rgba(58,184,160,0.1); }
+  .find-save .result-link, .find-save > span > form button { color: var(--muted); }
+
   /* Continue / end: a ruled line with a mono label set into it. */
   .find-more, .find-end {
     display: grid; grid-template-columns: 1fr auto 1fr;
@@ -372,7 +391,8 @@
     <div class="find-kicker">Catalogue · unwatched only</div>
     <h1 class="find-h1">Find something<br>you <em>haven't</em> seen.</h1>
     <p class="find-lede">
-      {{ 'TV series' if c.content_type == 'tv' else 'Movies' }} you have not watched, straight from TMDB and ordered by rating.
+      {%- set lede_sort = dict(sort_options).get(c.sort, 'Rating') | lower %}
+      {{ 'TV series' if c.content_type == 'tv' else 'Movies' }} you have not watched, straight from TMDB and ordered by {{ lede_sort }}.
       Titles need at least 100 votes. Keep scrolling; the list continues as far as TMDB does.
     </p>
   </div>
@@ -428,6 +448,15 @@
     </select>
   </label>
 
+  <label class="find-field">
+    <span class="find-cap">Sort by</span>
+    <select name="sort">
+      {%- for key, label in sort_options %}
+      <option value="{{ key }}" {% if c.sort == key %}selected{% endif %}>{{ label }}</option>
+      {%- endfor %}
+    </select>
+  </label>
+
   <button type="submit" class="find-go">Show results</button>
 </form>
 
@@ -455,7 +484,8 @@
     {%- endif %}
 
     <div class="find-ledger-head">
-      <span class="find-cap">{{ 'Series' if c.content_type == 'tv' else 'Films' }} · by TMDB rating</span>
+      {%- set sort_label = dict(sort_options).get(c.sort, 'Rating') %}
+      <span class="find-cap">{{ 'Series' if c.content_type == 'tv' else 'Films' }} · by {{ sort_label | lower }}</span>
       <span class="find-cap">Where to watch · US</span>
     </div>
 

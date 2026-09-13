@@ -37,6 +37,19 @@ PERIOD_OPTIONS = (
     ("10y", "10 years"),
 )
 
+# (key, label). "newest" resolves to the content type's date field in discover_sort_by().
+SORT_OPTIONS = (
+    ("rating", "Rating"), ("newest", "Newest"),
+    ("popular", "Most popular"), ("votes", "Most voted"),
+)
+DEFAULT_SORT = "rating"
+
+_SORT_BY: dict[str, str] = {
+    "rating": "vote_average.desc",
+    "popular": "popularity.desc",
+    "votes": "vote_count.desc",
+}
+
 # (key, label, TMDB vote_average.gte or None for no floor).
 RATING_OPTIONS = (
     ("any", "Any", None), ("6", "6+", 6.0), ("7", "7+", 7.0),
@@ -61,6 +74,7 @@ class FindCriteria:
     genre: str | None = None
     keyword: str | None = None
     min_rating: float | None = None
+    sort: str = DEFAULT_SORT
 
 
 @dataclass(frozen=True)
@@ -109,6 +123,13 @@ def parse_cursor(cursor: str | None) -> tuple[int, int]:
     return int(match.group(1)), int(match.group(2))
 
 
+def discover_sort_by(sort: str, content_type: str) -> str:
+    """Map a sort key to TMDB's sort_by. Unknown keys fall back to rating."""
+    if sort == "newest":
+        return "first_air_date.desc" if content_type == "tv" else "primary_release_date.desc"
+    return _SORT_BY.get(sort, _SORT_BY[DEFAULT_SORT])
+
+
 def find_unwatched_titles(
     tmdb: TmdbClient,
     watch_index,
@@ -132,6 +153,7 @@ def find_unwatched_titles(
                                release_end=release_end, keyword_missing=True)
         keyword_id, keyword_name = match
 
+    sort_by = discover_sort_by(criteria.sort, criteria.content_type)
     titles: list[CatalogTitle] = []
     seen: set[int] = set()
     page, offset = parse_cursor(cursor)
@@ -141,7 +163,7 @@ def find_unwatched_titles(
         result = tmdb.discover_catalog_page(
             criteria.content_type, release_start, release_end,
             genre=criteria.genre, keyword_id=keyword_id, min_rating=criteria.min_rating,
-            page=page, region=region,
+            page=page, region=region, sort_by=sort_by,
         )
         pages_read += 1
         if not result.rows or result.page > result.total_pages:

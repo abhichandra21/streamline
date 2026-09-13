@@ -38,7 +38,7 @@ from recommender import wizard_flow
 from recommender.structured_profile import load_structured_profile
 from recommender.tmdb_client import MOVIE_GENRE_IDS, TV_GENRE_IDS, TmdbClient, TmdbRateLimitError
 from recommender.catalog_finder import (
-    FindCriteria, PERIOD_OPTIONS, RATING_OPTIONS, find_unwatched_titles,
+    FindCriteria, PERIOD_OPTIONS, RATING_OPTIONS, SORT_OPTIONS, find_unwatched_titles,
 )
 
 def _events_loader_fallback() -> list:
@@ -1158,6 +1158,7 @@ FIND_KEYWORD_MAX_CHARS = 80
 _FIND_PERIOD_KEYS = {key for key, _label in PERIOD_OPTIONS}
 _FIND_RATINGS = {key: value for key, _label, value in RATING_OPTIONS}
 _FIND_RATING_KEYS = {value: key for key, _label, value in RATING_OPTIONS}
+_FIND_SORT_KEYS = {key for key, _label in SORT_OPTIONS}
 
 
 def _find_genres(content_type: str) -> list[str]:
@@ -1184,8 +1185,12 @@ def _find_criteria(args) -> FindCriteria:
 
     min_rating = _FIND_RATINGS.get(args.get("rating", "any"))
 
+    sort = args.get("sort", "rating")
+    if sort not in _FIND_SORT_KEYS:
+        sort = "rating"
+
     return FindCriteria(content_type=content_type, period=period, genre=genre,
-                        keyword=keyword, min_rating=min_rating)
+                        keyword=keyword, min_rating=min_rating, sort=sort)
 
 
 def _find_start(args) -> int:
@@ -1203,10 +1208,16 @@ def _find_url(criteria: FindCriteria, cursor: str, start: int) -> str:
         "genre": criteria.genre or "",
         "keyword": criteria.keyword or "",
         "rating": _FIND_RATING_KEYS.get(criteria.min_rating, "any"),
+        "sort": criteria.sort,
         "cursor": cursor,
         "start": start,
     }
     return url_for("find_page", **params)
+
+
+def _find_saved_ids(rows, user_state) -> set[int]:
+    """TMDB ids among the batch rows that are already on the watchlist."""
+    return {r.title.tmdb_id for r in rows if user_state.is_in_watchlist(r.title)}
 
 
 @app.route("/find")
@@ -1226,10 +1237,14 @@ def find_page() -> str:
         "genres": _find_genres(criteria.content_type),
         "period_options": PERIOD_OPTIONS,
         "rating_options": RATING_OPTIONS,
+        "sort_options": SORT_OPTIONS,
         "results": None,
         "error": None,
         "start": start,
         "more_url": None,
+        "saved_ids": set(),
+        # Plain-form fallback for the save buttons: come back to this exact list.
+        "return_to": request.full_path.rstrip("?"),
     }
 
     if not config.TMDB_API_KEY:
@@ -1251,6 +1266,7 @@ def find_page() -> str:
             cursor=cursor,
         )
         page["results"] = results
+        page["saved_ids"] = _find_saved_ids(results.rows, user_state)
         if results.next_cursor:
             page["more_url"] = _find_url(criteria, results.next_cursor, start + len(results.rows))
     except TmdbRateLimitError as exc:
@@ -1809,8 +1825,22 @@ def watchlist_export():
     )
 
 
+def _local_redirect_target() -> str | None:
+    """A same-site path from the form's redirect field, or None.
+
+    Plain (non-HTMX) forms use it to land back where they were submitted.
+    Only absolute local paths are accepted so this can never leave the site.
+    """
+    if _is_htmx():
+        return None
+    target = (request.form.get("redirect") or "").strip()
+    if target.startswith("/") and not target.startswith("//"):
+        return target
+    return None
+
+
 @app.route("/watchlist/save", methods=["POST"])
-def watchlist_save() -> str:
+def watchlist_save():
     title = (request.form.get("title") or "").strip()
     ct = request.form.get("content_type", "tv")
     tmdb_id = request.form.get("tmdb_id", type=int)
@@ -1820,13 +1850,16 @@ def watchlist_save() -> str:
         return "Missing title", 400
     _ensure_user_store_once()
     user_store.save_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+    back = _local_redirect_target()
+    if back:
+        return redirect(back)
     if mode == "toggle" and target_id:
         return _watchlist_saved_fragment(title, ct, tmdb_id, target_id)
     return '<span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>'
 
 
 @app.route("/watchlist/unsave", methods=["POST"])
-def watchlist_unsave() -> str:
+def watchlist_unsave():
     title = (request.form.get("title") or "").strip()
     ct = request.form.get("content_type", "tv")
     tmdb_id = request.form.get("tmdb_id", type=int)
@@ -1835,6 +1868,9 @@ def watchlist_unsave() -> str:
         return "Missing title", 400
     _ensure_user_store_once()
     user_store.remove_saved_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+    back = _local_redirect_target()
+    if back:
+        return redirect(back)
     return _watchlist_save_fragment(title, ct, tmdb_id, target_id)
 
 

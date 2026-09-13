@@ -1050,3 +1050,18 @@ def test_get_now_playing_ids_rate_limit_propagates(tmp_path):
     with patch.object(client, "_get", side_effect=TmdbRateLimitError(None)):
         with pytest.raises(TmdbRateLimitError):
             client.get_now_playing_ids("US", str(tmp_path / "avail"))
+
+
+def test_discover_catalog_page_sort_by_defaults_to_rating_and_is_overridable(tmp_path):
+    from datetime import date
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="k", cache_dir=str(tmp_path))
+    response = {"page": 1, "total_pages": 1, "results": []}
+    with patch.object(client, "_get", return_value=response) as mock_get:
+        client.discover_catalog_page("movie", date(2026, 1, 1), date(2026, 2, 1))
+        client.discover_catalog_page("movie", date(2026, 1, 1), date(2026, 2, 1), sort_by="popularity.desc")
+        client.discover_catalog_page("tv", date(2026, 1, 1), date(2026, 2, 1), sort_by="first_air_date.desc")
+    sorts = [c.kwargs.get("params", c.args[1] if len(c.args) > 1 else {})["sort_by"] for c in mock_get.call_args_list]
+    assert sorts == ["vote_average.desc", "popularity.desc", "first_air_date.desc"]
+    # The 100-vote floor applies to every sort.
+    assert all((c.kwargs.get("params") or c.args[1])["vote_count.gte"] == 100 for c in mock_get.call_args_list)

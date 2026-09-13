@@ -1312,6 +1312,45 @@ class TestWatchlistRoutes:
         assert b"Less like this" in resp.data
 
 
+class TestWatchlistRedirectFallback:
+    def test_save_with_redirect_returns_to_the_find_page(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(web.config, "EVENT_DB_PATH", str(tmp_path / "s.db"))
+        web._user_store_ready = False
+        resp = client.post("/watchlist/save", data=_csrf_form(
+            title="Some Film", content_type="movie", tmdb_id="77", mode="toggle",
+            target_id="find-wl-movie-77", redirect="/find?period=1y&sort=newest"))
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/find?period=1y&sort=newest")
+        from recommender import user_store
+        assert any(i["tmdb_id"] == 77 for i in user_store.list_saved_titles(str(tmp_path / "s.db"), status="watchlist"))
+
+    def test_unsave_with_redirect_returns_to_the_find_page(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(web.config, "EVENT_DB_PATH", str(tmp_path / "s.db"))
+        web._user_store_ready = False
+        resp = client.post("/watchlist/unsave", data=_csrf_form(
+            title="Some Film", content_type="movie", tmdb_id="77",
+            target_id="find-wl-movie-77", redirect="/find"))
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/find")
+
+    def test_htmx_request_ignores_redirect_and_returns_the_fragment(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(web.config, "EVENT_DB_PATH", str(tmp_path / "s.db"))
+        web._user_store_ready = False
+        resp = client.post("/watchlist/save", headers={"HX-Request": "true"}, data=_csrf_form(
+            title="Some Film", content_type="movie", tmdb_id="77", mode="toggle",
+            target_id="find-wl-movie-77", redirect="/find"))
+        assert resp.status_code == 200
+        assert "Saved" in resp.get_data(as_text=True)
+
+    def test_redirect_must_be_a_local_path(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(web.config, "EVENT_DB_PATH", str(tmp_path / "s.db"))
+        web._user_store_ready = False
+        for bad in ("https://evil.example/", "//evil.example/", "find"):
+            resp = client.post("/watchlist/save", data=_csrf_form(
+                title="Some Film", content_type="movie", tmdb_id="77", redirect=bad))
+            assert resp.status_code == 200, bad
+
+
 class TestArchiveRoutes:
 
     def test_add_to_archive(self, client, tmp_path, monkeypatch):
@@ -2330,6 +2369,9 @@ class TestFind:
             def is_manually_watched(self, meta):
                 return False
 
+            def is_in_watchlist(self, meta):
+                return False
+
         def fake_user_state():
             calls["user_state"] += 1
             return _UserState()
@@ -2353,10 +2395,18 @@ class TestFind:
 
     def test_valid_query_is_passed_through(self, client, find_env):
         from recommender.catalog_finder import FindCriteria
-        client.get("/find?type=tv&period=1y&genre=crime&keyword=heist&rating=7.5")
+        client.get("/find?type=tv&period=1y&genre=crime&keyword=heist&rating=7.5&sort=newest")
         crit = find_env["finder"][0]["criteria"]
         assert crit == FindCriteria(content_type="tv", period="1y", genre="crime",
-                                    keyword="heist", min_rating=7.5)
+                                    keyword="heist", min_rating=7.5, sort="newest")
+
+    def test_every_sort_key_is_accepted_and_unknown_reverts_to_rating(self, client, find_env):
+        from recommender.catalog_finder import SORT_OPTIONS
+        for key, _label in SORT_OPTIONS:
+            client.get(f"/find?sort={key}")
+            assert find_env["finder"][-1]["criteria"].sort == key
+        client.get("/find?sort=revenue.desc")
+        assert find_env["finder"][-1]["criteria"].sort == "rating"
 
     def test_every_period_and_rating_key_is_accepted(self, client, find_env):
         from recommender.catalog_finder import PERIOD_OPTIONS, RATING_OPTIONS
@@ -2488,6 +2538,9 @@ class TestFindRendering(TestFind):
         assert 'name="period"' in body and 'name="genre"' in body
         assert 'name="keyword"' in body and 'maxlength="80"' in body
         assert 'name="rating"' in body
+        assert 'name="sort"' in body
+        for key, label in (("rating", "Rating"), ("newest", "Newest"), ("popular", "Most popular"), ("votes", "Most voted")):
+            assert f'value="{key}"' in body and f">{label}<" in body
         assert "Show results" in body
         for key, label in PERIOD_OPTIONS:
             assert f'value="{key}"' in body and label in body
@@ -2501,7 +2554,6 @@ class TestFindRendering(TestFind):
         assert 'name="provider"' not in body
         assert 'name="country"' not in body
         assert 'name="language"' not in body
-        assert "/watchlist/save" not in body
         assert "/archive/add" not in body
         assert "Next" not in body
         assert "Previous" not in body
@@ -2576,7 +2628,7 @@ class TestFindRendering(TestFind):
         href = more[more.index('href="') + 6:]
         href = href[:href.index('"')].replace("&amp;", "&")
         assert href.startswith("/find?")
-        for part in ("type=tv", "period=2y", "genre=crime", "keyword=heist", "rating=8", "cursor=1.12", "start=2"):
+        for part in ("type=tv", "period=2y", "genre=crime", "keyword=heist", "rating=8", "cursor=1.12", "start=2", "sort=rating"):
             assert part in href, part
         # Progressive enhancement: HTMX appends, the bare link still works.
         assert 'hx-get="' in more and 'hx-swap="outerHTML"' in more
@@ -2632,6 +2684,41 @@ class TestFindRendering(TestFind):
         assert 'href="/find" title="Find" class="nav-link active"' in discover
         sheet = body[body.index('<div id="nav-more"'):body.index('class="nav-sheet-scrim"')]
         assert 'href="/find" class="nav-link active"' in sheet
+
+    # ── Watchlist save on each card ──
+
+    def test_each_card_has_a_save_form_that_works_without_javascript(self, client, find_env):
+        body = client.get("/find?period=1y").get_data(as_text=True)
+        assert body.count('class="find-save"') == 2
+        card = body[body.index('id="find-wl-movie-1"'):body.index('id="find-wl-movie-2"')]
+        assert 'action="/watchlist/save"' in card and 'method="post"' in card
+        assert 'hx-post="/watchlist/save"' in card and 'hx-target="#find-wl-movie-1"' in card
+        assert 'name="_csrf_token"' in card
+        assert 'name="title" value="Title 1"' in card
+        assert 'name="content_type" value="movie"' in card
+        assert 'name="tmdb_id" value="1"' in card
+        assert 'name="mode" value="toggle"' in card
+        assert 'name="target_id" value="find-wl-movie-1"' in card
+        assert 'name="redirect" value="/find?period=1y"' in card
+        assert "Save" in card
+
+    def test_card_shows_saved_state_when_already_in_watchlist(self, client, find_env, monkeypatch):
+        class _UserState:
+            def is_manually_watched(self, meta):
+                return False
+
+            def is_in_watchlist(self, meta):
+                return meta.tmdb_id == 2
+        monkeypatch.setattr(web, "_load_user_state", lambda: _UserState())
+        body = client.get("/find").get_data(as_text=True)
+        card1 = body[body.index('id="find-wl-movie-1"'):body.index('id="find-wl-movie-2"')]
+        card2 = body[body.index('id="find-wl-movie-2"'):body.index('class="find-more"')]
+        assert 'action="/watchlist/save"' in card1 and "Saved" not in card1
+        assert 'action="/watchlist/unsave"' in card2 and "Saved" in card2
+
+    def test_htmx_continuation_cards_also_carry_save_forms(self, client, find_env):
+        body = client.get("/find?cursor=1.12&start=10", headers={"HX-Request": "true"}).get_data(as_text=True)
+        assert body.count('class="find-save"') == 2
 
     def test_find_is_not_active_on_other_pages(self, client):
         body = client.get("/help").get_data(as_text=True)

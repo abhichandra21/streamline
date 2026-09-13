@@ -59,10 +59,12 @@ class FakeTmdb:
         return self.keyword
 
     def discover_catalog_page(self, content_type, release_start, release_end, genre=None,
-                              keyword_id=None, min_rating=None, page=1, region="US"):
+                              keyword_id=None, min_rating=None, page=1, region="US",
+                              sort_by="vote_average.desc"):
         self.discover_calls.append({
             "content_type": content_type, "release_start": release_start, "release_end": release_end,
             "genre": genre, "keyword_id": keyword_id, "min_rating": min_rating, "page": page, "region": region,
+            "sort_by": sort_by,
         })
         rows = tuple(self.pages.get(page, []))
         return CatalogPage(rows=rows, page=page, total_pages=max(self.pages) if self.pages else 1)
@@ -100,9 +102,35 @@ def test_period_and_rating_options_are_locked():
     assert [v for _, _, v in cf.RATING_OPTIONS] == [None, 6.0, 7.0, 7.5, 8.0]
 
 
-def test_default_criteria_is_movies_last_six_months():
+def test_default_criteria_is_movies_last_six_months_by_rating():
     assert FindCriteria() == FindCriteria(content_type="movie", period="6m", genre=None,
-                                          keyword=None, min_rating=None)
+                                          keyword=None, min_rating=None, sort="rating")
+
+
+def test_sort_options_are_locked():
+    assert [k for k, _ in cf.SORT_OPTIONS] == ["rating", "newest", "popular", "votes"]
+
+
+@pytest.mark.parametrize("sort,content_type,expected", [
+    ("rating", "movie", "vote_average.desc"),
+    ("rating", "tv", "vote_average.desc"),
+    ("newest", "movie", "primary_release_date.desc"),
+    ("newest", "tv", "first_air_date.desc"),
+    ("popular", "movie", "popularity.desc"),
+    ("votes", "tv", "vote_count.desc"),
+    ("bogus", "movie", "vote_average.desc"),
+])
+def test_discover_sort_by(sort, content_type, expected):
+    assert cf.discover_sort_by(sort, content_type) == expected
+
+
+def test_sort_is_passed_to_discover_and_default_is_rating():
+    tmdb = FakeTmdb({1: [_title(1, "tv")]})
+    _run(tmdb, criteria=FindCriteria(content_type="tv", sort="newest"))
+    assert tmdb.discover_calls[0]["sort_by"] == "first_air_date.desc"
+    tmdb = FakeTmdb({1: [_title(1)]})
+    _run(tmdb)
+    assert tmdb.discover_calls[0]["sort_by"] == "vote_average.desc"
 
 
 @pytest.mark.parametrize("period,expected_start", [

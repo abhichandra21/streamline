@@ -853,8 +853,9 @@ class TmdbClient:
         min_rating: float | None = None,
         page: int = 1,
         region: str = "US",
+        sort_by: str = "vote_average.desc",
     ) -> CatalogPage:
-        """One TMDB Discover page in TMDB order, sorted by rating with a 100-vote floor.
+        """One TMDB Discover page in TMDB order with a 100-vote floor, rating-sorted by default.
 
         Unlike search_by_filters(), this performs no detail hydration and writes
         nothing to the metadata cache. TV dates use first_air_date; TMDB has no
@@ -866,7 +867,7 @@ class TmdbClient:
         date_field = "first_air_date" if is_tv else "primary_release_date"
 
         params: dict = {
-            "sort_by": "vote_average.desc",
+            "sort_by": sort_by,
             "vote_count.gte": 100,
             f"{date_field}.gte": release_start.isoformat(),
             f"{date_field}.lte": release_end.isoformat(),
