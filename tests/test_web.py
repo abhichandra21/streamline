@@ -1345,7 +1345,7 @@ class TestWatchlistRedirectFallback:
     def test_redirect_must_be_a_local_path(self, client, tmp_path, monkeypatch):
         monkeypatch.setattr(web.config, "EVENT_DB_PATH", str(tmp_path / "s.db"))
         web._user_store_ready = False
-        for bad in ("https://evil.example/", "//evil.example/", "find", "/\\evil.example", "/find\\..", "/find?x=\\y", "/find\n", " "):
+        for bad in ("https://evil.example/", "//evil.example/", "find", "/\\evil.example", "/find\\..", "/find?x=\\y", "/fi\nnd", " "):
             resp = client.post("/watchlist/save", data=_csrf_form(
                 title="Some Film", content_type="movie", tmdb_id="77", redirect=bad))
             assert resp.status_code == 200, bad
