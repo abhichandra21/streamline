@@ -1065,3 +1065,29 @@ def test_discover_catalog_page_sort_by_defaults_to_rating_and_is_overridable(tmp
     assert sorts == ["vote_average.desc", "popularity.desc", "first_air_date.desc"]
     # The 100-vote floor applies to every sort.
     assert all((c.kwargs.get("params") or c.args[1])["vote_count.gte"] == 100 for c in mock_get.call_args_list)
+
+
+def test_get_never_exposes_the_api_key_in_http_errors(tmp_path):
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="SECRETKEY123", cache_dir=str(tmp_path))
+    response = requests.Response()
+    response.status_code = 500
+    response.reason = "Server Error"
+    response.url = "https://api.themoviedb.org/3/discover/movie?api_key=SECRETKEY123&page=1"
+    with patch("recommender.tmdb_client.requests.get", return_value=response):
+        with pytest.raises(requests.HTTPError) as info:
+            client._get("discover/movie", {"page": 1})
+    assert "SECRETKEY123" not in str(info.value)
+    assert "500" in str(info.value) and "discover/movie" in str(info.value)
+    assert info.value.response is response
+
+
+def test_get_never_exposes_the_api_key_in_connection_errors(tmp_path):
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="SECRETKEY123", cache_dir=str(tmp_path))
+    err = requests.ConnectionError("Max retries exceeded with url: /3/discover/movie?api_key=SECRETKEY123")
+    with patch("recommender.tmdb_client.requests.get", side_effect=err):
+        with pytest.raises(requests.RequestException) as info:
+            client._get("discover/movie", {"page": 1})
+    assert "SECRETKEY123" not in str(info.value)
+    assert "ConnectionError" in str(info.value)

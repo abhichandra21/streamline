@@ -2479,18 +2479,32 @@ class TestFind:
         assert "No exact TMDB keyword" in body
         assert "No unwatched" not in body
 
-    def test_tmdb_failure_is_a_distinct_message(self, client, find_env, monkeypatch):
+    def test_tmdb_failure_is_a_distinct_message_without_leaking_the_request(self, client, find_env, monkeypatch, caplog):
         import requests
 
         def finder(*_a, **_k):
-            raise requests.ConnectionError("dns down")
+            raise requests.ConnectionError("url: /3/discover/movie?api_key=test-key")
         monkeypatch.setattr(web, "find_unwatched_titles", finder)
-        resp = client.get("/find")
+        with caplog.at_level("WARNING", logger="recommender.web"):
+            resp = client.get("/find")
         body = resp.get_data(as_text=True)
         assert resp.status_code == 200
         assert "TMDB request failed" in body
-        assert "dns down" in body
+        assert "ConnectionError" in body
+        assert "test-key" not in body and "api_key" not in body
+        assert "test-key" not in caplog.text and "api_key" not in caplog.text
         assert "Run ./recommend setup" not in body
+
+    def test_tmdb_http_error_reports_status_only(self, client, find_env, monkeypatch):
+        import requests
+        response = requests.Response()
+        response.status_code = 503
+
+        def finder(*_a, **_k):
+            raise requests.HTTPError("TMDB HTTP 503 for discover/movie", response=response)
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        body = client.get("/find").get_data(as_text=True)
+        assert "TMDB request failed" in body and "503" in body
 
     def test_tmdb_rate_limit_on_discover_is_a_distinct_message(self, client, find_env, monkeypatch):
         from recommender.tmdb_client import TmdbRateLimitError

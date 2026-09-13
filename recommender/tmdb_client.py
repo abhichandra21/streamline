@@ -190,18 +190,24 @@ class TmdbClient:
         p = {"api_key": self.api_key}
         if params:
             p.update(params)
-        resp = requests.get(f"{TMDB_BASE}/{endpoint}", params=p, timeout=10)
+        # requests and urllib3 put the full URL, api_key included, into their
+        # exception messages. Re-raise with messages that name only the
+        # endpoint so callers can log or display them safely.
         try:
-            resp.raise_for_status()
-        except requests.HTTPError as exc:
-            if resp.status_code != 429:
-                raise
+            resp = requests.get(f"{TMDB_BASE}/{endpoint}", params=p, timeout=10)
+        except requests.RequestException as exc:
+            raise requests.ConnectionError(
+                f"TMDB request failed for {endpoint}: {type(exc).__name__}"
+            ) from None
+        if resp.status_code == 429:
             retry_after = resp.headers.get("Retry-After")
             try:
                 retry_after_seconds = max(0.0, float(retry_after))
             except (TypeError, ValueError):
                 retry_after_seconds = None
-            raise TmdbRateLimitError(retry_after_seconds, response=resp) from exc
+            raise TmdbRateLimitError(retry_after_seconds, response=resp)
+        if not resp.ok:
+            raise requests.HTTPError(f"TMDB HTTP {resp.status_code} for {endpoint}", response=resp)
         return resp.json()
 
     def _cache_path(self, content_type: str, tmdb_id: int) -> Path:
@@ -1011,7 +1017,7 @@ class TmdbClient:
         except TmdbRateLimitError:
             raise
         except Exception as exc:
-            log.debug("Availability fetch failed for %s/%d: %s", content_type, tmdb_id, exc)
+            log.debug("Availability fetch failed for %s/%d: %s", content_type, tmdb_id, type(exc).__name__)
             return CatalogAvailability(unknown=True)
 
         region_data = (data.get("results") or {}).get(region)
@@ -1066,7 +1072,7 @@ class TmdbClient:
             except TmdbRateLimitError:
                 raise
             except Exception as exc:
-                log.debug("Now-playing fetch failed for %s page %d: %s", region, page, exc)
+                log.debug("Now-playing fetch failed for %s page %d: %s", region, page, type(exc).__name__)
                 return None
             ids.update(int(item["id"]) for item in data.get("results", []) if item.get("id") is not None)
             total_pages = int(data.get("total_pages") or 1)

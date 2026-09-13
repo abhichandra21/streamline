@@ -1272,9 +1272,14 @@ def find_page() -> str:
     except TmdbRateLimitError as exc:
         wait = f" Try again in about {int(exc.retry_after_seconds)} seconds." if exc.retry_after_seconds else ""
         page["error"] = f"TMDB rate limit reached while reading the catalogue.{wait}"
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "error"
+        log.warning("Find: TMDB returned HTTP %s", status)
+        page["error"] = f"TMDB request failed with HTTP {status}. Try again in a moment."
     except (requests.RequestException, ValueError, KeyError) as exc:
-        log.warning("Find: TMDB request failed: %s", exc)
-        page["error"] = f"TMDB request failed: {exc}"
+        # Never echo the exception text: request errors can carry the full URL.
+        log.warning("Find: TMDB request failed: %s", type(exc).__name__)
+        page["error"] = f"TMDB request failed ({type(exc).__name__}). Check the network and try again."
 
     if cursor and _is_htmx() and page["results"] is not None:
         return render_template("_find_rows.html", **page)
