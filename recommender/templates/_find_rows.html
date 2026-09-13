@@ -43,28 +43,15 @@
     {%- endif %}
 
     <ul class="find-avail" aria-label="Where to watch">
-      {%- set shown = [] %}
-      {%- if avail.stream %}{% set _ = shown.append(1) %}
-      <li class="find-chip is-stream"><i></i>Stream<span>{{ avail.stream | join(' · ') }}</span></li>
-      {%- endif %}
-      {%- if avail.free %}{% set _ = shown.append(1) %}
-      <li class="find-chip is-free"><i></i>Free<span>{{ avail.free | join(' · ') }}</span></li>
-      {%- endif %}
-      {%- if avail.with_ads %}{% set _ = shown.append(1) %}
-      <li class="find-chip is-ads"><i></i>With ads<span>{{ avail.with_ads | join(' · ') }}</span></li>
-      {%- endif %}
-      {%- if avail.rent %}{% set _ = shown.append(1) %}
-      <li class="find-chip is-rent"><i></i>Rent<span>{{ avail.rent | join(' · ') }}</span></li>
-      {%- endif %}
-      {%- if avail.buy %}{% set _ = shown.append(1) %}
-      <li class="find-chip is-buy"><i></i>Buy<span>{{ avail.buy | join(' · ') }}</span></li>
-      {%- endif %}
-      {%- if row.in_theaters %}{% set _ = shown.append(1) %}
-      <li class="find-chip is-cinema"><i></i>In theaters</li>
-      {%- endif %}
-      {%- if not shown %}
-      <li class="find-chip is-unknown"><i></i>Unknown</li>
-      {%- endif %}
+      {%- for chip in find_chips(row) %}
+      <li class="find-chip is-{{ chip.kind }}">
+        {%- if chip.link %}<a href="{{ chip.link }}" target="_blank" rel="noopener" title="See every option on JustWatch">{% endif -%}
+        <i></i>{{ chip.label }}
+        {%- if chip.names %}<span>{{ chip.names | join(' · ') }}</span>{% endif %}
+        {%- if chip.extra %}<em>+{{ chip.extra }}</em>{% endif %}
+        {%- if chip.link %}</a>{% endif %}
+      </li>
+      {%- endfor %}
     </ul>
 
     {%- set wl_id = 'find-wl-' ~ title.content_type ~ '-' ~ title.tmdb_id %}

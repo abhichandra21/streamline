@@ -901,6 +901,20 @@ def test_get_catalog_availability_maps_all_five_buckets(tmp_path):
     assert avail.rent == ("Apple TV",)
     assert avail.buy == ("Amazon Video",)
     assert avail.unknown is False
+    assert avail.link is None
+
+
+def test_get_catalog_availability_keeps_the_justwatch_link_and_caches_it(tmp_path):
+    from recommender.tmdb_client import TmdbClient
+    client = TmdbClient(api_key="k", cache_dir=str(tmp_path / "tmdb"))
+    cache_dir = tmp_path / "avail"
+    data = _providers_response({"link": "https://www.themoviedb.org/movie/5/watch?locale=US",
+                                "flatrate": [{"provider_name": "Netflix"}]})
+    with patch.object(client, "_get", return_value=data):
+        avail = client.get_catalog_availability(5, "movie", "US", str(cache_dir))
+    assert avail.link == "https://www.themoviedb.org/movie/5/watch?locale=US"
+    with patch.object(client, "_get", side_effect=AssertionError("cache")):
+        assert client.get_catalog_availability(5, "movie", "US", str(cache_dir)).link == avail.link
 
 
 def test_get_catalog_availability_uses_tv_endpoint(tmp_path):

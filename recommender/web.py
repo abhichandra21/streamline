@@ -1234,6 +1234,37 @@ def _find_url(criteria: FindCriteria, cursor: str, start: int, shown: list[int])
     return url_for("find_page", **params)
 
 
+FIND_CHIP_MAX_NAMES = 3
+
+
+def _find_chips(row) -> list[dict]:
+    """Compact availability chips for one Find card.
+
+    Subscription buckets collapse provider variants to one brand each (the
+    same grouping as the Searches page). Stores stay as TMDB names them, since
+    "Apple TV Store" is not "Apple TV+". Each chip shows at most three names
+    and a +N; the JustWatch page carries the full list.
+    """
+    avail = row.availability
+    buckets = (
+        ("stream", "Stream", _consolidate_providers(list(avail.stream))),
+        ("free", "Free", _consolidate_providers(list(avail.free))),
+        ("ads", "With ads", _consolidate_providers(list(avail.with_ads))),
+        ("rent", "Rent", list(dict.fromkeys(avail.rent))),
+        ("buy", "Buy", list(dict.fromkeys(avail.buy))),
+    )
+    chips = [
+        {"kind": kind, "label": label, "names": names[:FIND_CHIP_MAX_NAMES],
+         "extra": max(0, len(names) - FIND_CHIP_MAX_NAMES), "link": avail.link}
+        for kind, label, names in buckets if names
+    ]
+    if row.in_theaters:
+        chips.append({"kind": "cinema", "label": "In theaters", "names": [], "extra": 0, "link": None})
+    if not chips:
+        chips.append({"kind": "unknown", "label": "Unknown", "names": [], "extra": 0, "link": None})
+    return chips
+
+
 def _find_saved_ids(rows, user_state) -> set[int]:
     """TMDB ids among the batch rows that are already on the watchlist."""
     return {r.title.tmdb_id for r in rows if user_state.is_in_watchlist(r.title)}
@@ -1263,6 +1294,7 @@ def find_page() -> str:
         "start": start,
         "more_url": None,
         "saved_ids": set(),
+        "find_chips": _find_chips,
         # Plain-form fallback for the save buttons: come back to this exact list.
         "return_to": request.full_path.rstrip("?"),
     }
@@ -1736,6 +1768,7 @@ _PROVIDER_BRANDS = (
     ("amazon prime", "Amazon Prime Video"),
     ("prime video", "Amazon Prime Video"),
     ("disney", "Disney+"),
+    ("hbo", "HBO Max"),
     ("paramount", "Paramount+"),
     ("britbox", "BritBox"),
     ("acorn", "Acorn TV"),

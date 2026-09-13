@@ -87,6 +87,8 @@ class CatalogAvailability:
     rent: tuple[str, ...] = ()
     buy: tuple[str, ...] = ()
     unknown: bool = False
+    # TMDB's per-title JustWatch page for the region, when it supplies one.
+    link: str | None = None
 
 
 @dataclass
@@ -1028,6 +1030,7 @@ class TmdbClient:
                 return [p["provider_name"] for p in region_data.get(bucket) or [] if p.get("provider_name")]
             record = {
                 "unknown": False,
+                "link": region_data.get("link") or None,
                 "stream": names("flatrate"),
                 "free": names("free"),
                 "with_ads": names("ads"),
@@ -1049,6 +1052,7 @@ class TmdbClient:
             rent=tuple(record.get("rent") or ()),
             buy=tuple(record.get("buy") or ()),
             unknown=False,
+            link=record.get("link") or None,
         )
 
     def get_now_playing_ids(self, region: str, cache_dir: str) -> set[int] | None:

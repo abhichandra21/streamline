@@ -2622,6 +2622,7 @@ class TestFindRendering(FindTestSupport):
             i = body.index(f'class="find-chip is-{kind}"')
             return body[i:body.index("</li>", i)]
         assert "Stream" in chip("stream") and "Netflix · Max" in chip("stream")
+        assert "+" not in chip("stream")
         assert "Rent" in chip("rent") and "Apple TV" in chip("rent")
         assert "In theaters" in chip("cinema")
         assert "Free" in chip("free") and "Tubi" in chip("free")
@@ -2632,6 +2633,47 @@ class TestFindRendering(FindTestSupport):
         assert 'class="find-rank"><span>1</span>' in body
         assert "Availability data provided by JustWatch" in body
         assert body.count('class="find-card') == 4
+
+    def test_availability_chips_are_compact_and_link_to_justwatch(self, client, find_env, monkeypatch):
+        from recommender.tmdb_client import CatalogAvailability
+        rows = [self._row(1, title="Busy Title", availability=CatalogAvailability(
+            stream=("Amazon Prime Video", "HBO Max Amazon Channel", "HBO Max", "Amazon Prime Video with Ads"),
+            rent=("Amazon Video", "Apple TV Store", "Google Play Movies", "YouTube", "Fandango At Home"),
+            buy=("Amazon Video",),
+            link="https://www.themoviedb.org/movie/1/watch?locale=US",
+        ))]
+
+        def finder(tmdb, watch_index, user_state, criteria, availability_cache_dir, **kwargs):
+            return self._results(criteria, rows=rows)
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        body = client.get("/find").get_data(as_text=True)
+
+        def chip(kind):
+            i = body.index(f'class="find-chip is-{kind}"')
+            return body[i:body.index("</li>", i)]
+        # Subscription variants collapse to one brand each, in order.
+        assert "Amazon Prime Video · HBO Max" in chip("stream")
+        assert "Amazon Channel" not in chip("stream") and "with Ads" not in chip("stream")
+        assert "+" not in chip("stream")
+        # Stores stay as named, but only three are shown.
+        assert "Amazon Video · Apple TV Store · Google Play Movies" in chip("rent")
+        assert "YouTube" not in chip("rent") and "+2" in chip("rent")
+        assert "+" not in chip("buy")
+        # Every chip links to the title's JustWatch page.
+        assert chip("stream").count('href="https://www.themoviedb.org/movie/1/watch?locale=US"') == 1
+        assert 'target="_blank"' in chip("rent")
+
+    def test_chips_without_a_link_are_plain(self, client, find_env, monkeypatch):
+        from recommender.tmdb_client import CatalogAvailability
+        rows = [self._row(1, availability=CatalogAvailability(stream=("Netflix",)))]
+
+        def finder(tmdb, watch_index, user_state, criteria, availability_cache_dir, **kwargs):
+            return self._results(criteria, rows=rows)
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        body = client.get("/find").get_data(as_text=True)
+        chip = body[body.index('class="find-chip is-stream"'):]
+        chip = chip[:chip.index("</li>")]
+        assert "Netflix" in chip and "<a " not in chip
 
     def test_in_theaters_only_appears_when_flagged(self, client, find_env):
         # find_env rows default to in_theaters=False
