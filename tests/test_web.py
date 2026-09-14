@@ -2637,6 +2637,12 @@ class TestFindRendering(FindTestSupport):
         assert "shown=7,8,9,1,2" in href
         assert "start=12" in href
 
+    def test_shown_ids_ignore_non_ascii_digits_instead_of_failing(self, client, find_env):
+        # str.isdigit() is true for superscripts and other Unicode digits that int() rejects.
+        resp = client.get("/find?shown=%C2%B2,7,%D9%A3,8")   # ², 7, Arabic-Indic three, 8
+        assert resp.status_code == 200
+        assert find_env["finder"][0]["exclude"] == frozenset({7, 8})
+
     def test_shown_ids_are_capped_to_keep_the_url_bounded(self, client, find_env):
         ids = ",".join(str(i) for i in range(1000, 1400))
         body = client.get(f"/find?cursor=1.12&start=400&shown={ids}").get_data(as_text=True)

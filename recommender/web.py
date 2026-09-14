@@ -1213,9 +1213,13 @@ def _find_shown(args) -> list[int]:
     seen: set[int] = set()
     for raw in (args.get("shown") or "").split(","):
         raw = raw.strip()
-        if raw.isdigit() and int(raw) not in seen:
-            seen.add(int(raw))
-            out.append(int(raw))
+        # ASCII digits only: str.isdigit() also accepts characters int() rejects.
+        if not raw or not all("0" <= ch <= "9" for ch in raw):
+            continue
+        tmdb_id = int(raw)
+        if tmdb_id not in seen:
+            seen.add(tmdb_id)
+            out.append(tmdb_id)
     return out[-FIND_SHOWN_MAX:]
 
 
