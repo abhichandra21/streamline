@@ -203,9 +203,15 @@ Token usage and cost tracking via `UsageStats` — accumulated per query, printe
 
 Rich-powered output with spinners during API calls and panel-formatted results. Stderr/stdout separation for pipe-friendly usage. Interactive REPL with conversational context and inline feedback commands (`+liked`, `+disliked`, `+add`). Token usage and cost printed after each query.
 
-### Deploy Tooling (`tools/merge_user_state.py`)
+### Sync Tooling (`./recommend-sync`, `tools/sync_user_state.py`)
 
-Streamline runs on more than one machine (local + home server), each accumulating its own watchlist/rating/history changes. This tool merges user-generated state — the `db` form merges `saved_titles`/`title_ratings`/`manual_archive_entries` between two copies of the app's SQLite user-store DB (`data/streamline.db`, i.e. `config.EVENT_DB_PATH` — not `recommender/cache/events.db`, which is unrelated and always empty); the `history` form merges two `query_history.json` files. Both merge "other" into "local" in place, so a deploy never silently clobbers changes made on the other side. Derived/cache data (TMDB metadata, enrichments, provider availability) is untouched since it's rebuilt from setup, not user input.
+Streamline runs on two machines (this one and the home server), used by one person, one at a time. User state is the SQLite user store (`data/streamline.db`, `config.EVENT_DB_PATH`) plus `recommender/cache/query_history.json`. The tool never merges rows. It copies those two files in the direction you ask for and refuses when that would overwrite work on the other side.
+It knows which side moved because it keeps a baseline under `data/sync/`: a copy of both files as they were after the last `pull` or `push`.
+`status` diffs local, server, and baseline logically (rows keyed by typed TMDB id or normalized title, timestamps ignored for equality but shown as when) and says which side changed.
+`pull` backs up the local files as `*.bak-<timestamp>` and replaces them.
+`push` refuses if the server differs from the baseline, prints what changed there, and says whether `pull` is safe; `--force` overrides after the server files are backed up as `*.predeploy-<timestamp>`.
+Deploying code (`git pull` and a service restart) no longer touches user state at all.
+Caches, watch events, and imports are not user state and are never moved by this tool.
 
 ## Cache Layout
 

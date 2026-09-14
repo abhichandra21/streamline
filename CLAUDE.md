@@ -47,6 +47,11 @@ python3 -m pytest tests/test_query_engine.py -v
 ./recommend-web start                          # http://localhost:5051
 ./recommend-web stop
 ./recommend-web restart
+
+# User state (watchlist, ratings, archive, show tracking, search history) vs the home server
+./recommend-sync status                        # what differs, and which side changed since last sync
+./recommend-sync pull                          # take the server's copy (backs up local first)
+./recommend-sync push                          # send local up (refused if the server moved; --force overrides)
 ```
 
 Required environment variables: `TMDB_API_KEY`, plus `ANTHROPIC_API_KEY` and/or `GEMINI_API_KEY` or `OPENAI_API_KEY`.
