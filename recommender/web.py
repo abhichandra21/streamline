@@ -1267,16 +1267,18 @@ def find_page() -> str:
         "return_to": request.full_path.rstrip("?"),
     }
 
+    # Every outcome, including the preconditions, leaves through _find_response
+    # so an HTMX continuation always gets a fragment and never the whole page.
     if not config.TMDB_API_KEY:
         page["error"] = "TMDB_API_KEY is not set. Add it to the environment (or .env) and restart the web UI."
-        return render_template("find.html", **page)
+        return _find_response(cursor, page)
 
     try:
         watch_index = wi.load(config.WATCH_INDEX_PATH)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         log.warning("Find: watch index unavailable at %s: %s", config.WATCH_INDEX_PATH, exc)
         page["error"] = "Watch index is missing or unreadable. Run ./recommend setup, then reload this page."
-        return render_template("find.html", **page)
+        return _find_response(cursor, page)
     user_state = _load_user_state()
 
     tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
@@ -1304,8 +1306,12 @@ def find_page() -> str:
         log.warning("Find: TMDB request failed: %s", type(exc).__name__)
         page["error"] = f"TMDB request failed ({type(exc).__name__}). Check the network and try again."
 
+    return _find_response(cursor, page)
+
+
+def _find_response(cursor: str | None, page: dict) -> str:
+    """Fragment for an HTMX continuation, full page otherwise."""
     if cursor and _is_htmx():
-        # Continuation: only the next batch, or an error in place of Show more.
         return render_template("_find_rows.html", **page)
     return render_template("find.html", **page)
 

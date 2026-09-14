@@ -449,35 +449,16 @@
 {%- endif %}
 
 {%- if results is not none %}
-  {%- if results.keyword_missing %}
-  <div class="find-note">
-    <span class="find-cap">Keyword</span>
-    <div>No exact TMDB keyword named <strong>{{ criteria.keyword }}</strong>. TMDB keywords match by name exactly; try the wording TMDB uses on a title page.</div>
+  {%- if results.rows %}
+  <div class="find-ledger-head">
+    {%- set sort_label = dict(sort_options).get(criteria.sort, 'Rating') %}
+    <span class="find-cap">{{ 'Series' if criteria.content_type == 'tv' else 'Films' }} · by {{ sort_label | lower }}</span>
+    <span class="find-cap">Unwatched</span>
   </div>
-  {%- elif not results.rows and start == 0 %}
-  <div class="find-note">
-    <span class="find-cap">Empty</span>
-    <div>No unwatched {{ 'TV series' if criteria.content_type == 'tv' else 'movies' }} matched. Widen the period or drop a filter, then press Show results.</div>
-  </div>
-  {%- else %}
-    {%- if results.now_playing_rate_limited %}
-    <div class="find-note is-warn">
-      <span class="find-cap">Cinemas</span>
-      <div>TMDB rate limit reached while reading cinema listings. Every title is shown; In theaters badges are missing for this batch.</div>
-    </div>
-    {%- endif %}
-
-    <div class="find-ledger-head">
-      {%- set sort_label = dict(sort_options).get(criteria.sort, 'Rating') %}
-      <span class="find-cap">{{ 'Series' if criteria.content_type == 'tv' else 'Films' }} · by {{ sort_label | lower }}</span>
-      <span class="find-cap">Unwatched</span>
-    </div>
-
-    <div class="find-list">
-      {%- include "_find_rows.html" %}
-    </div>
-
   {%- endif %}
+  <div class="find-list">
+    {%- include "_find_rows.html" %}
+  </div>
 {%- endif %}
 
 {% endblock %}
