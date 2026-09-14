@@ -114,6 +114,14 @@ All lookups use TMDB-ID-first matching with normalized-title fallback. `UserStat
 
 Note: `recommender/feedback.py` is deprecated. The original JSON-based feedback was migrated to the SQLite tables above.
 
+### Query History (`recommender/history.py`)
+
+The same SQLite database holds query history in a `query_history` table: one row per search, with the whole entry stored as JSON so optional and future metadata (Mood Match source, label, summary, intent) round-trips untouched. The module keeps its long-standing interface — `record()`, `load(limit)` newest-first, `delete(timestamp)` — and the 100-entry cap, now enforced in the same transaction as the write. Concurrent CLI and web access relies on SQLite transactions instead of file locking.
+
+A pre-SQLite `query_history.json` is imported once on first use, inside one transaction, guarded by a marker in `query_history_meta` so a restored backup cannot be imported twice. First use writes that marker even when there is no legacy file, so a JSON that turns up later — a restored backup, a copy from another machine — is treated as a backup rather than a source and left untouched; importing it on purpose means deleting the marker row first. The CLI and web UI can reach a fresh store simultaneously, so the marker is re-read under a `BEGIN IMMEDIATE` write lock: whoever takes the lock imports, the others see the marker and leave. After a successful import the file is renamed to `query_history.json.migrated` and kept. A malformed file raises `history.MigrationFailed` before the store is opened, so neither the file nor the database changes — not even an empty table, and on a fresh install no database file at all. The web layer's three `record()` call sites treat any failure as non-fatal and log it, so a busy database never costs you a finished recommendation; `/searches` still surfaces a failed import.
+
+Because history creates the event database file for its own tables, `event_store.load_events()` returns `[]` when `watch_events` is absent, and the export fallbacks in `main.py` and `web.py` test `event_store.has_event_store()` rather than the file's existence. Installs that read provider exports directly keep working after history is opened, and an initialized store stays authoritative even when it holds no events — setup records zero-event imports, so an empty event store is an answer, not a missing one.
+
 ### Manual-Add Disambiguation (`/archive/resolve`, `/archive/confirm` in `web.py`)
 
 Manually adding a title from the web UI can be ambiguous (multiple TMDB matches, wrong content type, or a title the user already has recorded). The flow:
@@ -205,7 +213,7 @@ Rich-powered output with spinners during API calls and panel-formatted results. 
 
 ### Deploy Tooling (`tools/merge_user_state.py`)
 
-Streamline runs on more than one machine (local + home server), each accumulating its own watchlist/rating/history changes. This tool merges user-generated state — the `db` form merges `saved_titles`/`title_ratings`/`manual_archive_entries` between two copies of the app's SQLite user-store DB (`data/streamline.db`, i.e. `config.EVENT_DB_PATH` — not `recommender/cache/events.db`, which is unrelated and always empty); the `history` form merges two `query_history.json` files. Both merge "other" into "local" in place, so a deploy never silently clobbers changes made on the other side. Derived/cache data (TMDB metadata, enrichments, provider availability) is untouched since it's rebuilt from setup, not user input.
+Streamline runs on more than one machine (local + home server), each accumulating its own watchlist/rating/history changes. This tool merges user-generated state — the `db` form merges `saved_titles`/`title_ratings`/`manual_archive_entries` between two copies of the app's SQLite user-store DB (`data/streamline.db`, i.e. `config.EVENT_DB_PATH` — not `recommender/cache/events.db`, which is unrelated and always empty); the `history` form merges two `query_history.json` files, which since query history moved into SQLite means pre-migration backups only. Both merge "other" into "local" in place, so a deploy never silently clobbers changes made on the other side. Derived/cache data (TMDB metadata, enrichments, provider availability) is untouched since it's rebuilt from setup, not user input.
 
 ## Cache Layout
 

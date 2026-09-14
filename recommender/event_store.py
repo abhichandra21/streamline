@@ -233,10 +233,33 @@ def replace_provider_events(
         conn.close()
 
 
+def has_event_store(db_path: str) -> bool:
+    """True if this database was initialized as an event store.
+
+    The file can exist without that: query history creates the same file for
+    its own tables. Callers use this to tell an initialized store that holds
+    no events — authoritative, setup records zero-event imports — from a
+    database that never had an event store at all.
+    """
+    if not Path(db_path).exists():
+        return False
+
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='watch_events'"
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+
 def load_events(db_path: str, provider: str | None = None) -> list[WatchEvent]:
     """Load watch events from SQLite, ordered by timestamp_iso ASC, id ASC.
 
-    Returns [] if the database does not exist or has no events.
+    Returns [] if the database does not exist, has no watch_events table, or
+    has no events. The database file can exist without that table: query
+    history creates the same file for its own tables, so a store that never
+    ingested an export still has to read as empty rather than raise.
     """
     if not Path(db_path).exists():
         return []
@@ -247,11 +270,12 @@ def load_events(db_path: str, provider: str | None = None) -> list[WatchEvent]:
         # without ever calling init_db() in that process. Backfill
         # release_year_hint/language_hint here too, so a pre-migration DB
         # doesn't raise "no such column" on a plain read.
-        if conn.execute(
+        if not conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='watch_events'"
         ).fetchone():
-            _ensure_watch_event_columns(conn)
-            conn.commit()
+            return []
+        _ensure_watch_event_columns(conn)
+        conn.commit()
 
         query = (
             "SELECT provider, title, content_type, series_name, "

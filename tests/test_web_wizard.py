@@ -440,3 +440,40 @@ def test_post_refine_starts_job(client):
     assert resp.status_code == 200
     assert b"job-xyz" in resp.data
     sub.assert_called_once()
+
+
+def test_wizard_job_survives_a_sqlite_history_failure():
+    """A busy or unwritable shared database must not lose a finished pick."""
+    import sqlite3
+
+    intent_dict = _full_intent_dict()
+    items = [{"title": "Slow Horses"}]
+
+    with patch.object(web, "_get_job_context") as gjc, \
+         patch.object(web, "ask", return_value=[]), \
+         patch.object(web, "_build_result_items", return_value=items), \
+         patch.object(web.query_history, "record",
+                      side_effect=sqlite3.OperationalError("database is locked")):
+        gjc.return_value.llm.provider = "fake"
+        gjc.return_value.llm.usage.summary.return_value = "usage"
+        result = web._run_wizard_recommend_job(intent_dict, "low energy", "something short")
+
+    assert result["items"] == items
+
+
+def test_recommend_job_survives_a_sqlite_history_failure():
+    import sqlite3
+
+    items = [{"title": "Ripley"}]
+
+    with patch.object(web, "_get_job_context") as gjc, \
+         patch.object(web, "ask", return_value=[]), \
+         patch.object(web, "_build_result_items", return_value=items), \
+         patch.object(web.query_history, "record",
+                      side_effect=sqlite3.OperationalError("database is locked")):
+        gjc.return_value.llm.provider = "fake"
+        gjc.return_value.llm.usage.summary.return_value = "usage"
+        result = web._run_recommend_job("stylish thriller")
+
+    assert result["items"] == items
+    assert result["query"] == "stylish thriller"

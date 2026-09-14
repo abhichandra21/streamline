@@ -27,7 +27,7 @@ from recommender import show_tracker
 from recommender import user_store
 from recommender import watch_index as wi
 from recommender import event_store
-from recommender.event_store import load_events
+from recommender.event_store import has_event_store, load_events
 from recommender.jobs import registry as job_registry
 from recommender.llm import create_client
 from recommender.log import setup_logging
@@ -43,7 +43,11 @@ from recommender.catalog_finder import (
 
 def _events_loader_fallback() -> list:
     events = load_events(config.EVENT_DB_PATH)
-    if not events and not Path(config.EVENT_DB_PATH).exists():
+    # An initialized event store is authoritative even when empty: setup
+    # records zero-event imports. Only fall back to parsing exports when there
+    # is no event store at all — the database file can exist without one,
+    # since query history creates it for its own tables.
+    if not events and not has_event_store(config.EVENT_DB_PATH):
         from recommender.setup import load_platform_events_from_exports
         return load_platform_events_from_exports(fail_on_error=False)
     return events
@@ -131,7 +135,10 @@ def _run_recommend_job(query: str) -> dict:
     items = _build_result_items(results, ctx)
     try:
         query_history.record(query, items, ctx.llm.provider, ctx.llm.usage.summary())
-    except OSError as exc:
+    except Exception as exc:
+        # A finished recommendation is never lost to a history write. The store
+        # is SQLite on a file two processes share, so a busy database or a
+        # failed legacy import must not turn results into an error page.
         log.warning("Failed to persist query history for %r: %s", query, exc)
     return {"items": items, "query": query}
 
@@ -158,7 +165,7 @@ def _run_wizard_recommend_job(intent_dict: dict, context_note: str, summary: str
                 "context_note": context_note,
             },
         )
-    except OSError as exc:
+    except Exception as exc:
         log.warning("Failed to persist wizard history: %s", exc)
     return {"items": items, "query": summary, "summary": summary,
             "intent_dict": intent_dict, "context_note": context_note}
@@ -1127,7 +1134,7 @@ def recommend_post() -> str:
         items = _build_result_items(results, ctx)
         try:
             query_history.record(query, items, ctx.llm.provider, ctx.llm.usage.summary())
-        except OSError as exc:
+        except Exception as exc:
             log.warning("Failed to persist query history for %r: %s", query, exc)
         return render_template("recommend.html", query=query, results=items)
     except Exception as exc:

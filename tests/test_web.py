@@ -950,6 +950,27 @@ class TestRecommendProgressive:
         assert "<!DOCTYPE html>" in html or "<html" in html
         assert "Discover" in html
 
+    @patch("recommender.web._get_job_context")
+    def test_post_without_htmx_survives_sqlite_history_failure(self, mock_ctx, client):
+        """A history write against a busy shared database must not replace
+        finished results with an error page."""
+        import sqlite3
+
+        mock_context = MagicMock()
+        mock_context.llm.provider = "anthropic"
+        mock_context.llm.usage.summary.return_value = {}
+        mock_context.tmdb_client.get_metadata.return_value = None
+        mock_ctx.return_value = mock_context
+
+        with patch("recommender.web.ask", return_value=[]), \
+             patch.object(web.query_history, "record",
+                          side_effect=sqlite3.OperationalError("database is locked")):
+            resp = client.post("/recommend", data=_csrf_form(query="test query"))
+
+        assert resp.status_code == 200
+        html = resp.data.decode()
+        assert "database is locked" not in html
+
     def test_post_without_htmx_empty_query_returns_page(self, client):
         """Empty query without HTMX should return the full recommend page."""
         resp = client.post("/recommend", data=_csrf_form(query=""))
