@@ -143,6 +143,13 @@ WIZARD_MAX_TOKENS = int(_wizard.get("max_tokens", 1200))
 WATCH_REGION = _cfg.get("watch_region", "US")
 STREAMING_PLATFORMS: list[str] = _cfg.get("streaming_platforms", [])
 
+# ── User-state sync (./recommend-sync) ──
+# The other machine is machine-local information, so it lives in
+# config.local.yaml (or STREAMLINE_SYNC_HOST), never in committed source.
+_sync = _cfg.get("sync", {}) or {}
+SYNC_HOST = os.environ.get("STREAMLINE_SYNC_HOST") or _sync.get("host") or None
+SYNC_REMOTE_ROOT = os.environ.get("STREAMLINE_SYNC_REMOTE_ROOT") or _sync.get("remote_root") or "~/streamline"
+
 # ── Data paths ──
 _paths = _cfg.get("platform_paths", {})
 

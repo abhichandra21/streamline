@@ -306,7 +306,7 @@ python3 -m pytest tests/ -v
 ## Utility Scripts
 
 - `tools/compare_providers.py` — runs a fixed query set against two LLM providers (e.g. `anthropic` vs `local`) and writes a side-by-side comparison
-- `./recommend-sync` (`tools/sync_user_state.py`) — moves user state (watchlist, ratings, archive, show tracking, search history) between this install and the home server, one direction at a time. `status` shows what differs and which side changed since the last sync; `pull` takes the server's copy; `push` sends local up and refuses if the server moved since the last sync
+- `./recommend-sync` (`tools/sync_user_state.py`) — moves user state (watchlist, ratings, archive, show tracking, search history) between this install and another machine configured under `sync:` in `config.local.yaml`, one direction at a time. Imported watch history never moves. `status` shows what differs and which side changed since the last sync; `pull` takes the server's copy; `push` sends local up as one compare-and-swap transaction on the server and refuses if the server moved since the last sync
 
 ## Contributing
 

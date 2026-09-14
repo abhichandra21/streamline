@@ -6,3 +6,9 @@ platform_paths:
   netflix: data/netflix/export.zip
   prime: data/prime_video/Prime Video.zip
   apple_tv: data/AppleTV/Apple Media Services Information Part 1 of 2.zip
+
+# Other machine for ./recommend-sync (user state: watchlist, ratings, archive,
+# show tracking, search history). ssh alias or user@host, and the checkout path there.
+# sync:
+#   host: user@homeserver
+#   remote_root: ~/streamline

@@ -205,13 +205,14 @@ Rich-powered output with spinners during API calls and panel-formatted results. 
 
 ### Sync Tooling (`./recommend-sync`, `tools/sync_user_state.py`)
 
-Streamline runs on two machines (this one and the home server), used by one person, one at a time. User state is the SQLite user store (`data/streamline.db`, `config.EVENT_DB_PATH`) plus `recommender/cache/query_history.json`. The tool never merges rows. It copies those two files in the direction you ask for and refuses when that would overwrite work on the other side.
-It knows which side moved because it keeps a baseline under `data/sync/`: a copy of both files as they were after the last `pull` or `push`.
-`status` diffs local, server, and baseline logically (rows keyed by typed TMDB id or normalized title, timestamps ignored for equality but shown as when) and says which side changed.
-`pull` backs up the local files as `*.bak-<timestamp>` and replaces them.
-`push` refuses if the server differs from the baseline, prints what changed there, and says whether `pull` is safe; `--force` overrides after the server files are backed up as `*.predeploy-<timestamp>`.
-Deploying code (`git pull` and a service restart) no longer touches user state at all.
-Caches, watch events, and imports are not user state and are never moved by this tool.
+Streamline runs on two machines (this one and the home server), used by one person, one at a time. User state is four tables in the user store (`saved_titles`, `title_ratings`, `manual_archive_entries`, `show_tracking` in `config.EVENT_DB_PATH`) plus `recommender/cache/query_history.json`. The same SQLite file also holds imported watch events, which are not user state and never move.
+The tool never merges rows. It replaces the four user tables and the history wholesale in the direction you ask for, and refuses when that would overwrite work on the other side.
+It knows which side moved because it keeps a baseline under `data/sync/`: a snapshot taken after the last `pull` or `push`.
+`status` diffs local, server, and baseline logically (rows keyed by typed TMDB id or normalized title; bookkeeping timestamps ignored for equality but shown as when; `watched_at` counts as a change) and says which side changed.
+`pull` backs up the local database with SQLite's backup API as `*.bak-<timestamp>` and replaces the user tables and history in one transaction.
+`push` refuses if the server differs from the baseline and says whether `pull` is safe. Otherwise it uploads a snapshot and runs `python -m tools.sync_user_state helper apply` on the server, which backs up the live database as `*.predeploy-<timestamp>`, then in one `BEGIN IMMEDIATE` transaction compares the live user tables with the fingerprint the Mac saw (compare-and-swap; a concurrent web write makes the push refuse), replaces them, stages the history, and commits. Nothing partial can land. `--force` only skips the baseline check, never the compare-and-swap or the backup.
+Snapshots on both sides use the backup API, so committed rows still in a WAL file are never missed. The other machine is configured under `sync:` in `config.local.yaml` (machine-local, gitignored) and must have this repo checked out.
+Deploying code (`git pull` and a service restart) does not touch user state at all.
 
 ## Cache Layout
 
