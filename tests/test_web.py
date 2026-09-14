@@ -2637,6 +2637,12 @@ class TestFindRendering(FindTestSupport):
         assert "shown=7,8,9,1,2" in href
         assert "start=12" in href
 
+    def test_shown_ids_ignore_non_ascii_digits_instead_of_failing(self, client, find_env):
+        # str.isdigit() is true for superscripts and other Unicode digits that int() rejects.
+        resp = client.get("/find?shown=%C2%B2,7,%D9%A3,8")   # ², 7, Arabic-Indic three, 8
+        assert resp.status_code == 200
+        assert find_env["finder"][0]["exclude"] == frozenset({7, 8})
+
     def test_shown_ids_are_capped_to_keep_the_url_bounded(self, client, find_env):
         ids = ",".join(str(i) for i in range(1000, 1400))
         body = client.get(f"/find?cursor=1.12&start=400&shown={ids}").get_data(as_text=True)
@@ -2705,6 +2711,43 @@ class TestFindRendering(FindTestSupport):
         assert "TMDB request failed" in body
         assert 'class="find-more"' in body and "Try again" in body
         assert 'href="/find?period=1y&amp;cursor=1.12&amp;start=10"' in body
+
+    def test_htmx_continuation_missing_index_returns_setup_fragment(self, client, find_env, monkeypatch, tmp_path):
+        monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(tmp_path / "gone.json"))
+        body = client.get("/find?cursor=1.12&start=10", headers={"HX-Request": "true"}).get_data(as_text=True)
+        assert "<html" not in body and "<aside" not in body
+        assert "Run ./recommend setup" in body
+        assert 'class="find-more"' in body and "Try again" in body
+
+    def test_htmx_continuation_missing_key_returns_fragment(self, client, find_env, monkeypatch):
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "")
+        body = client.get("/find?cursor=1.12&start=10", headers={"HX-Request": "true"}).get_data(as_text=True)
+        assert "<html" not in body
+        assert "TMDB_API_KEY" in body
+
+    def test_htmx_continuation_keeps_the_now_playing_warning(self, client, find_env, monkeypatch):
+        def finder(tmdb, watch_index, user_state, criteria, cache_dir, **kwargs):
+            return self._results(criteria, rows=[self._row(11)], now_playing_rate_limited=True, next_cursor="2.0")
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        body = client.get("/find?cursor=1.12&start=10", headers={"HX-Request": "true"}).get_data(as_text=True)
+        assert "<html" not in body
+        assert "rate limit" in body.lower() and "cinema" in body.lower()
+        assert body.count('class="find-card"') == 1 and "Show more" in body
+
+    def test_htmx_continuation_keyword_missing_is_distinct(self, client, find_env, monkeypatch):
+        def finder(tmdb, watch_index, user_state, criteria, cache_dir, **kwargs):
+            return self._results(criteria, keyword_missing=True)
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        body = client.get("/find?keyword=zzzz&cursor=1.12&start=10", headers={"HX-Request": "true"}).get_data(as_text=True)
+        assert "No exact TMDB keyword" in body and "zzzz" in body
+        assert "End of the catalogue" not in body
+
+    def test_first_page_warning_is_not_rendered_twice(self, client, find_env, monkeypatch):
+        def finder(tmdb, watch_index, user_state, criteria, cache_dir, **kwargs):
+            return self._results(criteria, rows=[self._row(1)], now_playing_rate_limited=True)
+        monkeypatch.setattr(web, "find_unwatched_titles", finder)
+        body = client.get("/find").get_data(as_text=True)
+        assert body.lower().count("rate limit reached while reading cinema") == 1
 
     def test_htmx_first_load_still_renders_the_full_page(self, client, find_env):
         body = client.get("/find", headers={"HX-Request": "true"}).get_data(as_text=True)

@@ -141,8 +141,9 @@ def find_unwatched_titles(
     """One batch of unwatched titles.
 
     exclude holds TMDB ids already shown in earlier batches. TMDB may reorder
-    between requests, so the cursor alone cannot guarantee a title is not
-    served twice; the caller carries the shown ids forward.
+    between requests, so the cursor alone cannot stop a title being served
+    twice; the caller carries the recently shown ids forward (see web.py's
+    FIND_SHOWN_MAX for the bound on that window).
     """
     release_start, release_end = release_window(criteria.period, today)
 

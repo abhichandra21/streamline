@@ -1,7 +1,8 @@
 {#- One batch of Find results plus the control that fetches the next one.
     Included by find.html on first load and returned alone for HTMX continuations,
-    so the appended markup is identical to the first-paint markup. When a
-    continuation fails, this renders the error and a retry in place of Show more. -#}
+    so the appended markup is identical to the first-paint markup. Every state a
+    batch can be in is rendered here, notices first, so a continuation never
+    loses one: error with retry, unknown keyword, cinema rate limit, rows, end. -#}
 {%- if results is none %}
 <div class="find-note is-error"><span class="find-cap">Stopped</span><div>{{ error }}</div></div>
 <a class="find-more" href="{{ return_to }}"
@@ -10,7 +11,23 @@
   <span class="find-more-label"><span class="find-more-spin" aria-hidden="true"></span>Try again</span>
   <span class="find-more-rule"></span>
 </a>
+{%- elif results.keyword_missing %}
+<div class="find-note">
+  <span class="find-cap">Keyword</span>
+  <div>No exact TMDB keyword named <strong>{{ criteria.keyword }}</strong>. TMDB keywords match by name exactly; try the wording TMDB uses on a title page.</div>
+</div>
+{%- elif not results.rows and start == 0 %}
+<div class="find-note">
+  <span class="find-cap">Empty</span>
+  <div>No unwatched {{ 'TV series' if criteria.content_type == 'tv' else 'movies' }} matched. Widen the period or drop a filter, then press Show results.</div>
+</div>
 {%- else %}
+{%- if results.now_playing_rate_limited %}
+<div class="find-note is-warn">
+  <span class="find-cap">Cinemas</span>
+  <div>TMDB rate limit reached while reading cinema listings. Every title is shown; In theaters badges are missing for this batch.</div>
+</div>
+{%- endif %}
 {%- for row in results.rows %}
 {%- set title = row.title %}
 {%- set rank = start + loop.index %}
