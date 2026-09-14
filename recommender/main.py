@@ -8,7 +8,7 @@ from rich.panel import Panel
 import config
 from recommender import user_store
 from recommender.user_state import UserStateIndex
-from recommender.event_store import load_events
+from recommender.event_store import has_event_store, load_events
 from recommender.llm import create_client
 from recommender.models import Recommendation
 from recommender.tmdb_client import TmdbClient
@@ -19,7 +19,11 @@ from recommender import history
 
 def _events_loader_fallback() -> list:
     events = load_events(config.EVENT_DB_PATH)
-    if not events and not Path(config.EVENT_DB_PATH).exists():
+    # An initialized event store is authoritative even when empty: setup
+    # records zero-event imports. Only fall back to parsing exports when there
+    # is no event store at all — the database file can exist without one,
+    # since query history creates it for its own tables.
+    if not events and not has_event_store(config.EVENT_DB_PATH):
         from recommender.setup import load_platform_events_from_exports
         return load_platform_events_from_exports(fail_on_error=False)
     return events

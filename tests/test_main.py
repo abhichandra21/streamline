@@ -1614,3 +1614,44 @@ def test_audit_flags_severe_year_collision_from_parenthetical_title_year(tmp_pat
     err = capsys.readouterr().err
     assert "likely real bugs" in err.lower()
     assert "Doctor Who (2005)" in err
+
+
+def test_events_fallback_survives_a_history_only_database(tmp_path, monkeypatch):
+    """Recording or opening query history creates the event database file.
+    The export fallback keys off having no events, so installs that never
+    ingested into SQLite still load their provider exports."""
+    import config
+    from recommender import history, main
+
+    db_path = str(tmp_path / "streamline.db")
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
+    monkeypatch.setattr(history, "LEGACY_HISTORY_PATH", tmp_path / "query_history.json")
+
+    history.record("first search", [], "anthropic", "")
+    assert Path(db_path).exists()
+
+    from_exports = [make_rec("Placeholder")]
+    with patch("recommender.setup.load_platform_events_from_exports",
+               return_value=from_exports) as loader:
+        assert main._events_loader_fallback() == from_exports
+    loader.assert_called_once_with(fail_on_error=False)
+
+
+def test_events_fallback_trusts_an_initialized_empty_event_store(tmp_path, monkeypatch):
+    """Setup persists zero-event imports, so an initialized store that holds no
+    events is authoritative. Re-parsing exports behind it would make the
+    database advisory instead."""
+    import config
+    from recommender import main
+    from recommender.event_store import init_db, replace_provider_events
+
+    db_path = str(tmp_path / "streamline.db")
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
+    init_db(db_path)
+    replace_provider_events(
+        db_path, "netflix", [], [{"path": "/export.zip", "sha256": "sha"}], "snap",
+    )
+
+    with patch("recommender.setup.load_platform_events_from_exports") as loader:
+        assert main._events_loader_fallback() == []
+    loader.assert_not_called()

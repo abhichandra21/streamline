@@ -35,7 +35,7 @@ from recommender.query_engine import RecommendContext, ask
 from recommender.user_state import UserStateIndex
 from recommender import watch_index as wi
 from recommender import user_store
-from recommender.event_store import load_events
+from recommender.event_store import has_event_store, load_events
 
 
 QUERIES = [
@@ -53,7 +53,11 @@ OUTPUT_PATH = PROJECT_ROOT / "comparison_results.txt"
 
 def _events_loader() -> list:
     events = load_events(config.EVENT_DB_PATH)
-    if not events and not Path(config.EVENT_DB_PATH).exists():
+    # An initialized event store is authoritative even when empty: setup
+    # records zero-event imports. Only fall back to parsing exports when there
+    # is no event store at all — the database file can exist without one,
+    # since query history creates it for its own tables.
+    if not events and not has_event_store(config.EVENT_DB_PATH):
         from recommender.setup import load_platform_events_from_exports
         return load_platform_events_from_exports(fail_on_error=False)
     return events

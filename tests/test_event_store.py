@@ -593,3 +593,26 @@ def test_get_import_info_empty_db(tmp_path):
     init_db(db_path)
     info = get_import_info(db_path)
     assert info == {}
+
+
+def test_load_events_on_database_without_watch_events_table(tmp_path):
+    """Query history creates the same database file for its own tables, so a
+    store that never ingested an export must read as empty, not raise."""
+    import pathlib
+
+    import config
+    from recommender import history
+
+    db_path = str(tmp_path / "streamline.db")
+    config_db = config.EVENT_DB_PATH
+    legacy = history.LEGACY_HISTORY_PATH
+    try:
+        config.EVENT_DB_PATH = db_path
+        history.LEGACY_HISTORY_PATH = pathlib.Path(tmp_path / "query_history.json")
+        history.record("first search", [], "anthropic", "")
+    finally:
+        config.EVENT_DB_PATH = config_db
+        history.LEGACY_HISTORY_PATH = legacy
+
+    assert Path(db_path).exists()
+    assert load_events(db_path) == []
