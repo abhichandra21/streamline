@@ -1202,8 +1202,12 @@ def _find_start(args) -> int:
 
 
 # Ids already shown are carried in the Show more URL so a TMDB reorder between
-# clicks cannot serve a title twice. Only the most recent ones are kept; a
-# reorder moves titles a few places, not hundreds, and the URL stays bounded.
+# clicks does not serve a title twice. Only the most recent FIND_SHOWN_MAX are
+# kept so the URL stays bounded, which makes the guarantee explicit: no repeat
+# of anything within the last 300 titles shown. A title older than that can in
+# principle come back if TMDB moves it hundreds of places between clicks. That
+# is rare, harmless (a duplicate, never a watched title), and preferred over
+# holding paging state in the process for a single-user app.
 FIND_SHOWN_MAX = 300
 
 
