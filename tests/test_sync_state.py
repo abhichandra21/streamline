@@ -14,6 +14,8 @@ from recommender import user_store
 from tools.sync_diff import State, fingerprint
 from tools.sync_state import (
     Cancelled,
+    ask_to_confirm,
+    render_status,
     SshTransport,
     TransportError,
     LocalMoved,
@@ -474,3 +476,67 @@ def test_other_server_failures_keep_their_detail(monkeypatch):
     transport = SshTransport("me@host", "~/streamline", "data/streamline.db")
     with pytest.raises(TransportError, match="No route to host"):
         transport.snapshot()
+
+
+def test_confirmation_without_a_terminal_refuses(monkeypatch, capsys):
+    """Silence is not consent. The editor subprocess shares stdin, so a piped
+    answer may already be gone by the time the prompt runs."""
+    def no_tty(_prompt):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", no_tty)
+    assert ask_to_confirm([], []) is False
+    assert "Nothing was written" in capsys.readouterr().out
+
+
+# ── the deletion gate ────────────────────────────────────────────────────────
+
+def _deletion_change(tmp_path):
+    """A ticked change that would delete a title from prod outright."""
+    from tools.sync_diff import classify
+    base = read_snapshot(make_db(tmp_path / "base.db",
+                                 saved=[("Fargo", "tv", 500, "watchlist")])).rows
+    server = read_snapshot(make_db(tmp_path / "srv.db",
+                                   saved=[("Fargo", "tv", 500, "watchlist")])).rows
+    local = read_snapshot(make_db(tmp_path / "loc.db")).rows
+    changes = classify(base, local, server)
+    assert changes[0].removes_title
+    return changes
+
+
+def test_a_removal_is_not_confirmed_by_yes(tmp_path, monkeypatch, capsys):
+    """Ticking reads as "include this", which is wrong for a deletion, so a
+    plain y must not be enough to remove data from the live app."""
+    changes = _deletion_change(tmp_path)
+    monkeypatch.setattr("builtins.input", lambda _p: "y")
+    assert ask_to_confirm(changes, []) is False
+    out = capsys.readouterr().out
+    assert "DELETING 1 title(s) FROM PROD" in out
+
+
+def test_a_removal_is_confirmed_by_typing_delete(tmp_path, monkeypatch):
+    changes = _deletion_change(tmp_path)
+    monkeypatch.setattr("builtins.input", lambda _p: "delete")
+    assert ask_to_confirm(changes, []) is True
+
+
+def test_a_removal_without_a_terminal_is_refused(tmp_path, monkeypatch):
+    changes = _deletion_change(tmp_path)
+
+    def no_tty(_p):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", no_tty)
+    assert ask_to_confirm(changes, []) is False
+
+
+def test_status_describes_a_prod_only_change_as_arriving_here(tmp_path):
+    """It cannot be promoted, so describing it as an effect on prod is backwards."""
+    sync, local, server = build(
+        tmp_path,
+        server_kw={"ratings": [("The Mandalorian and Grogu", "movie", 1228710, "more")]},
+        baseline={},
+    )
+    text = render_status(sync.status())
+    assert "arrives locally: rating more" in text
+    assert "REMOVE from prod" not in text

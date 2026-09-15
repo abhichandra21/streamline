@@ -486,24 +486,55 @@ def edit_checklist(changes: list, host: str | None = None) -> list:
         return parse_checklist(path.read_text(), changes)
 
 
-def describe(change) -> str:
-    line = f"  {change.title}  {change.action}"
+def describe(change, *, promotable: bool = True) -> str:
+    """One change in words. Non-promotable ones are described by what arrives here."""
+    body = change.action if promotable else change.incoming
+    line = f"  {change.title}  {body}"
     if change.note:
         line += f"   ({change.note})"
     return line
 
 
+def _ask(prompt: str) -> str | None:
+    """None when there is no terminal to ask on."""
+    try:
+        return input(prompt).strip().lower()
+    except EOFError:
+        # The editor subprocess shares stdin, so a piped answer is not
+        # reliably still there by the time we get here. Silence is not consent.
+        print("\nNo terminal to confirm on. Nothing was written.")
+        return None
+
+
 def ask_to_confirm(ticked: list, discarded: list) -> bool:
+    deleting = [c for c in ticked if c.removes_title]
+    adding = [c for c in ticked if not c.removes_title]
+
     print()
-    if ticked:
-        print(f"Sending {len(ticked)} title(s) to prod:")
-        print("\n".join(describe(c) for c in ticked))
-    else:
-        print("Sending nothing to prod.")
+    if adding:
+        print(f"Updating {len(adding)} title(s) on prod:")
+        print("\n".join(describe(c) for c in adding))
     if discarded:
         print(f"\nDiscarding {len(discarded)} local change(s) on refresh:")
         print("\n".join(describe(c) for c in discarded))
-    answer = input("\nProceed? [y/N] ").strip().lower()
+    if not ticked:
+        print("Sending nothing to prod.")
+
+    # Deletions get their own gate. A tick reads as "include this", which is
+    # the right reading for every other kind of line and the wrong one here,
+    # so ticking alone must not be enough to remove data from the live app.
+    if deleting:
+        print(f"\nDELETING {len(deleting)} title(s) FROM PROD.")
+        print("This removes data from the live app at 192.168.1.101.")
+        print("\n".join(describe(c) for c in deleting))
+        answer = _ask('\nType "delete" to confirm these removals, anything else to cancel: ')
+        if answer != "delete":
+            print("Not confirmed. Nothing was written.")
+            return False
+        if not adding:
+            return True
+
+    answer = _ask("\nProceed? [y/N] ")
     return answer in ("y", "yes")
 
 
@@ -516,6 +547,7 @@ def render_status(changes: list) -> str:
     buckets = (
         (State.CONFLICT, "Changed on both sides, differently:"),
         (State.UNCLASSIFIED, "Differs, and there is no baseline yet to say which side moved:"),
+        (None, "Only on prod, so not offered until a baseline exists:"),
         (State.LOCAL_ONLY, "Changed locally, can be promoted:"),
         (State.SERVER_ONLY, "Changed on prod, arrives when local refreshes:"),
     )
@@ -523,7 +555,7 @@ def render_status(changes: list) -> str:
         rows = [c for c in changes if c.state is state]
         if rows:
             lines.append(heading)
-            lines += [describe(c) for c in rows]
+            lines += [describe(c, promotable=c.offered) for c in rows]
     return "\n".join(lines)
 
 
