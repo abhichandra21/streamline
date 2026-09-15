@@ -540,3 +540,35 @@ def test_status_describes_a_prod_only_change_as_arriving_here(tmp_path):
     text = render_status(sync.status())
     assert "arrives locally: rating more" in text
     assert "REMOVE from prod" not in text
+
+
+def test_ssh_does_not_consume_the_terminal(monkeypatch):
+    """ssh reads stdin by default, which would swallow the keystrokes meant for
+    the confirmation prompt that runs right after it."""
+    import subprocess as sp
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        return sp.CompletedProcess(cmd, 0, '{"rows": {}, "columns": {}}', "")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    SshTransport("me@host", "~/streamline", "data/streamline.db").snapshot()
+    assert seen.get("stdin") is sp.DEVNULL
+    assert "input" not in seen
+
+
+def test_the_promote_helper_still_receives_its_payload(monkeypatch):
+    import subprocess as sp
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        return sp.CompletedProcess(cmd, 0, '{"ok": true}', "")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    SshTransport("me@host", "~/streamline", "data/streamline.db").promote(
+        [{"key": ["tv", "fargo"], "title": "Fargo", "expected": {}, "insert": {},
+          "tmdb_ids": []}], "stamp")
+    assert "operations" in seen.get("input", "")
+    assert "stdin" not in seen

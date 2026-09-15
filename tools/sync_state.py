@@ -362,8 +362,15 @@ class SshTransport:
         self.db_rel = db_rel
 
     def _run(self, command: str, stdin: str | None = None) -> str:
-        result = subprocess.run(["ssh", self.host, command], input=stdin,
-                                capture_output=True, text=True)
+        # ssh reads stdin unless told not to, which would drain the terminal
+        # the confirmation prompt is about to read from. Only the helper that
+        # receives a payload gets stdin at all.
+        kwargs: dict = {"capture_output": True, "text": True}
+        if stdin is None:
+            kwargs["stdin"] = subprocess.DEVNULL
+        else:
+            kwargs["input"] = stdin
+        result = subprocess.run(["ssh", self.host, command], **kwargs)
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()
             if "No module named tools.sync_state" in detail:
