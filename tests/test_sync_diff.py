@@ -33,10 +33,10 @@ def archive(title, ct="tv", tmdb=None, watched_at="2026-09-01", source="web"):
             "source": source}
 
 
-def tracking(title, tmdb=1, state="following", at="t1"):
+def tracking(title, tmdb=1, state="following", at="t1", season=None, episode=None):
     return {"tmdb_id": tmdb, "title": title, "state": state,
-            "tracking_from_season": None, "caught_up_season": None,
-            "caught_up_episode": None, "created_at": at, "updated_at": at}
+            "tracking_from_season": None, "caught_up_season": season,
+            "caught_up_episode": episode, "created_at": at, "updated_at": at}
 
 
 def snap(saved_titles=(), title_ratings=(), manual_archive_entries=(),
@@ -307,3 +307,24 @@ def test_fingerprint_ignores_bookkeeping_and_history():
 def test_fingerprint_is_row_order_independent():
     rows = [saved("Fargo"), saved("Dune", ct="movie")]
     assert fingerprint(snap(saved_titles=rows)) == fingerprint(snap(saved_titles=rows[::-1]))
+
+
+def test_caught_up_progress_is_named_when_it_changes():
+    """state stays "following" on both sides, so reporting only state says nothing."""
+    base = snap(show_tracking=[tracking("The Bear", tmdb=136315)])
+    local = snap(show_tracking=[tracking("The Bear", tmdb=136315, season=5, episode=8)])
+    changes = classify(base, local, base)
+    assert "caught up S5E8" in changes[0].action
+
+
+def test_a_tracked_show_arriving_locally_names_its_progress():
+    base = snap(show_tracking=[tracking("The Bear", tmdb=136315)])
+    server = snap(show_tracking=[tracking("The Bear", tmdb=136315, season=5, episode=8)])
+    changes = classify(base, base, server)
+    assert not changes[0].offered
+    assert changes[0].incoming == "becomes tracking following, caught up S5E8 locally"
+
+
+def test_a_show_with_no_progress_yet_reads_plainly():
+    changes = classify(None, snap(show_tracking=[tracking("Andor", tmdb=9)]), snap())
+    assert changes[0].action == "add to prod: tracking following"
