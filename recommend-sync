@@ -1,0 +1,26 @@
+#!/bin/bash
+# Move user state (watchlist, ratings, archive, show tracking, search history)
+# between this install and the live app on the home server.
+#
+# The server is the source of truth. Local changes go up only when you tick
+# them; local is then refreshed to match. See tools/sync_state.py.
+#
+#   ./recommend-sync            review, promote what you tick, refresh local
+#   ./recommend-sync --status   show what differs, write nothing
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [ -d "$SCRIPT_DIR/.venv" ]; then
+    VENV="$SCRIPT_DIR/.venv"
+elif [ -d "$SCRIPT_DIR/venv" ]; then
+    VENV="$SCRIPT_DIR/venv"
+else
+    echo "Error: no venv found at $SCRIPT_DIR/.venv or $SCRIPT_DIR/venv." >&2
+    echo "Run: python3 -m venv .venv && pip install -r requirements.txt" >&2
+    exit 1
+fi
+source "$VENV/bin/activate"
+
+cd "$SCRIPT_DIR"
+exec python3 -m tools.sync_state "$@"

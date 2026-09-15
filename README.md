@@ -306,7 +306,7 @@ python3 -m pytest tests/ -v
 ## Utility Scripts
 
 - `tools/compare_providers.py` — runs a fixed query set against two LLM providers (e.g. `anthropic` vs `local`) and writes a side-by-side comparison
-- `tools/merge_user_state.py` — merges watchlist/ratings/history between two copies of the same install (e.g. local machine and a homeserver deployment) without overwriting either side
+- `./recommend-sync` (`tools/sync_state.py`) — reconciles user state (watchlist, ratings, manual archive, show tracking, search history) with the live app on the home server configured under `sync:` in `config.local.yaml`. The server is the source of truth: local changes go up only the ones you tick in an editor checklist, then local is refreshed to match. Imported watch history never moves. `--status` reports differences without writing
 
 ## Contributing
 
