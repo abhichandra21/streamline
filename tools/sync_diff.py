@@ -245,7 +245,13 @@ def _phrase(table: str, rows: tuple) -> str:
         return f"rating {row.get('rating')}"
     if table == "manual_archive_entries":
         return "watched"
-    return f"tracking {row.get('state')}"
+    # Caught-up progress is the field that actually moves for a followed show;
+    # state alone would report "tracking following" on both sides of a change.
+    phrase = f"tracking {row.get('state')}"
+    season, episode = row.get("caught_up_season"), row.get("caught_up_episode")
+    if season and episode:
+        phrase += f", caught up S{season}E{episode}"
+    return phrase
 
 
 def _collapse(before: str, after: str) -> str:
