@@ -34,11 +34,12 @@ CREATE TABLE watch_events (id INTEGER PRIMARY KEY, title TEXT, import_id INTEGER
 
 
 def make_db(path, *, saved=(), ratings=(), archive=(), tracking=(), history=(),
-            foreign=True):
+            foreign=True, history_table=True):
     conn = sqlite3.connect(str(path))
     conn.executescript(user_store._SCHEMA)
     conn.executescript(user_store._INDEXES)
-    conn.executescript(query_history._SCHEMA)
+    if history_table:
+        conn.executescript(query_history._SCHEMA)
     if foreign:
         conn.executescript(FOREIGN_SCHEMA)
         conn.execute("INSERT INTO imports (id, provider) VALUES (1, 'netflix')")
@@ -124,6 +125,21 @@ def test_missing_local_database_is_refused(tmp_path):
     with pytest.raises(MissingState):
         sync.run()
     assert titles(server) == ["Dune"]
+
+
+def test_an_uninitialized_local_table_is_not_a_schema_mismatch(tmp_path):
+    """history creates query_history lazily, so a checkout where no search has
+    run has no such table. That is the install most in need of a first sync."""
+    sync, local, server = build(
+        tmp_path,
+        local_kw={"history_table": False,
+                  "saved": [("Fargo", "tv", None, "watchlist")]},
+        server_kw={"history": [("t1", "a real search")]},
+        chooser=tick(),
+    )
+    sync.run()
+    assert [json.loads(r["entry"])["query"] for r in rows_of(local, "query_history")] \
+        == ["a real search"]
 
 
 def test_schema_mismatch_is_refused(tmp_path):

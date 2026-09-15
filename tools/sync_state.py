@@ -123,13 +123,38 @@ def read_snapshot(db_path) -> Snapshot:
 
 
 def check_schemas(local: Snapshot, server: Snapshot) -> None:
+    """Refuse when two existing tables disagree about their columns.
+
+    A table missing entirely is not a disagreement. user_store and history
+    create their tables lazily on first use, so a checkout where no search has
+    run yet has no query_history table at all. Treating that as a code
+    mismatch would refuse the first sync on exactly the install that most
+    needs one.
+    """
     for table in SYNC_TABLES:
         here, there = local.columns.get(table) or [], server.columns.get(table) or []
-        if here != there:
+        if here and there and here != there:
             raise SchemaMismatch(
-                f"{table}: this install has {here or 'no such table'} and the server has "
-                f"{there or 'no such table'}. Deploy the same code to both sides first."
+                f"{table}: this install has {here} and the server has {there}. "
+                "Deploy the same code to both sides first."
             )
+
+
+def ensure_tables(db_path) -> None:
+    """Create any of the five tables this install has not created yet.
+
+    Idempotent: every statement is CREATE ... IF NOT EXISTS, and the schemas
+    come from the application's own modules so the sync cannot invent a
+    different shape. Only ever called on the local database; the server's
+    schema is its own business.
+    """
+    conn = _connect_rw(db_path)
+    try:
+        conn.executescript(user_store._SCHEMA)
+        conn.executescript(user_store._INDEXES)
+        conn.executescript(query_history._SCHEMA)
+    finally:
+        conn.close()
 
 
 # ── writing ──────────────────────────────────────────────────────────────────
@@ -429,6 +454,7 @@ class Sync:
 
         self._assert_local_unmoved(before)
         fresh = self.transport.snapshot()
+        ensure_tables(self.local_db)
         backup_database(self.local_db,
                         self.local_db.with_name(f"{self.local_db.name}.bak-{stamp}"))
         replace_tables(self.local_db, fresh)
