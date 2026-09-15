@@ -211,10 +211,6 @@ Token usage and cost tracking via `UsageStats` — accumulated per query, printe
 
 Rich-powered output with spinners during API calls and panel-formatted results. Stderr/stdout separation for pipe-friendly usage. Interactive REPL with conversational context and inline feedback commands (`+liked`, `+disliked`, `+add`). Token usage and cost printed after each query.
 
-### Deploy Tooling (`tools/merge_user_state.py`)
-
-Streamline runs on more than one machine (local + home server), each accumulating its own watchlist/rating/history changes. This tool merges user-generated state — the `db` form merges `saved_titles`/`title_ratings`/`manual_archive_entries` between two copies of the app's SQLite user-store DB (`data/streamline.db`, i.e. `config.EVENT_DB_PATH` — not `recommender/cache/events.db`, which is unrelated and always empty); the `history` form merges two `query_history.json` files, which since query history moved into SQLite means pre-migration backups only. Both merge "other" into "local" in place, so a deploy never silently clobbers changes made on the other side. Derived/cache data (TMDB metadata, enrichments, provider availability) is untouched since it's rebuilt from setup, not user input.
-
 ## Cache Layout
 
 ```

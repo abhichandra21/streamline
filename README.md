@@ -306,7 +306,6 @@ python3 -m pytest tests/ -v
 ## Utility Scripts
 
 - `tools/compare_providers.py` — runs a fixed query set against two LLM providers (e.g. `anthropic` vs `local`) and writes a side-by-side comparison
-- `tools/merge_user_state.py` — merges watchlist/ratings/history between two copies of the same install (e.g. local machine and a homeserver deployment) without overwriting either side
 
 ## Contributing
 
