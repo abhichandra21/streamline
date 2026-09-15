@@ -211,6 +211,22 @@ Token usage and cost tracking via `UsageStats` — accumulated per query, printe
 
 Rich-powered output with spinners during API calls and panel-formatted results. Stderr/stdout separation for pipe-friendly usage. Interactive REPL with conversational context and inline feedback commands (`+liked`, `+disliked`, `+add`). Token usage and cost printed after each query.
 
+### Sync Tooling (`./recommend-sync`, `tools/sync_state.py`, `tools/sync_diff.py`)
+
+Streamline runs on two machines: this one, where code is written and tested, and the home server, which is the app actually in use. Both accumulate real user state, so a one-way copy in either direction would destroy work.
+
+The server is the source of truth and local is a mirror. Local changes travel up only when explicitly approved, one title at a time, in a checklist opened in `$EDITOR` with every box empty. Local is then replaced with the server's state, so unticked local changes are discarded. The server never receives a wholesale table replacement, which is what keeps a sync from damaging the live app.
+
+User state is four tables in the user store (`saved_titles`, `title_ratings`, `manual_archive_entries`, `show_tracking`) plus the `query_history` table, all in `config.EVENT_DB_PATH`. The same file holds imported watch events and imports, which are not user state: they are never read for comparison and never written.
+
+The unit of comparison and approval is a title, not a row. One user action can write several tables at once — `mark_watched_from_watchlist` removes a watchlist row, inserts an archive row and may insert a rating in one transaction — so approving rows independently could apply half an action. Grouping by title also absorbs `user_store._reconcile_identity` promoting a null `tmdb_id` to a concrete one, which changes a row's identity while leaving the title alone.
+
+Classification is three-way, against a baseline under `data/sync/` recorded at the end of the last sync, plus local and the server. That is what distinguishes an addition here from a removal there, and what surfaces a title both sides changed to different values as a conflict showing the server's value rather than a silent overwrite. With no baseline — a fresh install — every difference is offered as unclassified rather than discarded.
+
+`query_history` moves downward only. Its order is defined by row id and its timestamps are neither unique nor ordered, so the refresh reinserts the server's rows in ascending server id order rather than treating timestamps as keys.
+
+Writes are guarded on both sides. The server is backed up with SQLite's backup API, then ticked titles are applied in one `BEGIN IMMEDIATE` transaction that first re-checks each ticked title against what was read, so a write landing on one of them refuses the whole push; unrelated server changes do not block it. Local is fingerprinted before the checklist opens and rechecked before each write, since the local web UI can be open in a browser tab while the checklist sits in an editor. The server side runs as `tools.sync_state helper` in its own checkout over ssh, so it needs current code — deploy first. Deploying code does not touch user state.
+
 ## Cache Layout
 
 ```

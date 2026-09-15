@@ -36,22 +36,6 @@ BOOKKEEPING_COLUMNS = {
     "show_tracking": ("created_at", "updated_at"),
 }
 
-_LABELS = {
-    "saved_titles": "watchlist",
-    "title_ratings": "rating",
-    "manual_archive_entries": "archive",
-    "show_tracking": "tracking",
-}
-
-# The one column worth showing when a row changed rather than appeared.
-_VALUE_COLUMN = {
-    "saved_titles": "status",
-    "title_ratings": "rating",
-    "manual_archive_entries": "watched_at",
-    "show_tracking": "state",
-}
-
-
 class ChecklistEdited(Exception):
     """The checklist came back structurally different from the one written."""
 
@@ -87,10 +71,29 @@ class Change:
         return self.state is not State.SERVER_ONLY
 
     @property
-    def summary(self) -> str:
-        """What local did, against the baseline, or against the server when unclassified."""
-        reference = self.server if self.state is State.UNCLASSIFIED else self.baseline
-        return _describe_delta(self.local, reference)
+    def action(self) -> str:
+        """What promoting this does to the server.
+
+        Phrased as the effect on prod, not as what local did, because the two
+        read the same on a first run and only one of them is safe to act on: a
+        title present only on the server looks like "local removed it" whether
+        local removed it or never had it, and ticking it deletes real data.
+        """
+        return _describe_action(self.local, self.server)
+
+    @property
+    def note(self) -> str:
+        if self.state is State.CONFLICT:
+            return f"conflict, {self._prod_state}"
+        if self.state is State.UNCLASSIFIED:
+            return f"no baseline, {self._prod_state}"
+        return ""
+
+    @property
+    def _prod_state(self) -> str:
+        if self.server is None:
+            return "not on prod"
+        return f"prod has {_describe_values(self.server)}"
 
     @property
     def server_summary(self) -> str:
@@ -193,62 +196,82 @@ def classify(baseline: dict | None, local: dict, server: dict) -> list:
 
 # ── describing a change in words ─────────────────────────────────────────────
 
-def _value_of(table: str, rows: tuple) -> str:
+_ABSENT = "absent"
+
+
+def _phrase(table: str, rows: tuple) -> str:
+    """One table's state for a title, in the vocabulary the app's own UI uses."""
     if not rows:
         return ""
-    value = rows[0].get(_VALUE_COLUMN[table])
-    return str(value) if value is not None else ""
+    row = rows[0]
+    if table == "saved_titles":
+        return str(row.get("status") or "watchlist")
+    if table == "title_ratings":
+        return f"rating {row.get('rating')}"
+    if table == "manual_archive_entries":
+        return "watched"
+    return f"tracking {row.get('state')}"
 
 
-def _describe_delta(local: Footprint | None, reference: Footprint | None) -> str:
-    """What local has that the reference did not, in the app's own vocabulary."""
+def _collapse(before: str, after: str) -> str:
+    """'rating more' -> 'rating less' reads better as 'rating more -> less'."""
+    b, a = before.split(), after.split()
+    if len(b) == len(a) == 2 and b[0] == a[0]:
+        return f"{b[0]} {b[1]} -> {a[1]}"
+    return f"{before} -> {after}"
+
+
+def _describe_values(footprint) -> str:
+    if footprint is None:
+        return _ABSENT
+    parts = [_phrase(t, footprint.rows[t]) for t in USER_TABLES if footprint.rows.get(t)]
+    return ", ".join(p for p in parts if p) or _ABSENT
+
+
+def _describe_action(local, server) -> str:
+    """What promoting this title does to the server: make it match local."""
+    if local is None:
+        return "REMOVE from prod"
+    if server is None:
+        return f"add to prod: {_describe_values(local)}"
+
     parts = []
     for table in USER_TABLES:
-        mine = (local.rows.get(table, ()) if local else ())
-        theirs = (reference.rows.get(table, ()) if reference else ())
+        mine, theirs = local.rows.get(table, ()), server.rows.get(table, ())
         if mine == theirs:
             continue
-        label = _LABELS[table]
         if mine and not theirs:
-            parts.append(f"{label} +")
+            parts.append(f"+{_phrase(table, mine)}")
         elif theirs and not mine:
-            parts.append(f"{label} -")
+            parts.append(f"-{_phrase(table, theirs)}")
         else:
-            before, after = _value_of(table, theirs), _value_of(table, mine)
-            parts.append(f"{label} {before} -> {after}" if before != after else f"{label} changed")
-    return ", ".join(parts) or "(no change)"
-
-
-def _describe_values(footprint: Footprint | None) -> str:
-    if footprint is None:
-        return "absent"
-    parts = [f"{_LABELS[t]} {_value_of(t, footprint.rows[t])}".strip()
-             for t in USER_TABLES if footprint.rows.get(t)]
-    return ", ".join(parts) or "absent"
+            parts.append(_collapse(_phrase(table, theirs), _phrase(table, mine)))
+    return ", ".join(parts) or "no change"
 
 
 # ── checklist ────────────────────────────────────────────────────────────────
 
 _CHECKLIST_HEADER = """\
-# Tick what should go to prod{host}.
+# Tick what should go to prod{host}. An unticked line is discarded
+# from this machine when local refreshes, and left alone on prod.
 # Save and quit to apply. Quit without saving to cancel.
-# Unticked items are discarded when local refreshes.
 """
 
 
-def _line_body(change: Change) -> str:
-    body = f"{change.title}  {change.summary}"
-    if change.state is State.CONFLICT:
-        body += f"   PROD HAS: {change.server_summary}"
-    elif change.state is State.UNCLASSIFIED:
-        body += f"   PROD HAS: {change.server_summary}  (no baseline yet)"
-    return body
+def _bodies(offered: list) -> list:
+    """The text of each line, shared by rendering and parsing so they agree."""
+    width = max((len(c.title) for c in offered), default=0)
+    return [
+        f"{c.title.ljust(width)}  {c.action}" + (f"   ({c.note})" if c.note else "")
+        for c in offered
+    ]
 
 
 def render_checklist(changes: list, host: str | None = None) -> str:
     offered = [c for c in changes if c.offered]
-    lines = [_CHECKLIST_HEADER.format(host=f" ({host})" if host else ""), ""]
-    lines += [f"[ ] {_line_body(c)}" for c in offered]
+    header = _CHECKLIST_HEADER.format(host=f" ({host})" if host else "")
+    lines = [header.rstrip(), ""]
+    lines += [f"[ ] {body}" for body in _bodies(offered)]
     return "\n".join(lines) + "\n"
 
 
@@ -260,7 +283,7 @@ def parse_checklist(text: str, changes: list) -> list:
     line against what was written makes that a refusal instead.
     """
     offered = [c for c in changes if c.offered]
-    expected = [_line_body(c) for c in offered]
+    expected = [b.strip() for b in _bodies(offered)]
 
     marks, bodies = [], []
     for raw in text.splitlines():
@@ -272,7 +295,7 @@ def parse_checklist(text: str, changes: list) -> list:
         marks.append(line[1].strip().lower() == "x")
         bodies.append(line[3:].strip())
 
-    if bodies != [e.strip() for e in expected]:
+    if bodies != expected:
         raise ChecklistEdited(
             "The checklist was edited beyond its checkboxes, so a tick can no longer "
             "be matched to a change. Nothing was written. Rerun and tick again."

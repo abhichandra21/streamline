@@ -14,6 +14,8 @@ from recommender import user_store
 from tools.sync_diff import State, fingerprint
 from tools.sync_state import (
     Cancelled,
+    SshTransport,
+    TransportError,
     LocalMoved,
     MissingState,
     SchemaMismatch,
@@ -429,3 +431,30 @@ def test_status_reports_differences_without_writing(tmp_path):
     assert titles(local) == ["Fargo"]
     assert titles(server) == ["Dune"]
     assert not sync.baseline_db.exists()
+
+
+# ── transport failures ───────────────────────────────────────────────────────
+
+def test_a_server_without_current_code_says_to_deploy_first(monkeypatch):
+    """The first thing that happens on a fresh branch, so the message has to be clear."""
+    import subprocess as sp
+
+    def fake_run(cmd, **kwargs):
+        return sp.CompletedProcess(cmd, 1, "", "No module named tools.sync_state")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    transport = SshTransport("me@host", "~/streamline", "data/streamline.db")
+    with pytest.raises(TransportError, match="Deploy first"):
+        transport.snapshot()
+
+
+def test_other_server_failures_keep_their_detail(monkeypatch):
+    import subprocess as sp
+
+    def fake_run(cmd, **kwargs):
+        return sp.CompletedProcess(cmd, 255, "", "ssh: connect to host port 22: No route to host")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    transport = SshTransport("me@host", "~/streamline", "data/streamline.db")
+    with pytest.raises(TransportError, match="No route to host"):
+        transport.snapshot()

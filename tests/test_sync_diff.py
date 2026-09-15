@@ -113,11 +113,12 @@ def test_local_only_change_is_offered():
     assert changes[0].offered
 
 
-def test_local_removal_is_offered_as_a_removal():
+def test_local_removal_is_offered_as_an_explicit_removal_from_prod():
+    """Phrased as the effect on prod, since ticking it deletes live data."""
     base = snap(saved_titles=[saved("Fargo")])
     changes = classify(base, snap(), base)
     assert changes[0].state is State.LOCAL_ONLY
-    assert "-" in changes[0].summary
+    assert changes[0].action == "REMOVE from prod"
 
 
 def test_both_sides_changed_same_title_is_a_conflict_showing_the_server_value():
@@ -138,6 +139,33 @@ def test_no_baseline_offers_differences_as_unclassified():
     changes = classify(None, local, server)
     assert {c.state for c in changes} == {State.UNCLASSIFIED}
     assert [c.title for c in changes if c.offered] == ["Dune", "Fargo"]
+
+
+def test_a_title_only_on_the_server_is_offered_as_an_explicit_removal():
+    """The dangerous first-run case.
+
+    With no baseline, "local deleted it" and "local never had it" are
+    indistinguishable, so it has to be offered. Ticking it deletes live data,
+    so the line must say so rather than read as a local edit.
+    """
+    server = snap(saved_titles=[saved("Dune", ct="movie")])
+    changes = classify(None, snap(), server)
+    assert changes[0].action == "REMOVE from prod"
+    assert "no baseline" in changes[0].note
+    assert "REMOVE from prod" in render_checklist(changes)
+
+
+def test_a_title_absent_from_prod_says_so_rather_than_saying_absent():
+    changes = classify(None, snap(saved_titles=[saved("Fargo")]), snap())
+    assert changes[0].note == "no baseline, not on prod"
+
+
+def test_marking_watched_reads_as_one_line_with_both_halves():
+    """One action across two tables, one checkbox."""
+    base = snap(saved_titles=[saved("Sinners", ct="movie", tmdb=7)])
+    local = snap(manual_archive_entries=[archive("Sinners", ct="movie", tmdb=7)])
+    changes = classify(base, local, base)
+    assert changes[0].action == "-watchlist, +watched"
 
 
 def test_no_baseline_does_not_offer_titles_that_already_match():

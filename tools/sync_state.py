@@ -71,6 +71,10 @@ class Cancelled(Exception):
     """The operator backed out. Nothing was written."""
 
 
+class TransportError(RuntimeError):
+    """The server could not be reached, or the helper failed there."""
+
+
 @dataclass
 class Snapshot:
     rows: dict = field(default_factory=dict)      # table -> list of row dicts
@@ -336,15 +340,23 @@ class SshTransport:
         result = subprocess.run(["ssh", self.host, command], input=stdin,
                                 capture_output=True, text=True)
         if result.returncode != 0:
-            raise RuntimeError(
-                f"Server command failed: {(result.stderr or result.stdout).strip()}"
-            )
+            detail = (result.stderr or result.stdout).strip()
+            if "No module named tools.sync_state" in detail:
+                raise TransportError(
+                    f"{self.host} does not have this version of the code yet. "
+                    "Deploy first, then rerun."
+                )
+            raise TransportError(f"{self.host}: {detail}")
         return result.stdout
 
     def _helper(self, *args: str, stdin: str | None = None) -> str:
+        # The server's venv is `venv`; a checkout made like this machine's uses
+        # `.venv`. Pick whichever is there rather than assuming.
+        pick = 'if [ -x venv/bin/python ]; then PY=venv/bin/python; else PY=.venv/bin/python; fi'
         quoted = " ".join(args)
         return self._run(
-            f"cd {self.remote_root} && venv/bin/python -m tools.sync_state helper {quoted}",
+            f"cd {self.remote_root} && {pick} && "
+            f'"$PY" -m tools.sync_state helper {quoted}',
             stdin=stdin,
         )
 
@@ -449,9 +461,9 @@ def edit_checklist(changes: list, host: str | None = None) -> list:
 
 
 def describe(change) -> str:
-    line = f"  {change.title}  {change.summary}"
-    if change.state is State.CONFLICT:
-        line += f"   PROD HAS: {change.server_summary}"
+    line = f"  {change.title}  {change.action}"
+    if change.note:
+        line += f"   ({change.note})"
     return line
 
 
@@ -548,7 +560,8 @@ def main(argv=None) -> int:
             return EXIT_DIFFERS if changes else 0
 
         result = sync.run()
-    except (MissingState, SchemaMismatch, ServerMoved, LocalMoved, ChecklistEdited) as exc:
+    except (MissingState, SchemaMismatch, ServerMoved, LocalMoved,
+            ChecklistEdited, TransportError) as exc:
         print(f"Refused: {exc}")
         return EXIT_REFUSED
     except Cancelled as exc:
