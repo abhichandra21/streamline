@@ -563,6 +563,9 @@ def render_status(changes: list) -> str:
         if rows:
             lines.append(heading)
             lines += [describe(c, promotable=c.offered) for c in rows]
+    # Deploy ends with this, where the reader has not asked about user state and
+    # needs to be told what to do about it rather than just what differs.
+    lines.append("\nRun ./recommend-sync to reconcile.")
     return "\n".join(lines)
 
 

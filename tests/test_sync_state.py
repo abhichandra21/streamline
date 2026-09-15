@@ -572,3 +572,17 @@ def test_the_promote_helper_still_receives_its_payload(monkeypatch):
           "tmdb_ids": []}], "stamp")
     assert "operations" in seen.get("input", "")
     assert "stdin" not in seen
+
+
+def test_status_tells_you_what_to_do_when_the_sides_differ(tmp_path):
+    """Deploy prints this, where the reader was not asking about user state."""
+    sync, local, server = build(
+        tmp_path, server_kw={"saved": [("Dune", "movie", 1, "watchlist")]},
+        baseline={})
+    assert "Run ./recommend-sync to reconcile." in render_status(sync.status())
+
+
+def test_status_says_nothing_actionable_when_the_sides_agree(tmp_path):
+    sync, local, server = build(tmp_path, baseline={})
+    text = render_status(sync.status())
+    assert text == "Local and prod user state are identical."
