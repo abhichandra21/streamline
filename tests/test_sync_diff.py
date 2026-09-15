@@ -138,21 +138,48 @@ def test_no_baseline_offers_differences_as_unclassified():
     server = snap(saved_titles=[saved("Dune", ct="movie")])
     changes = classify(None, local, server)
     assert {c.state for c in changes} == {State.UNCLASSIFIED}
-    assert [c.title for c in changes if c.offered] == ["Dune", "Fargo"]
+    # Dune is only on prod, so it is reported but not promotable.
+    assert [c.title for c in changes if c.offered] == ["Fargo"]
 
 
-def test_a_title_only_on_the_server_is_offered_as_an_explicit_removal():
-    """The dangerous first-run case.
+def test_a_title_only_on_the_server_is_not_offered_without_a_baseline():
+    """The case that deleted real data on the first live run.
 
-    With no baseline, "local deleted it" and "local never had it" are
-    indistinguishable, so it has to be offered. Ticking it deletes live data,
-    so the line must say so rather than read as a local edit.
+    With no baseline, "local deleted it" and "local never had it" cannot be
+    told apart, and the second is far likelier. Offering the deletion reading
+    as a checkbox puts a destructive action behind an unverifiable guess, so
+    it is withheld and reported as something arriving here instead.
     """
     server = snap(saved_titles=[saved("Dune", ct="movie")])
     changes = classify(None, snap(), server)
-    assert changes[0].action == "REMOVE from prod"
-    assert "no baseline" in changes[0].note
-    assert "REMOVE from prod" in render_checklist(changes)
+    assert changes[0].removes_title
+    assert not changes[0].offered
+    assert changes[0].incoming == "arrives locally: watchlist"
+    assert "Dune" not in render_checklist(changes)
+
+
+def test_a_first_run_still_offers_local_additions():
+    """Withholding removals must not withhold the keepers this exists to rescue."""
+    changes = classify(None, snap(saved_titles=[saved("Fargo")]), snap())
+    assert changes[0].offered
+    assert changes[0].action == "add to prod: watchlist"
+
+
+def test_a_first_run_still_offers_a_value_change():
+    changes = classify(None,
+                       snap(title_ratings=[rating("Andor", tmdb=9, value="less")]),
+                       snap(title_ratings=[rating("Andor", tmdb=9, value="more")]))
+    assert changes[0].offered
+    assert changes[0].action == "rating more -> less"
+
+
+def test_marking_watched_is_not_treated_as_a_title_removal():
+    """It drops a watchlist row, but the title is one local demonstrably acted on."""
+    local = snap(manual_archive_entries=[archive("Sinners", ct="movie", tmdb=7)])
+    server = snap(saved_titles=[saved("Sinners", ct="movie", tmdb=7)])
+    changes = classify(None, local, server)
+    assert not changes[0].removes_title
+    assert changes[0].offered
 
 
 def test_a_title_absent_from_prod_says_so_rather_than_saying_absent():

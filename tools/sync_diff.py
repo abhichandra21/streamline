@@ -67,8 +67,43 @@ class Change:
 
     @property
     def offered(self) -> bool:
-        """Whether this can be promoted. Server-only changes arrive via the refresh."""
-        return self.state is not State.SERVER_ONLY
+        """Whether this can be promoted.
+
+        Server-only changes arrive via the refresh, so there is nothing to
+        promote. And with no baseline, a title absent from this machine
+        entirely is withheld: "local does not have this title" cannot be
+        told apart from "local never had this title", and the second is far
+        likelier. Putting a destructive checkbox behind an unverifiable guess
+        is how a first run deletes real data. Local additions and value
+        changes are still offered, which is the point of the first run.
+        """
+        if self.state is State.SERVER_ONLY:
+            return False
+        if self.state is State.UNCLASSIFIED and self.removes_title:
+            return False
+        return True
+
+    @property
+    def removes_title(self) -> bool:
+        """Whether promoting this deletes a title from the server outright.
+
+        Only a title with no local footprint at all counts. A title local does
+        have but changed -- marking something watched drops its watchlist row
+        -- is an ordinary update to a title the operator demonstrably acted on,
+        and the line says so. Treating those as deletions too would put a typed
+        confirmation in front of the most common action there is, which trains
+        the reflex it is supposed to interrupt.
+        """
+        return self.local is None and self.server is not None
+
+    @property
+    def incoming(self) -> str:
+        """What the refresh brings to this machine, for a change that is not promotable."""
+        if self.server is None:
+            return "removed locally"
+        if self.local is None:
+            return f"arrives locally: {_describe_values(self.server)}"
+        return f"becomes {_describe_values(self.server)} locally"
 
     @property
     def action(self) -> str:
@@ -252,8 +287,8 @@ def _describe_action(local, server) -> str:
 # ── checklist ────────────────────────────────────────────────────────────────
 
 _CHECKLIST_HEADER = """\
-# Tick what should go to prod{host}. An unticked line is discarded
-# from this machine when local refreshes, and left alone on prod.
+# Tick a line to make prod{host} match THIS MACHINE for that title.
+# Unticked lines are left alone on prod, and discarded here on refresh.
 # Save and quit to apply. Quit without saving to cancel.
 """
 
