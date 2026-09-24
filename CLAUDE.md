@@ -47,6 +47,8 @@ python3 -m pytest tests/test_query_engine.py -v
 ./recommend-web start                          # http://localhost:5051
 ./recommend-web stop
 ./recommend-web restart
+# Read-only JSON + iCal for Home Assistant: /api/summary, /api/on-deck,
+# /api/watchlist, /api/coming-soon.ics (see docs/home-assistant.md)
 
 # User state vs the live app on the home server
 ./recommend-sync                               # review, promote what you tick, refresh local
@@ -81,6 +83,7 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `recommender/feedback.py` — (Deprecated) Original JSON-based feedback storage. Migrated to `user_store.py` SQLite tables.
 - `recommender/user_store.py` — SQLite storage for watchlist (`saved_titles`), ratings (`title_ratings`), and manual archive additions (`manual_archive_entries`). Migration from `feedback.json`.
 - `recommender/user_state.py` — `UserStateIndex` snapshot for TMDB-ID-first matching in query filtering and UI rendering.
+- `recommender/api.py` — Read-only `/api/` blueprint for Home Assistant: summary, On Deck, watchlist, iCal feed. No LLM calls. On Deck endpoints refresh releases through the same `_show_sections_with_refresh()` helper as `/shows`. Optional `STREAMLINE_API_TOKEN` bearer auth for `GET /api/*` only.
 - `recommender/web.py` — Flask web UI with HTMX search, poster grid, taste profile clusters, watchlist management (save/unsave/export CSV), search history with user state.
 - `recommender/main.py` — Rich CLI with spinners, panels, stderr/stdout separation, REPL with inline feedback, usage stats.
 

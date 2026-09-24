@@ -139,6 +139,7 @@ The web UI includes:
 - **Settings** — edit all configuration from the browser with live reload
 - **Help** — built-in usage guide
 - **Logs & status** — `/logs` tails the app log from the browser; `/status` and `/healthz` report provider, cache, and last-run state for monitoring
+- **Read-only API** — `/api/summary`, `/api/on-deck`, `/api/watchlist`, and an iCal feed at `/api/coming-soon.ics`, for a Home Assistant dashboard. See [docs/home-assistant.md](docs/home-assistant.md)
 
 Port and host are configurable via `STREAMLINE_PORT` and `STREAMLINE_HOST` environment variables.
 
