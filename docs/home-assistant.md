@@ -10,7 +10,7 @@ It never calls the LLM, so polling it every few minutes is cheap.
 | `GET /api/summary` | Counts, one `next_up` show, library size, and refresh state. Small enough for sensor states. |
 | `GET /api/on-deck` | `ready_now` and `coming_soon` show cards, soonest first. |
 | `GET /api/watchlist` | Saved titles with `saved_at` and `poster_url`. |
-| `GET /api/coming-soon.ics` | iCal feed of upcoming episodes and season premieres, as all-day events. |
+| `GET /api/coming-soon.ics` | iCal feed of upcoming episodes and season premieres, as all-day events. Includes next episodes of Ready now shows. |
 
 Example `/api/summary`:
 
@@ -21,7 +21,8 @@ Example `/api/summary`:
   "watchlist_count": 12,
   "next_up": {"tmdb_id": 95480, "title": "Slow Horses", "season_number": 5,
               "latest_aired_episode": null, "available_episode_count": null,
-              "next_episode_number": 4, "next_air_date": "2026-09-26",
+              "next_season_number": 5, "next_episode_number": 4,
+              "next_air_date": "2026-09-26",
               "poster_url": "https://image.tmdb.org/t/p/w300/..."},
   "library": {"total": 1840, "tv": 420, "movies": 1420},
   "shows_checked_at": "2026-09-24T06:00:00+00:00",
@@ -32,7 +33,10 @@ Example `/api/summary`:
 
 Every show card has the same keys.
 A key with nothing to report is `null`, and an empty section is `[]`, so templates don't break.
-`next_up` is the soonest dated Coming soon show, or `null` when there is none.
+`next_up` is the show whose next episode airs soonest, from Ready now or Coming soon, or `null` when nothing is dated.
+A Ready now show can already have unwatched episodes and a next one on the way.
+`season_number` is the season you're watching, and `next_season_number` is the season the next episode belongs to.
+They differ when the next episode opens a new season.
 
 Before `./recommend setup` has run, every endpoint returns `503` with `{"status": "not ready"}`.
 Home Assistant then marks the sensors unavailable instead of showing zeros.

@@ -102,9 +102,29 @@ def test_followed_show_reports_all_aired_episodes_from_returning_season():
         "available_episode_count": 3,
         "latest_aired_episode": 3,
         "next_air_date": "2026-09-05",
+        "next_season_number": 5,
         "next_episode_number": 4,
         "poster_path": "/slow.jpg",
     }]
+
+
+def test_ready_show_names_the_season_its_next_episode_opens():
+    archive = [{"tmdb_id": 1, "title": "Show", "content_type": "tv", "last_watched": "2026-01-01"}]
+    tracking = [{
+        "tmdb_id": 1, "title": "Show", "state": "following", "tracking_from_season": 2,
+        "caught_up_season": None, "caught_up_episode": None,
+    }]
+    snapshots = {1: {"tmdb_id": 1, "poster_path": None, "seasons": [
+        {"season_number": 2, "episodes": [{"episode_number": 8, "air_date": "2026-09-20"}]},
+        {"season_number": 3, "episodes": [{"episode_number": 1, "air_date": "2026-10-15"}]},
+    ]}}
+
+    sections = build_sections(archive, tracking, snapshots, today=date(2026, 9, 23), lookback_days=365)
+
+    card = sections["ready_now"][0]
+    assert (card["season_number"], card["latest_aired_episode"]) == (2, 8)
+    assert (card["next_season_number"], card["next_episode_number"]) == (3, 1)
+    assert card["next_air_date"] == "2026-10-15"
 
 
 def test_caught_up_show_moves_to_coming_soon_until_next_episode_airs():

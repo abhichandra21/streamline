@@ -458,6 +458,9 @@ def _following_card(
             "available_episode_count": len(aired),
             "latest_aired_episode": latest[2],
             "next_air_date": next_episode[0].isoformat() if next_episode else None,
+            # The next episode can open a new season, so season_number (the
+            # latest aired) does not say which episode is next.
+            "next_season_number": next_episode[1] if next_episode else None,
             "next_episode_number": next_episode[2] if next_episode else None,
             "poster_path": poster_path,
         }

@@ -31,6 +31,7 @@ def _sections(coming_soon=None):
             "available_episode_count": 2,
             "latest_aired_episode": 4,
             "next_air_date": None,
+            "next_season_number": None,
             "next_episode_number": None,
             "poster_path": "/ready.jpg",
         }],
@@ -136,6 +137,24 @@ class TestShapes:
         # Every card carries every key, so templates can rely on the shape.
         keys = set(ready_card)
         assert all(set(card) == keys for card in body["coming_soon"])
+
+    def test_next_up_can_be_a_ready_show_airing_soonest(self, client, ready, monkeypatch):
+        sections = _sections()
+        sections["ready_now"][0].update(
+            next_air_date="2026-09-25", next_season_number=4, next_episode_number=1,
+        )
+        monkeypatch.setattr(web, "_show_page_data", lambda: ([], [], sections))
+
+        body = client.get("/api/summary").get_json()
+
+        assert body["next_up"]["tmdb_id"] == 10
+        assert (body["next_up"]["next_season_number"], body["next_up"]["next_episode_number"]) == (4, 1)
+
+    def test_next_season_number_defaults_to_the_coming_soon_season(self, client, ready):
+        body = client.get("/api/on-deck").get_json()
+
+        assert body["coming_soon"][0]["next_season_number"] == 4
+        assert body["ready_now"][0]["next_season_number"] is None
 
     def test_watchlist(self, client, ready):
         body = client.get("/api/watchlist").get_json()
@@ -279,6 +298,36 @@ class TestIcal:
         assert first == uids()
         assert len(set(first)) == 2
         assert "UID:streamline-30-s2-e5" in first
+
+    def test_ready_show_with_a_future_episode_is_on_the_calendar(self, client, ready, monkeypatch):
+        # S2E8 aired and is unwatched; S3E1 is still to come.
+        ready_card = {
+            "tmdb_id": 80, "title": "Ready Show", "season_number": 2,
+            "available_episode_count": 1, "latest_aired_episode": 8,
+            "next_air_date": "2026-10-15", "next_season_number": 3,
+            "next_episode_number": 1, "poster_path": None,
+        }
+        sections = _sections([])
+        sections["ready_now"] = [ready_card]
+        monkeypatch.setattr(web, "_show_page_data", lambda: ([], [], sections))
+
+        body = client.get("/api/coming-soon.ics").data.decode()
+
+        assert "SUMMARY:Ready Show S3E1\r\n" in body
+        assert "DTSTART;VALUE=DATE:20261015\r\n" in body
+
+        # Once caught up, the same episode moves to Coming soon. Its event ID
+        # must not change, or the calendar would show it twice.
+        uid = next(line for line in body.split("\r\n") if line.startswith("UID:"))
+        sections = _sections([{
+            "tmdb_id": 80, "title": "Ready Show", "season_number": 3,
+            "next_air_date": "2026-10-15", "next_episode_number": 1, "poster_path": None,
+        }])
+        sections["ready_now"] = []
+        monkeypatch.setattr(web, "_show_page_data", lambda: ([], [], sections))
+        later = client.get("/api/coming-soon.ics").data.decode()
+
+        assert uid + "\r\n" in later
 
     def test_lone_carriage_return_is_escaped(self, client, ready, monkeypatch):
         sections = _sections([{

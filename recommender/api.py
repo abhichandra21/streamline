@@ -41,6 +41,9 @@ def _show_card(card: dict) -> dict:
         "season_number": card.get("season_number"),
         "latest_aired_episode": card.get("latest_aired_episode"),
         "available_episode_count": card.get("available_episode_count"),
+        # Ready-now cards say which season the next episode opens; a
+        # coming-soon card's season is already the upcoming one.
+        "next_season_number": card.get("next_season_number", card.get("season_number")),
         "next_episode_number": card.get("next_episode_number"),
         "next_air_date": card.get("next_air_date"),
         "poster_url": poster_url,
@@ -54,6 +57,16 @@ def _on_deck() -> tuple[list[dict], list[dict], bool]:
     ready_now = [_show_card(card) for card in sections.get("ready_now", [])]
     coming_soon = [_show_card(card) for card in dated + undated]
     return ready_now, coming_soon, bool(job_id)
+
+
+def _upcoming(ready_now: list[dict], coming_soon: list[dict]) -> list[dict]:
+    """Every card with a next air date, soonest first.
+
+    A ready-now show can also have a dated episode still to come, and it
+    belongs on the calendar as much as a coming-soon one.
+    """
+    dated = [card for card in ready_now + coming_soon if card["next_air_date"]]
+    return sorted(dated, key=lambda card: card["next_air_date"])
 
 
 def _shows_checked_at() -> str | None:
@@ -84,7 +97,7 @@ def _watchlist() -> list[dict]:
 def summary():
     ready_now, coming_soon, refreshing = _on_deck()
     entries = web._get_context().watch_index.entries
-    next_up = next((card for card in coming_soon if card["next_air_date"]), None)
+    next_up = next(iter(_upcoming(ready_now, coming_soon)), None)
     return jsonify({
         "ready_now_count": len(ready_now),
         "coming_soon_count": len(coming_soon),
@@ -145,7 +158,7 @@ def _ical_fold(line: str) -> list[str]:
 
 @api.route("/coming-soon.ics")
 def coming_soon_ics():
-    _, coming_soon, _ = _on_deck()
+    ready_now, coming_soon, _ = _on_deck()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     lines = [
         "BEGIN:VCALENDAR",
@@ -154,14 +167,12 @@ def coming_soon_ics():
         "CALSCALE:GREGORIAN",
         "X-WR-CALNAME:Streamline coming soon",
     ]
-    for card in coming_soon:
-        if not card["next_air_date"]:
-            continue
+    for card in _upcoming(ready_now, coming_soon):
         try:
             air_date = date.fromisoformat(card["next_air_date"][:10])
         except ValueError:
             continue
-        season = card["season_number"]
+        season = card["next_season_number"]
         episode = card["next_episode_number"]
         season_label = f"S{season}" if season is not None else ""
         if episode is None:
