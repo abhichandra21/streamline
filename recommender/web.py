@@ -1,6 +1,7 @@
 """Flask web UI for Streamline — taste profile dashboard, watch history, and recommendation search."""
 
 import csv
+import hmac
 import importlib
 import io
 import json
@@ -392,6 +393,17 @@ def _ensure_show_refresh(archive_entries: list[dict], tracking_rows: list[dict])
         return _shows_job_id
 
 
+def _show_sections_with_refresh() -> tuple[dict[str, list[dict]], str | None]:
+    """Load On Deck and start a release refresh if one is due.
+
+    /shows and the /api/ endpoints both go through here, so a dashboard that
+    only polls the API keeps the release cache exactly as fresh as the page.
+    """
+    archive_entries, tracking_rows, sections = _show_page_data()
+    job_id = _ensure_show_refresh(archive_entries, tracking_rows)
+    return sections, job_id
+
+
 @app.template_filter("human_date")
 def _human_date(value: str | None) -> str:
     """Render an ISO date as "14 Jan 2026" for use in running text."""
@@ -618,12 +630,29 @@ def _inject_watchlist_count() -> dict:
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
+def _api_token_valid() -> bool:
+    """Accept STREAMLINE_API_TOKEN as a bearer token, for reads of /api/ only.
+
+    The token lets a dashboard hold a credential that cannot change settings
+    or delete data, which the password can.
+    """
+    token = os.environ.get("STREAMLINE_API_TOKEN", "").strip()
+    if not token or request.method != "GET" or not request.path.startswith("/api/"):
+        return False
+    scheme, _, supplied = request.headers.get("Authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not supplied:
+        return False
+    return hmac.compare_digest(supplied.strip().encode(), token.encode())
+
+
 @app.before_request
 def _check_auth() -> Response | None:
     password = os.environ.get("STREAMLINE_PASSWORD", "").strip()
     if not password:
         return None
     if request.path == "/healthz":
+        return None
+    if _api_token_valid():
         return None
     auth = request.authorization
     if auth and auth.password == password:
@@ -858,8 +887,7 @@ def history() -> str:
 
 @app.route("/shows")
 def shows_page() -> str:
-    archive_entries, tracking_rows, sections = _show_page_data()
-    job_id = _ensure_show_refresh(archive_entries, tracking_rows)
+    sections, job_id = _show_sections_with_refresh()
     job = job_registry.get(job_id) if job_id else None
     return _render_shows_content(
         sections,
@@ -2545,6 +2573,13 @@ def settings_save() -> str:
     ))
 
 
+# ── Read-only API ─────────────────────────────────────────────────────────────
+# Imported last: the blueprint calls back into the helpers defined above.
+from recommender.api import api as _api_blueprint  # noqa: E402
+
+app.register_blueprint(_api_blueprint)
+
+
 # ── Startup validation ─────────────────────────────────────────────────────────
 
 def validate_config() -> None:
@@ -2574,4 +2609,8 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    # Run as a script this file is __main__, and api.py's import of
+    # recommender.web loads a second copy with its own app and refresh state.
+    # Serve that copy, so the API and /shows share one refresh job.
+    from recommender import web as _canonical_web
+    _canonical_web.run()
