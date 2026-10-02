@@ -7,7 +7,7 @@ provider: anthropic
 models:
   anthropic:
     fast: claude-haiku-4-5-20251001
-    reason: claude-sonnet-4-6
+    reason: claude-sonnet-5-5
   gemini:
     fast: gemini-2.5-flash
     reason: gemini-2.5-pro
@@ -29,12 +29,12 @@ llm:
   timeout_profile_batch: 120
   timeout_profile_merge: 300
   tokens_fast: 300
-  tokens_intent: 400
-  tokens_ranking: 1000
-  tokens_suggestions: 300
-  tokens_profile_batch: 8000
-  tokens_profile_merge: 16000
-  tokens_abandoned: 300
+  tokens_intent: 650
+  tokens_ranking: 2000
+  tokens_suggestions: 500
+  tokens_profile_batch: 13000
+  tokens_profile_merge: 26000
+  tokens_abandoned: 500
   profile_batch_size: 200
   rate_limit_wait: 65
 default_top_n: 3
@@ -46,7 +46,7 @@ returning_shows_lookback_days: 730
 wizard:
   max_questions: 5
   min_questions: 4
-  max_tokens: 1200
+  max_tokens: 2000
 scoring:
   weight_completion: 0.5
   weight_rewatch: 0.3

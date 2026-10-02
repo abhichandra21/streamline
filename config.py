@@ -54,7 +54,7 @@ LLM_DEFAULT_API_KEY_ENVS: dict[str, str] = {
 # ── LLM settings ──
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", _cfg.get("provider", "anthropic"))
 LLM_MODELS: dict[str, dict[str, object]] = _cfg.get("models", {
-    "anthropic": {"fast": "claude-haiku-4-5-20251001", "reason": "claude-sonnet-4-6"},
+    "anthropic": {"fast": "claude-haiku-4-5-20251001", "reason": "claude-sonnet-5-5"},
     "gemini": {"fast": "gemini-2.5-flash", "reason": "gemini-2.5-flash"},
     "openai": {"fast": "gpt-4.1-mini", "reason": "gpt-4.1", "base_url": None},
     "local": {"fast": "llama3.2", "reason": "llama3.2", "base_url": "http://localhost:11434/v1"},
@@ -85,12 +85,12 @@ TIMEOUT_PROFILE_MERGE = _llm_cfg.get("timeout_profile_merge", 300)
 
 # Max output tokens
 TOKENS_FAST = _llm_cfg.get("tokens_fast", 200)
-TOKENS_INTENT = _llm_cfg.get("tokens_intent", 400)
-TOKENS_RANKING = _llm_cfg.get("tokens_ranking", 1000)
-TOKENS_SUGGESTIONS = _llm_cfg.get("tokens_suggestions", 300)
-TOKENS_PROFILE_BATCH = _llm_cfg.get("tokens_profile_batch", 8000)
-TOKENS_PROFILE_MERGE = _llm_cfg.get("tokens_profile_merge", 16000)
-TOKENS_ABANDONED = _llm_cfg.get("tokens_abandoned", 300)
+TOKENS_INTENT = _llm_cfg.get("tokens_intent", 650)
+TOKENS_RANKING = _llm_cfg.get("tokens_ranking", 2000)
+TOKENS_SUGGESTIONS = _llm_cfg.get("tokens_suggestions", 500)
+TOKENS_PROFILE_BATCH = _llm_cfg.get("tokens_profile_batch", 13000)
+TOKENS_PROFILE_MERGE = _llm_cfg.get("tokens_profile_merge", 26000)
+TOKENS_ABANDONED = _llm_cfg.get("tokens_abandoned", 500)
 
 # Taste profile
 PROFILE_BATCH_SIZE = _llm_cfg.get("profile_batch_size", 200)
@@ -137,7 +137,7 @@ WIZARD_MIN_QUESTIONS = min(int(_wizard.get("min_questions", 4)), WIZARD_MAX_QUES
 # Output-token ceiling for each wizard turn. The finalize turn emits a full
 # QueryIntent JSON (summary + intent + context_note), which overflows the
 # smaller intent-parsing budget and gets truncated, so it needs its own limit.
-WIZARD_MAX_TOKENS = int(_wizard.get("max_tokens", 1200))
+WIZARD_MAX_TOKENS = int(_wizard.get("max_tokens", 2000))
 
 # ── Streaming availability ──
 WATCH_REGION = _cfg.get("watch_region", "US")

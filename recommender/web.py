@@ -2290,16 +2290,16 @@ _DEFAULT_LLM_API_KEY_ENVS = dict(config.LLM_DEFAULT_API_KEY_ENVS)
 _SETTINGS_DEFAULTS = {
     "provider": "anthropic",
     "models": {
-        "anthropic": {"fast": "claude-haiku-4-5-20251001", "reason": "claude-sonnet-4-6"},
+        "anthropic": {"fast": "claude-haiku-4-5-20251001", "reason": "claude-sonnet-5-5"},
         "gemini": {"fast": "gemini-2.5-flash", "reason": "gemini-2.5-flash"},
         "openai": {"fast": "gpt-4.1-mini", "reason": "gpt-4.1", "base_url": None},
     },
     "llm": {
         "timeout_fast": 30, "timeout_reason": 60,
         "timeout_profile_batch": 60, "timeout_profile_merge": 300,
-        "tokens_fast": 200, "tokens_intent": 400, "tokens_ranking": 1000,
-        "tokens_suggestions": 300, "tokens_profile_batch": 8000,
-        "tokens_profile_merge": 16000, "tokens_abandoned": 300,
+        "tokens_fast": 200, "tokens_intent": 650, "tokens_ranking": 2000,
+        "tokens_suggestions": 500, "tokens_profile_batch": 13000,
+        "tokens_profile_merge": 26000, "tokens_abandoned": 500,
         "profile_batch_size": 200, "rate_limit_wait": 65,
     },
     "scoring": {
