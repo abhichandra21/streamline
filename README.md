@@ -172,7 +172,7 @@ provider: anthropic                    # or "gemini", "openai", or "local"
 models:
   anthropic:
     fast: claude-haiku-4-5-20251001    # enrichment (high volume, cheap)
-    reason: claude-sonnet-4-6          # intent, ranking, profile (complex reasoning)
+    reason: claude-sonnet-5-5          # intent, ranking, profile (complex reasoning)
   gemini:
     fast: gemini-2.5-flash
     reason: gemini-2.5-pro

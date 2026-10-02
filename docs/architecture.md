@@ -193,7 +193,7 @@ Model names are resolved from `config.yaml` per provider:
 models:
   anthropic:
     fast: claude-haiku-4-5-20251001
-    reason: claude-sonnet-4-6
+    reason: claude-sonnet-5-5
   gemini:
     fast: gemini-2.5-flash
     reason: gemini-2.5-pro

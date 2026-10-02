@@ -20,8 +20,10 @@ log = logging.getLogger("recommender.llm")
 
 # Pricing per million tokens (USD)
 _PRICING: dict[str, dict[str, float]] = {
-    "claude-haiku-4-5-20251001":  {"input": 0.80, "output": 4.00},
+    "claude-haiku-4-5-20251001":  {"input": 1.00, "output": 5.00},
     "claude-sonnet-4-6":          {"input": 3.00, "output": 15.00},
+    "claude-sonnet-5":            {"input": 2.00, "output": 10.00},  # Sonnet 5.5 refusal fallback
+    "claude-sonnet-5-5":          {"input": 2.00, "output": 10.00},
     "gemini-2.5-flash":           {"input": 0.15, "output": 0.60, "thinking": 0.0375},
     "gemini-2.5-pro":             {"input": 1.25, "output": 10.00, "thinking": 0.625},
     "gpt-4.1":                    {"input": 2.00, "output": 8.00},
@@ -135,17 +137,33 @@ class AnthropicClient(LLMClient):
 
     def generate(self, prompt: str, role: str = "reason",
                  max_tokens: int = 1000, timeout: float = 30.0) -> str:
-        model = self.models.get(role, self.models.get("reason", "claude-sonnet-4-6"))
+        model = self.models.get(role, self.models.get("reason", "claude-sonnet-5-5"))
+        request: dict = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "timeout": timeout,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if model.startswith("claude-sonnet-5-5"):
+            # Sonnet 5.5 thinks by default and thinking counts against max_tokens,
+            # which would truncate the small budgets in config.yaml. between_tools
+            # keeps the no-thinking behavior these prompts were tuned for.
+            # Server-side fallback reruns cyber/frontier_llm declines on Sonnet 5.
+            request.update(
+                thinking={"type": "between_tools"},
+                output_config={"effort": "high"},
+                betas=["server-side-fallback-2026-07-01"],
+                extra_body={"fallbacks": "default"},
+            )
+            create = self._client.beta.messages.create
+        else:
+            create = self._client.messages.create
         t0 = time.monotonic()
-        message = self._client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            timeout=timeout,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        message = create(**request)
         latency_ms = (time.monotonic() - t0) * 1000
+        # After a fallback, message.model names the model that served the reply.
         self.usage.record(
-            model=model,
+            model=message.model,
             input_t=message.usage.input_tokens,
             output_t=message.usage.output_tokens,
             latency_ms=latency_ms,
@@ -154,7 +172,14 @@ class AnthropicClient(LLMClient):
         if self.was_truncated:
             log.warning("Anthropic response truncated (max_tokens=%d, model=%s). "
                         "Increase the token limit in config.yaml.", max_tokens, model)
-        return message.content[0].text
+        if message.stop_reason == "refusal":
+            category = getattr(message.stop_details, "category", None)
+            raise RuntimeError(f"Anthropic declined the request (model={model}, category={category})")
+        # Newer models can return thinking or fallback blocks before the text.
+        text = "".join(block.text for block in message.content if block.type == "text")
+        if not text:
+            raise RuntimeError(f"Anthropic response did not include text content (model={model})")
+        return text
 
 
 class GeminiClient(LLMClient):
