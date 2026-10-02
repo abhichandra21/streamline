@@ -31,7 +31,7 @@ llm:
   tokens_fast: 300
   tokens_intent: 650
   tokens_ranking: 2000
-  tokens_suggestions: 500
+  tokens_suggestions: 700
   tokens_profile_batch: 13000
   tokens_profile_merge: 26000
   tokens_abandoned: 500

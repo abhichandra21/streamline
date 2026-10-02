@@ -2298,7 +2298,7 @@ _SETTINGS_DEFAULTS = {
         "timeout_fast": 30, "timeout_reason": 60,
         "timeout_profile_batch": 60, "timeout_profile_merge": 300,
         "tokens_fast": 200, "tokens_intent": 650, "tokens_ranking": 2000,
-        "tokens_suggestions": 500, "tokens_profile_batch": 13000,
+        "tokens_suggestions": 700, "tokens_profile_batch": 13000,
         "tokens_profile_merge": 26000, "tokens_abandoned": 500,
         "profile_batch_size": 200, "rate_limit_wait": 65,
     },
