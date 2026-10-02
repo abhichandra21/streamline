@@ -22,6 +22,7 @@ log = logging.getLogger("recommender.llm")
 _PRICING: dict[str, dict[str, float]] = {
     "claude-haiku-4-5-20251001":  {"input": 1.00, "output": 5.00},
     "claude-sonnet-4-6":          {"input": 3.00, "output": 15.00},
+    "claude-sonnet-5":            {"input": 2.00, "output": 10.00},  # Sonnet 5.5 refusal fallback
     "claude-sonnet-5-5":          {"input": 2.00, "output": 10.00},
     "gemini-2.5-flash":           {"input": 0.15, "output": 0.60, "thinking": 0.0375},
     "gemini-2.5-pro":             {"input": 1.25, "output": 10.00, "thinking": 0.625},
@@ -160,8 +161,9 @@ class AnthropicClient(LLMClient):
         t0 = time.monotonic()
         message = create(**request)
         latency_ms = (time.monotonic() - t0) * 1000
+        # After a fallback, message.model names the model that served the reply.
         self.usage.record(
-            model=model,
+            model=message.model,
             input_t=message.usage.input_tokens,
             output_t=message.usage.output_tokens,
             latency_ms=latency_ms,

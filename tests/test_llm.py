@@ -94,7 +94,7 @@ def test_openai_client_non_thinking_models_leave_max_tokens_unchanged(monkeypatc
     assert fake_cls.instances[-1].calls[0]["max_tokens"] == 750
 
 
-def _fake_anthropic_module(content, stop_reason="end_turn", stop_details=None):
+def _fake_anthropic_module(content, stop_reason="end_turn", stop_details=None, served_model=None):
     class FakeMessages:
         def __init__(self, calls):
             self._calls = calls
@@ -102,6 +102,7 @@ def _fake_anthropic_module(content, stop_reason="end_turn", stop_details=None):
         def create(self, **kwargs):
             self._calls.append(kwargs)
             return SimpleNamespace(
+                model=served_model or kwargs["model"],
                 content=content,
                 stop_reason=stop_reason,
                 stop_details=stop_details,
@@ -182,3 +183,16 @@ def test_anthropic_client_raises_on_refusal(monkeypatch):
 
     with pytest.raises(RuntimeError, match="category=cyber"):
         client.generate("hello")
+
+
+def test_anthropic_client_records_usage_under_fallback_model(monkeypatch):
+    from recommender import llm as llm_module
+
+    fake_module, _ = _fake_anthropic_module([_text("ok")], served_model="claude-sonnet-5")
+    monkeypatch.setitem(sys.modules, "anthropic", fake_module)
+
+    client = llm_module.AnthropicClient(api_key="test-key", models={"reason": "claude-sonnet-5-5"})
+    client.generate("hello")
+
+    assert list(client.usage._by_model) == ["claude-sonnet-5"]
+    assert client.usage.cost_usd > 0
