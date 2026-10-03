@@ -354,3 +354,51 @@ def test_results_carry_criteria_and_window():
     assert results.criteria == criteria
     assert results.release_start == date(2024, 9, 12)
     assert results.release_end == TODAY
+
+
+# ── IMDb ratings (display only) ───────────────────────────────────────────────
+def _imdb_db(path, rows):
+    import gzip
+    from recommender.imdb_ratings import refresh
+
+    def download(dest):
+        with gzip.open(dest, "wt", encoding="utf-8") as f:
+            f.write("tconst\taverageRating\tnumVotes\n")
+            for imdb_id, rating, votes in rows:
+                f.write(f"{imdb_id}\t{rating}\t{votes}\n")
+    refresh(path, download=download)
+
+
+class ImdbTmdb(FakeTmdb):
+    def __init__(self, pages, imdb_ids, fail_ids=()):
+        super().__init__(pages)
+        self.imdb_ids = imdb_ids
+        self.fail_ids = set(fail_ids)
+
+    def get_imdb_id(self, tmdb_id, content_type):
+        if tmdb_id in self.fail_ids:
+            raise TmdbRateLimitError(None)
+        return self.imdb_ids.get(tmdb_id)
+
+
+def test_rows_carry_imdb_ratings_without_changing_order_or_membership(tmp_path):
+    from recommender.imdb_ratings import ImdbRating
+    db = tmp_path / "imdb.db"
+    _imdb_db(db, [("tt0000001", 6.1, 900), ("tt0000003", 8.7, 40000)])
+    tmdb = ImdbTmdb({1: [_title(1), _title(2), _title(3), _title(4)]},
+                    imdb_ids={1: "tt0000001", 3: "tt0000003", 4: "tt0000004"}, fail_ids={2})
+
+    results = _run(tmdb, imdb_db_path=str(db))
+
+    assert [r.title.tmdb_id for r in results.rows] == [1, 2, 3, 4]
+    assert [r.imdb for r in results.rows] == [
+        ImdbRating(6.1, 900), None, ImdbRating(8.7, 40000), None,
+    ]
+
+
+def test_rows_have_no_imdb_ratings_without_a_local_copy(tmp_path):
+    tmdb = ImdbTmdb({1: [_title(1)]}, imdb_ids={1: "tt0000001"})
+
+    results = _run(tmdb, imdb_db_path=str(tmp_path / "missing.db"))
+
+    assert results.rows[0].imdb is None

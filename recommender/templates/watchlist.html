@@ -49,7 +49,7 @@
       {% endif %}
       <span class="badge {{ 'badge-tv' if item.content_type == 'tv' else 'badge-movie' }} wl-type">{{ item.content_type }}</span>
       {% if item.vote_average %}
-      <span class="mono wl-score">★ {{ "%.1f"|format(item.vote_average) }}</span>
+      <span class="mono wl-score">{{ item.vote_average|rating_label(item.rating_source) }}</span>
       {% endif %}
     </div>
 

@@ -2,18 +2,22 @@
 
 Deterministic and LLM-free. Reads TMDB Discover pages in the requested sort order, drops
 anything already watched (imported history or manual archive), and returns one
-batch plus a cursor that says where to resume. The only extra TMDB read is the
-US now-playing list, used for a display-only "In theaters" badge on Movies.
+batch plus a cursor that says where to resume. The extra TMDB reads are the US
+now-playing list, for a display-only "In theaters" badge on Movies, and one
+cached IMDb ID lookup per shown title, for its display-only IMDb rating.
 """
 
 import logging
 import re
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
 
+from recommender import imdb_ratings
+from recommender.imdb_ratings import ImdbRating
 from recommender.tmdb_client import CatalogTitle, TmdbClient, TmdbRateLimitError
 
 log = logging.getLogger("recommender.catalog_finder")
@@ -34,7 +38,7 @@ PERIOD_OPTIONS = (
 
 # (key, label). "newest" resolves to the content type's date field in discover_sort_by().
 SORT_OPTIONS = (
-    ("rating", "Rating"), ("newest", "Newest"),
+    ("rating", "TMDB rating"), ("newest", "Newest"),
     ("popular", "Most popular"), ("votes", "Most voted"),
 )
 DEFAULT_SORT = "rating"
@@ -78,6 +82,8 @@ class FindRow:
     # True/False only when the full US now-playing list was read. None means
     # the list was unavailable (or not applicable, for TV): unknown, not "no".
     in_theaters: bool | None = None
+    # Display only: TMDB's order and rating floor decide which rows appear.
+    imdb: ImdbRating | None = None
 
 
 @dataclass(frozen=True)
@@ -137,6 +143,7 @@ def find_unwatched_titles(
     limit: int = DEFAULT_LIMIT,
     cursor: str | None = None,
     exclude: frozenset[int] = frozenset(),
+    imdb_db_path: str | None = None,
 ) -> FindResults:
     """One batch of unwatched titles.
 
@@ -196,6 +203,8 @@ def find_unwatched_titles(
     exhausted = next_cursor is None
 
     rows, rate_limited = _annotate_cinema(tmdb, titles, criteria.content_type, region, cache_dir)
+    if imdb_db_path:
+        rows = _annotate_imdb(tmdb, rows, imdb_db_path)
     return FindResults(
         criteria=criteria,
         release_start=release_start,
@@ -234,3 +243,28 @@ def _annotate_cinema(
         for title in titles
     ]
     return rows, rate_limited
+
+
+# Matches the main pipeline's fan-out for TMDB lookups (query_engine).
+_IMDB_ID_CONCURRENCY = 8
+
+
+def _annotate_imdb(tmdb: TmdbClient, rows: list[FindRow], db_path: str) -> list[FindRow]:
+    """Attach IMDb ratings to the batch rows. Best-effort: any failure leaves TMDB only."""
+    if not rows or imdb_ratings.refreshed_at(db_path) is None:
+        return rows
+
+    def _imdb_id(row: FindRow) -> str | None:
+        try:
+            return tmdb.get_imdb_id(row.title.tmdb_id, row.title.content_type)
+        except Exception as exc:   # rate limit or network: show the row without IMDb
+            log.debug("IMDb ID lookup failed for %s: %s", row.title.tmdb_id, type(exc).__name__)
+            return None
+
+    with ThreadPoolExecutor(max_workers=min(_IMDB_ID_CONCURRENCY, len(rows))) as pool:
+        imdb_ids = list(pool.map(_imdb_id, rows))
+    found = imdb_ratings.lookup(db_path, [i for i in imdb_ids if i])
+    return [
+        replace(row, imdb=found.get(imdb_id)) if imdb_id else row
+        for row, imdb_id in zip(rows, imdb_ids)
+    ]

@@ -1016,3 +1016,236 @@ def test_parse_json_response_preamble_containing_brace():
 def test_parse_json_response_rejects_non_json_with_brackets():
     with pytest.raises(json.JSONDecodeError):
         _parse_json_response("I could not find matches [sorry].")
+
+
+def _imdb_db(path, rows):
+    import gzip
+    from recommender.imdb_ratings import refresh
+
+    def download(dest):
+        with gzip.open(dest, "wt", encoding="utf-8") as f:
+            f.write("tconst\taverageRating\tnumVotes\n")
+            for imdb_id, rating, votes in rows:
+                f.write(f"{imdb_id}\t{rating}\t{votes}\n")
+    refresh(path, download=download)
+
+
+def test_attach_imdb_ratings_fills_known_titles_and_resolves_missing_ids(tmp_path):
+    import recommender.query_engine as qe
+    db = tmp_path / "imdb.db"
+    _imdb_db(db, [("tt0000001", 8.2, 151638), ("tt0000002", 6.7, 39079)])
+    movie = make_meta("Has ID", tmdb_id=1, content_type="movie", vote_avg=6.0)
+    movie.imdb_id = "tt0000001"
+    show = make_meta("Needs ID", tmdb_id=2, content_type="tv", vote_avg=7.0)
+    unrated = make_meta("Not on IMDb", tmdb_id=3, content_type="movie", vote_avg=5.5)
+
+    class FakeTmdb:
+        def __init__(self):
+            self.asked = []
+        def get_imdb_id(self, tmdb_id, ct):
+            self.asked.append((tmdb_id, ct))
+            return {2: "tt0000002"}.get(tmdb_id)
+
+    tmdb = FakeTmdb()
+    qe.attach_imdb_ratings([movie, show, unrated], tmdb, db_path=str(db))
+
+    assert sorted(tmdb.asked) == [(2, "tv"), (3, "movie")]
+    assert (movie.rating, movie.rating_source) == (8.2, "imdb")
+    assert (show.rating, show.rating_votes, show.rating_source) == (6.7, 39079, "imdb")
+    assert (unrated.rating, unrated.rating_source) == (5.5, "tmdb")
+
+
+def test_attach_imdb_ratings_without_local_copy_makes_no_calls(tmp_path):
+    import recommender.query_engine as qe
+    meta = make_meta("A", tmdb_id=1, content_type="tv")
+
+    class NoCalls:
+        def get_imdb_id(self, *a):
+            raise AssertionError("must not resolve IDs without a ratings copy")
+
+    qe.attach_imdb_ratings([meta], NoCalls(), db_path=str(tmp_path / "missing.db"))
+    assert meta.rating_source == "tmdb"
+
+
+def test_rank_prompt_names_rating_source():
+    import recommender.query_engine as qe
+    rated = make_meta("Rated", tmdb_id=1, vote_avg=6.0)
+    rated.imdb_rating, rated.imdb_votes = 8.2, 151638
+    plain = make_meta("Plain", tmdb_id=2, vote_avg=7.1)
+    prompts = []
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, prompt, **k):
+            prompts.append(prompt)
+            return '[{"title": "Rated", "explanation": "x", "score": 0.9}]'
+
+    results = qe.rank_candidates("q", "P", [rated, plain], {}, FakeLLM(), top_n=2)
+
+    assert "Rated (rating: IMDb 8.2 from 151,638 votes)" in prompts[0]
+    assert "Plain (rating: TMDB 7.1 from 500 votes)" in prompts[0]
+    assert (results[0].vote_average, results[0].rating_source) == (8.2, "imdb")
+
+
+def test_ask_min_rating_uses_imdb_rating_when_known(monkeypatch, tmp_path):
+    import recommender.query_engine as qe
+    db = tmp_path / "imdb.db"
+    _imdb_db(db, [("tt0000001", 5.0, 24367), ("tt0000002", 8.6, 32329)])
+    monkeypatch.setattr(qe.config, "IMDB_RATINGS_DB_PATH", str(db))
+    monkeypatch.setattr(qe.config, "MIN_RATING", 7.0)
+
+    # TMDB says the first is good and the second is poor; IMDb says the reverse.
+    tmdb_high = make_meta("TMDB High", tmdb_id=1, content_type="movie", vote_avg=7.5)
+    tmdb_high.imdb_id = "tt0000001"
+    tmdb_low = make_meta("TMDB Low", tmdb_id=2, content_type="movie", vote_avg=6.0)
+    tmdb_low.imdb_id = "tt0000002"
+    no_imdb = make_meta("No IMDb", tmdb_id=3, content_type="movie", vote_avg=7.2)
+
+    captured = {}
+    monkeypatch.setattr(qe, "enrich_batch",
+                        lambda meta_dict, *a: captured.setdefault("titles", set(meta_dict)) and {})
+    monkeypatch.setattr(qe, "rank_candidates", lambda *a, **k: [])
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return [tmdb_high, tmdb_low, no_imdb]
+        def get_metadata(self, title, ct):
+            return None
+        def get_imdb_id(self, tmdb_id, ct):
+            return None
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return "[]"
+
+    ctx = qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    intent = qe.QueryIntent(
+        genres=["drama"], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=[], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent=None, content_type="movie",
+        top_n=5, platforms=[],
+    )
+    qe.ask("q", ctx, intent_override=intent)
+
+    assert captured["titles"] == {"TMDB Low", "No IMDb"}
+
+
+def test_ask_rating_floor_runs_before_runtime_fallback(monkeypatch):
+    """A below-floor short title must not win the runtime filter and then be
+    dropped, leaving nothing; the runtime fallback keeps the longer match."""
+    import recommender.query_engine as qe
+    monkeypatch.setattr(qe.config, "MIN_RATING", 7.0)
+    short = make_meta("Short Low", tmdb_id=1, content_type="movie", vote_avg=5.0)
+    short.runtime_minutes = 50
+    long_ = make_meta("Long High", tmdb_id=2, content_type="movie", vote_avg=8.0)
+    long_.runtime_minutes = 130
+
+    captured = {}
+    monkeypatch.setattr(qe, "enrich_batch",
+                        lambda meta_dict, *a: captured.setdefault("titles", set(meta_dict)) and {})
+    monkeypatch.setattr(qe, "rank_candidates", lambda *a, **k: [])
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return [short, long_]
+        def get_metadata(self, title, ct):
+            return None
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return "[]"
+
+    ctx = qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    qe.ask("q", ctx, intent_override=_runtime_intent("movie", 60))
+
+    assert captured["titles"] == {"Long High"}
+
+
+def _rated_lookup_ctx(qe, meta, tmp_path, monkeypatch, events=()):
+    """Context whose TMDB lookup returns meta and whose IMDb copy rates it 5.0."""
+    db = tmp_path / "imdb.db"
+    _imdb_db(db, [("tt0000009", 5.0, 24367)])
+    monkeypatch.setattr(qe.config, "IMDB_RATINGS_DB_PATH", str(db))
+    meta.imdb_id = "tt0000009"
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    class FakeTmdb:
+        def get_metadata(self, title, ct):
+            return meta if ct == meta.content_type else None
+        def get_imdb_id(self, tmdb_id, ct):
+            return None
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return "Yes, keep going."
+
+    return qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir=str(tmp_path), events=list(events),
+    )
+
+
+def test_why_not_rating_exit_card_matches_its_explanation(monkeypatch, tmp_path):
+    import recommender.query_engine as qe
+    monkeypatch.setattr(qe.config, "MIN_RATING", 7.0)
+    meta = make_meta("Bhooth Bangla", tmdb_id=9, content_type="movie", vote_avg=7.5)
+    ctx = _rated_lookup_ctx(qe, meta, tmp_path, monkeypatch)
+
+    [rec] = qe._handle_why_not("Bhooth Bangla", ctx)
+
+    assert "IMDb 5.0 from 24,367 votes (minimum 7.0)" in rec.explanation
+    assert (rec.vote_average, rec.rating_source) == (5.0, "imdb")
+
+
+def test_why_not_early_exit_reports_imdb_rating(monkeypatch, tmp_path):
+    import recommender.query_engine as qe
+    meta = make_meta("Bhooth Bangla", tmdb_id=9, content_type="movie", vote_avg=7.5)
+    ctx = _rated_lookup_ctx(qe, meta, tmp_path, monkeypatch)
+    ctx.watch_index.is_watched = lambda c: True
+
+    [rec] = qe._handle_why_not("Bhooth Bangla", ctx)
+
+    assert "WATCHED" in rec.explanation
+    assert (rec.vote_average, rec.rating_source) == (5.0, "imdb")
+
+
+def test_abandoned_result_reports_imdb_rating(monkeypatch, tmp_path):
+    from datetime import datetime, timedelta
+    import recommender.query_engine as qe
+    from recommender.ingestion.base import WatchEvent
+    monkeypatch.setattr(qe, "enrich", lambda *a, **k: "desc")
+    meta = make_meta("Mirzapur", tmdb_id=9, content_type="tv", vote_avg=7.9)
+    event = WatchEvent(platform="prime", title="Mirzapur: S1E1", content_type="tv",
+                       series_name="Mirzapur", watched_duration=timedelta(hours=1),
+                       total_duration=None, timestamp=datetime(2026, 1, 1), profile="me")
+    ctx = _rated_lookup_ctx(qe, meta, tmp_path, monkeypatch, events=[event])
+    intent = qe.QueryIntent(
+        genres=[], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=["Mirzapur"], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent="abandoned", content_type="tv",
+        top_n=1, platforms=[],
+    )
+
+    [rec] = qe._handle_abandoned("q", intent, ctx)
+
+    assert (rec.vote_average, rec.rating_source) == (5.0, "imdb")

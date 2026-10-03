@@ -11,6 +11,7 @@ import re
 import secrets
 import sys
 import threading
+import time
 from copy import copy, deepcopy
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -24,6 +25,7 @@ from markupsafe import Markup, escape
 
 import config
 from recommender import history as query_history
+from recommender import imdb_ratings
 from recommender import show_tracker
 from recommender import user_store
 from recommender import watch_index as wi
@@ -33,7 +35,7 @@ from recommender.jobs import registry as job_registry
 from recommender.llm import create_client
 from recommender.log import setup_logging
 from recommender.enricher import enrichment_key_from_parts
-from recommender.query_engine import RecommendContext, ask, _safe_query_intent
+from recommender.query_engine import RecommendContext, ask, attach_imdb_ratings, _safe_query_intent
 from recommender import wizard
 from recommender import wizard_flow
 from recommender.structured_profile import load_structured_profile
@@ -68,6 +70,13 @@ _config_reload_pending = False
 # while this job works in the background.
 _shows_job_id: str | None = None
 _shows_job_lock = threading.Lock()
+
+# The IMDb ratings refresh is checked at most this often, so a page load costs
+# one timestamp comparison and a failed download is retried hourly, not per request.
+IMDB_REFRESH_CHECK_SECONDS = 3600
+_imdb_job_id: str | None = None
+_imdb_next_check_at = 0.0
+_imdb_job_lock = threading.Lock()
 
 # ── User store initialization ─────────────────────────────────────────────────
 # Run once per process. ensure_user_store does IF-NOT-EXISTS DDL + migration
@@ -227,6 +236,7 @@ def _build_result_items(results: list, ctx: RecommendContext) -> list[dict]:
             "content_type": r.content_type,
             "score": r.score,
             "vote_average": r.vote_average,
+            "rating_source": r.rating_source,
             "genres": r.genres[:3],
             "explanation": r.explanation,
             "streaming_providers": _consolidate_providers(r.streaming_providers)[:4],
@@ -359,6 +369,30 @@ def _run_show_refresh(
     )
 
 
+def _ensure_imdb_refresh() -> None:
+    """Start a background IMDb ratings refresh when the local copy is a day old.
+
+    Pages keep using the current copy, or TMDB ratings when there is none,
+    until the new copy is complete and swapped in.
+    """
+    global _imdb_job_id, _imdb_next_check_at
+    now = time.time()
+    with _imdb_job_lock:
+        if now < _imdb_next_check_at:
+            return
+        if _imdb_job_id:
+            current = job_registry.get(_imdb_job_id)
+            if current and current.status in ("pending", "running"):
+                return
+        _imdb_next_check_at = now + IMDB_REFRESH_CHECK_SECONDS
+        if not imdb_ratings.refresh_is_due(config.IMDB_RATINGS_DB_PATH):
+            return
+        _imdb_job_id = job_registry.submit(
+            imdb_ratings.refresh, config.IMDB_RATINGS_DB_PATH,
+            label=imdb_ratings.REFRESH_JOB_LABEL,
+        )
+
+
 def _ensure_show_refresh(archive_entries: list[dict], tracking_rows: list[dict]) -> str | None:
     """Start or reuse the single background release-refresh job."""
     global _shows_job_id
@@ -402,6 +436,14 @@ def _show_sections_with_refresh() -> tuple[dict[str, list[dict]], str | None]:
     archive_entries, tracking_rows, sections = _show_page_data()
     job_id = _ensure_show_refresh(archive_entries, tracking_rows)
     return sections, job_id
+
+
+@app.template_filter("rating_label")
+def _rating_label(value: float | None, source: str | None = None) -> str:
+    """Name the rating's source, since IMDb and TMDB scores are not interchangeable."""
+    if not value:
+        return ""
+    return f"{'IMDb' if source == 'imdb' else 'TMDB'} {value:.1f}"
 
 
 @app.template_filter("human_date")
@@ -1143,6 +1185,7 @@ def recommend_page() -> str:
 
 @app.route("/recommend", methods=["POST"])
 def recommend_post() -> str:
+    _ensure_imdb_refresh()
     query = (request.form.get("query") or "").strip()
     is_htmx = request.headers.get("HX-Request") == "true"
 
@@ -1291,6 +1334,7 @@ def find_page() -> str:
     continues the list; with HTMX only the next batch is returned and appended,
     without it the same URL renders a full page.
     """
+    _ensure_imdb_refresh()
     criteria = _find_criteria(request.args)
     cursor = request.args.get("cursor") or None
     start = _find_start(request.args)
@@ -1329,6 +1373,7 @@ def find_page() -> str:
         results = find_unwatched_titles(
             tmdb, watch_index, user_state, criteria, config.FIND_CACHE_DIR,
             cursor=cursor, exclude=frozenset(shown),
+            imdb_db_path=config.IMDB_RATINGS_DB_PATH,
         )
         page["results"] = results
         page["saved_ids"] = _find_saved_ids(results.rows, user_state)
@@ -1615,6 +1660,7 @@ def wizard_replay():
 
 @app.route("/title/<int:tmdb_id>")
 def title_detail(tmdb_id: int) -> str:
+    _ensure_imdb_refresh()
     ct = request.args.get("type", "tv")
     ctx = _get_context()
     enrichments = _load_enrichments()
@@ -1645,6 +1691,8 @@ def title_detail(tmdb_id: int) -> str:
         key = enrichment_key_from_parts(ct, tmdb_id, meta.title)
         description = enrichments.get(key) or enrichments.get(meta.title, "")
     poster = _get_poster_url(tmdb_id, ct, "w500") if meta else None
+    if meta:
+        attach_imdb_ratings([meta], ctx.tmdb_client)
     overview = ""
     if meta:
         cache_path = Path(config.CACHE_DIR) / ct / f"{tmdb_id}.json"
@@ -1826,6 +1874,7 @@ def _decorate_saved_item(item: dict, ctx) -> None:
     never breaks the page render.
     """
     item.setdefault("vote_average", 0.0)
+    item.setdefault("rating_source", "tmdb")
     item.setdefault("genres", [])
     item.setdefault("streaming_providers", [])
     item.setdefault("poster", None)
@@ -1852,7 +1901,9 @@ def _decorate_saved_item(item: dict, ctx) -> None:
             meta = None
     if meta is None:
         return
-    item["vote_average"] = meta.vote_average or 0.0
+    attach_imdb_ratings([meta], tmdb)
+    item["vote_average"] = meta.rating or 0.0
+    item["rating_source"] = meta.rating_source
     item["genres"] = meta.genres[:3]
     item["poster"] = _get_poster_url(tmdb_id, ct)
     tmdb_type = "tv" if ct == "tv" else "movie"
@@ -1875,6 +1926,7 @@ def _decorate_saved_item(item: dict, ctx) -> None:
 
 @app.route("/watchlist")
 def watchlist_page() -> str:
+    _ensure_imdb_refresh()
     _ensure_user_store_once()
     items = user_store.list_saved_titles(config.EVENT_DB_PATH, status="watchlist")
     try:
@@ -2266,6 +2318,9 @@ def status():
         "watch_index_entries": index_entries,
         "enrichment_count": enrichment_count,
         "taste_profile_built_at": _profile_built_at(),
+        "imdb_ratings_refreshed_at": (
+            built.isoformat() if (built := imdb_ratings.refreshed_at(config.IMDB_RATINGS_DB_PATH)) else None
+        ),
         "event_store_ready": len(import_info) > 0,
         "event_store_import_count": len(import_info),
         "event_store_path": config.EVENT_DB_PATH,

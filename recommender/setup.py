@@ -28,6 +28,7 @@ from recommender.ingestion.apple_tv import parse as parse_apple_tv
 from recommender.ingestion.disney import parse as parse_disney
 from recommender.ingestion.hbo import parse as parse_hbo
 from recommender.ingestion.manual import parse as parse_manual
+from recommender import imdb_ratings
 from recommender.signals import compute_scores
 from recommender.tmdb_client import TmdbClient, TmdbMetadata, MatchHints
 from recommender.enricher import (
@@ -739,6 +740,23 @@ def ingest_providers(fail_on_error: bool = True) -> list:
     return all_events_from_db
 
 
+def refresh_imdb_ratings() -> bool:
+    """Download IMDb's ratings file into the local copy.
+
+    Ratings are an enhancement over TMDB's, so a failure warns and leaves the
+    previous copy (or TMDB-only ratings) in place instead of failing setup.
+    """
+    console.print("\nRefreshing IMDb ratings...")
+    try:
+        count = imdb_ratings.refresh(config.IMDB_RATINGS_DB_PATH)
+    except Exception as exc:
+        console.print(f"  IMDb ratings: [yellow]not refreshed[/yellow] ({type(exc).__name__}: {exc}). "
+                      "Ratings keep using the previous copy, or TMDB if there is none.")
+        return False
+    console.print(f"  IMDb ratings: [green]ok[/green] {count:,} titles")
+    return True
+
+
 def run_ingest_only() -> None:
     """Strict preflight validation of configured provider zips, persist to SQLite."""
     ingest_providers(fail_on_error=True)
@@ -1014,6 +1032,11 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
     else:
         console.print("\nTaste profile exists, skipping (use --refresh-profile to rebuild).")
 
+    if imdb_ratings.refresh_is_due(config.IMDB_RATINGS_DB_PATH):
+        refresh_imdb_ratings()
+    else:
+        console.print("\nIMDb ratings are less than a day old, skipping (use --refresh-imdb to force).")
+
     console.print("\n[green]Setup complete![/green]")
 
 
@@ -1025,6 +1048,8 @@ if __name__ == "__main__":
                         help="Re-fetch TMDB metadata, watch index, and enrichments")
     parser.add_argument("--ingest-only", action="store_true",
                         help="Load and report on ingested data without TMDB or LLM calls")
+    parser.add_argument("--refresh-imdb", action="store_true",
+                        help="Only re-download IMDb ratings, then exit")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
     parser.add_argument("--provider", choices=["anthropic", "gemini", "openai", "local"],
@@ -1034,7 +1059,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     from recommender.log import setup_logging
     setup_logging(level_override="DEBUG" if args.debug else None)
-    if args.ingest_only:
+    if args.refresh_imdb:
+        sys.exit(0 if refresh_imdb_ratings() else 1)
+    elif args.ingest_only:
         run_ingest_only()
     else:
         run_setup(refresh_profile=args.refresh_profile, refresh_data=args.refresh_data,

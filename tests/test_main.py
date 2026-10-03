@@ -29,6 +29,17 @@ def test_print_recommendations_shows_title(capsys):
     assert "Fits your British crime taste" in out
 
 
+def test_print_recommendations_names_rating_source(capsys):
+    from recommender.main import print_recommendations
+    imdb = make_rec("Andhadhun", "x")
+    imdb.vote_average, imdb.rating_source = 8.2, "imdb"
+    tmdb = make_rec("Broadchurch", "y")
+    print_recommendations([imdb, tmdb], "q")
+    out = capsys.readouterr().out
+    assert "IMDb 8.2" in out
+    assert "TMDB " in out
+
+
 def test_print_recommendations_empty(capsys):
     from recommender.main import print_recommendations
     print_recommendations([], "query")

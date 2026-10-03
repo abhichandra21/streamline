@@ -139,7 +139,7 @@
             <span style="font-family:'DM Serif Display',serif; font-size:0.95rem; color:var(--text);">{{ r.title }}</span>
             {% endif %}
             <span class="badge {{ 'badge-tv' if r.content_type == 'tv' else 'badge-movie' }}" style="font-size:0.5rem;">{{ r.content_type }}</span>
-            <span class="mono" style="font-size:0.58rem; color:var(--accent2);">★ {{ "%.1f"|format(r.vote_average) }}</span>
+            <span class="mono" style="font-size:0.58rem; color:var(--accent2);">{{ r.vote_average|rating_label(r.rating_source) }}</span>
           </div>
           <p style="font-size:0.8rem; color:var(--body); line-height:1.65; margin:0;">{{ r.explanation }}</p>
           <div style="display:flex; align-items:center; gap:0.75rem; margin-top:0.2rem; flex-wrap:wrap;">

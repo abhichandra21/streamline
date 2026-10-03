@@ -211,6 +211,8 @@ PROVIDERS_CACHE_DIR = str(_ROOT / "recommender/cache/providers")
 # Find page: US now-playing ids on a 6h TTL.
 FIND_CACHE_DIR = str(_ROOT / "recommender/cache/find")
 RELEASE_CACHE_DIR = str(_ROOT / "recommender/cache/releases")
+# Local copy of IMDb's daily ratings dataset (recommender/imdb_ratings.py).
+IMDB_RATINGS_DB_PATH = str(_ROOT / "recommender/cache/imdb_ratings.db")
 TASTE_PROFILE_PATH = str(_ROOT / "recommender/cache/taste_profile.txt")
 STRUCTURED_TASTE_PROFILE_PATH = str(_ROOT / "recommender/cache/taste_profile_structured.json")
 WATCH_INDEX_PATH = str(_ROOT / "recommender/cache/watch_index.json")
