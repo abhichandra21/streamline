@@ -559,3 +559,14 @@ def test_language_show_more_does_not_repeat_a_title_pushed_forward_by_a_rebuild(
                            exclude=frozenset(r.title.tmdb_id for r in first.rows))
 
     assert [r.title.tmdb_id for r in second.rows] == [11, 12, 13, 14, 15]
+
+
+def test_language_show_more_survives_a_title_marked_watched_between_clicks(tmp_path):
+    _write_language_list(tmp_path, [{"tmdb_id": i, "imdb_rating": 9.0 - i / 100} for i in range(1, 16)])
+    first = _run_language(tmp_path)
+
+    second = _run_language(tmp_path, cursor=first.next_cursor,
+                           exclude=frozenset(r.title.tmdb_id for r in first.rows),
+                           watch_index=FakeWatchIndex({1}))
+
+    assert [r.title.tmdb_id for r in second.rows] == [11, 12, 13, 14, 15]
