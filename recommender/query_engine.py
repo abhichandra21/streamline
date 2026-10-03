@@ -359,6 +359,8 @@ def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) ->
     ct = matching[0].content_type
     lookup_title = matching[0].series_name if ct == 'tv' else matching[0].title
     meta = ctx.tmdb_client.get_metadata(lookup_title, ct)
+    if meta:
+        attach_imdb_ratings([meta], ctx.tmdb_client)
     desc = enrich(meta, ctx.cache_dir, ctx.llm) if meta else target
 
     prompt = (
@@ -374,9 +376,10 @@ def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) ->
         title=target,
         content_type=ct,
         score=0.5,
-        vote_average=meta.vote_average if meta else 0.0,
+        vote_average=meta.rating if meta else 0.0,
         genres=meta.genres if meta else [],
         explanation=response_text.strip(),
+        rating_source=meta.rating_source if meta else "tmdb",
     )]
 
 
@@ -406,9 +409,12 @@ def _handle_why_not(title: str, ctx: RecommendContext) -> list[Recommendation]:
             explanation="\n".join(lines),
         )]
 
+    # Resolve the IMDb-first rating once, so every exit below reports the
+    # same rating the pipeline would have used.
+    attach_imdb_ratings([meta], ctx.tmdb_client)
     ct_label = f"{meta.content_type.upper()} — ID {meta.tmdb_id}"
     genres_str = ", ".join(meta.genres) or "none"
-    lines.append(f"  TMDB: [green]Found[/green] — {ct_label}, genres: [{genres_str}], ★ {meta.vote_average:.1f}")
+    lines.append(f"  TMDB: [green]Found[/green] — {ct_label}, genres: [{genres_str}], {_rating_label(meta)}")
 
     # Step 2: Watch index
     if ctx.watch_index.is_watched(meta):
@@ -416,7 +422,8 @@ def _handle_why_not(title: str, ctx: RecommendContext) -> list[Recommendation]:
         lines.append("  → Excluded because you've already watched it.")
         return [Recommendation(
             title=meta.title, content_type=meta.content_type,
-            score=0.0, vote_average=meta.vote_average, genres=meta.genres,
+            score=0.0, vote_average=meta.rating, genres=meta.genres,
+            rating_source=meta.rating_source,
             explanation="\n".join(lines),
         )]
     lines.append("  Watch index: [green]Not watched[/green] — not in watch history.")
@@ -428,7 +435,8 @@ def _handle_why_not(title: str, ctx: RecommendContext) -> list[Recommendation]:
             lines.append("  → Excluded because you marked it as watched.")
             return [Recommendation(
                 title=meta.title, content_type=meta.content_type,
-                score=0.0, vote_average=meta.vote_average, genres=meta.genres,
+                score=0.0, vote_average=meta.rating, genres=meta.genres,
+                rating_source=meta.rating_source,
                 explanation="\n".join(lines),
             )]
         if ctx.user_state.is_dismissed(meta):
@@ -436,7 +444,8 @@ def _handle_why_not(title: str, ctx: RecommendContext) -> list[Recommendation]:
             lines.append("  → Excluded because you dismissed this title.")
             return [Recommendation(
                 title=meta.title, content_type=meta.content_type,
-                score=0.0, vote_average=meta.vote_average, genres=meta.genres,
+                score=0.0, vote_average=meta.rating, genres=meta.genres,
+                rating_source=meta.rating_source,
                 explanation="\n".join(lines),
             )]
         lines.append("  User state: [green]OK[/green] — not dismissed or manually archived.")
@@ -450,13 +459,13 @@ def _handle_why_not(title: str, ctx: RecommendContext) -> list[Recommendation]:
         lines.append("  → Filtered out as too obscure. Lower MIN_VOTE_COUNT in config.py to include it.")
         return [Recommendation(
             title=meta.title, content_type=meta.content_type,
-            score=0.0, vote_average=meta.vote_average, genres=meta.genres,
+            score=0.0, vote_average=meta.rating, genres=meta.genres,
+            rating_source=meta.rating_source,
             explanation="\n".join(lines),
         )]
     lines.append(f"  Popularity: [green]OK[/green] — {meta.vote_count} votes.")
 
     # Step 3b: Rating filter, on the same IMDb-first rating the pipeline uses
-    attach_imdb_ratings([meta], ctx.tmdb_client)
     if config.MIN_RATING > 0 and meta.rating < config.MIN_RATING:
         lines.append(
             f"  Rating: [yellow]Below minimum[/yellow] — "
@@ -465,7 +474,8 @@ def _handle_why_not(title: str, ctx: RecommendContext) -> list[Recommendation]:
         lines.append("  → Filtered by min_rating setting. Lower it in Settings to include this title.")
         return [Recommendation(
             title=meta.title, content_type=meta.content_type,
-            score=0.0, vote_average=meta.vote_average, genres=meta.genres,
+            score=0.0, vote_average=meta.rating, genres=meta.genres,
+            rating_source=meta.rating_source,
             explanation="\n".join(lines),
         )]
     if config.MIN_RATING > 0:
@@ -480,7 +490,8 @@ def _handle_why_not(title: str, ctx: RecommendContext) -> list[Recommendation]:
         lines.append("  → Filtered by min_year setting. Lower it in Settings to include this title.")
         return [Recommendation(
             title=meta.title, content_type=meta.content_type,
-            score=0.0, vote_average=meta.vote_average, genres=meta.genres,
+            score=0.0, vote_average=meta.rating, genres=meta.genres,
+            rating_source=meta.rating_source,
             explanation="\n".join(lines),
         )]
     if config.MIN_YEAR > 0 and meta.release_year:
@@ -498,7 +509,8 @@ def _handle_why_not(title: str, ctx: RecommendContext) -> list[Recommendation]:
 
     return [Recommendation(
         title=meta.title, content_type=meta.content_type,
-        score=0.0, vote_average=meta.vote_average, genres=meta.genres,
+        score=0.0, vote_average=meta.rating, genres=meta.genres,
+        rating_source=meta.rating_source,
         explanation="\n".join(lines),
     )]
 
@@ -770,6 +782,13 @@ def ask(
                 suggestion_keys.add((meta.content_type, meta.tmdb_id))
     log.debug("LLM suggestions added %d new candidates", suggestion_count)
 
+    # The rating floor runs before the runtime check, so a below-floor short
+    # title cannot satisfy the runtime filter and then be removed, emptying the
+    # pool the runtime fallback would otherwise have kept.
+    attach_imdb_ratings(candidates, ctx.tmdb_client)
+    if config.MIN_RATING > 0:
+        candidates = [c for c in candidates if c.rating >= config.MIN_RATING]
+
     # Runtime is a hard filter when known, applied once over the whole pool so a
     # fallback is possible. If every candidate with a known runtime exceeds the
     # ceiling (e.g. "movie under an hour" — feature films are rarely that short),
@@ -787,10 +806,6 @@ def ask(
                 + f"\nRuntime limit ({intent.max_runtime_minutes} min) was too restrictive; "
                   "prefer the shortest strong matches and note if a pick runs longer."
             ).strip()
-
-    attach_imdb_ratings(candidates, ctx.tmdb_client)
-    if config.MIN_RATING > 0:
-        candidates = [c for c in candidates if c.rating >= config.MIN_RATING]
 
     if log.isEnabledFor(logging.DEBUG) and candidates:
         log.debug("Final candidate pool (%d): %s",

@@ -1136,3 +1136,116 @@ def test_ask_min_rating_uses_imdb_rating_when_known(monkeypatch, tmp_path):
     qe.ask("q", ctx, intent_override=intent)
 
     assert captured["titles"] == {"TMDB Low", "No IMDb"}
+
+
+def test_ask_rating_floor_runs_before_runtime_fallback(monkeypatch):
+    """A below-floor short title must not win the runtime filter and then be
+    dropped, leaving nothing; the runtime fallback keeps the longer match."""
+    import recommender.query_engine as qe
+    monkeypatch.setattr(qe.config, "MIN_RATING", 7.0)
+    short = make_meta("Short Low", tmdb_id=1, content_type="movie", vote_avg=5.0)
+    short.runtime_minutes = 50
+    long_ = make_meta("Long High", tmdb_id=2, content_type="movie", vote_avg=8.0)
+    long_.runtime_minutes = 130
+
+    captured = {}
+    monkeypatch.setattr(qe, "enrich_batch",
+                        lambda meta_dict, *a: captured.setdefault("titles", set(meta_dict)) and {})
+    monkeypatch.setattr(qe, "rank_candidates", lambda *a, **k: [])
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return [short, long_]
+        def get_metadata(self, title, ct):
+            return None
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return "[]"
+
+    ctx = qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    qe.ask("q", ctx, intent_override=_runtime_intent("movie", 60))
+
+    assert captured["titles"] == {"Long High"}
+
+
+def _rated_lookup_ctx(qe, meta, tmp_path, monkeypatch, events=()):
+    """Context whose TMDB lookup returns meta and whose IMDb copy rates it 5.0."""
+    db = tmp_path / "imdb.db"
+    _imdb_db(db, [("tt0000009", 5.0, 24367)])
+    monkeypatch.setattr(qe.config, "IMDB_RATINGS_DB_PATH", str(db))
+    meta.imdb_id = "tt0000009"
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    class FakeTmdb:
+        def get_metadata(self, title, ct):
+            return meta if ct == meta.content_type else None
+        def get_imdb_id(self, tmdb_id, ct):
+            return None
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return "Yes, keep going."
+
+    return qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir=str(tmp_path), events=list(events),
+    )
+
+
+def test_why_not_rating_exit_card_matches_its_explanation(monkeypatch, tmp_path):
+    import recommender.query_engine as qe
+    monkeypatch.setattr(qe.config, "MIN_RATING", 7.0)
+    meta = make_meta("Bhooth Bangla", tmdb_id=9, content_type="movie", vote_avg=7.5)
+    ctx = _rated_lookup_ctx(qe, meta, tmp_path, monkeypatch)
+
+    [rec] = qe._handle_why_not("Bhooth Bangla", ctx)
+
+    assert "IMDb 5.0 from 24,367 votes (minimum 7.0)" in rec.explanation
+    assert (rec.vote_average, rec.rating_source) == (5.0, "imdb")
+
+
+def test_why_not_early_exit_reports_imdb_rating(monkeypatch, tmp_path):
+    import recommender.query_engine as qe
+    meta = make_meta("Bhooth Bangla", tmdb_id=9, content_type="movie", vote_avg=7.5)
+    ctx = _rated_lookup_ctx(qe, meta, tmp_path, monkeypatch)
+    ctx.watch_index.is_watched = lambda c: True
+
+    [rec] = qe._handle_why_not("Bhooth Bangla", ctx)
+
+    assert "WATCHED" in rec.explanation
+    assert (rec.vote_average, rec.rating_source) == (5.0, "imdb")
+
+
+def test_abandoned_result_reports_imdb_rating(monkeypatch, tmp_path):
+    from datetime import datetime, timedelta
+    import recommender.query_engine as qe
+    from recommender.ingestion.base import WatchEvent
+    monkeypatch.setattr(qe, "enrich", lambda *a, **k: "desc")
+    meta = make_meta("Mirzapur", tmdb_id=9, content_type="tv", vote_avg=7.9)
+    event = WatchEvent(platform="prime", title="Mirzapur: S1E1", content_type="tv",
+                       series_name="Mirzapur", watched_duration=timedelta(hours=1),
+                       total_duration=None, timestamp=datetime(2026, 1, 1), profile="me")
+    ctx = _rated_lookup_ctx(qe, meta, tmp_path, monkeypatch, events=[event])
+    intent = qe.QueryIntent(
+        genres=[], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=["Mirzapur"], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent="abandoned", content_type="tv",
+        top_n=1, platforms=[],
+    )
+
+    [rec] = qe._handle_abandoned("q", intent, ctx)
+
+    assert (rec.vote_average, rec.rating_source) == (5.0, "imdb")

@@ -29,6 +29,8 @@ DATASET_URL = "https://datasets.imdbws.com/title.ratings.tsv.gz"
 # IMDb regenerates the file daily; new releases move fast in their first weeks.
 REFRESH_AGE = timedelta(days=1)
 DOWNLOAD_TIMEOUT_SECONDS = 60
+# Background job label in the web UI; tests wait on jobs carrying it.
+REFRESH_JOB_LABEL = "refreshing IMDb ratings"
 _EXPECTED_HEADER = ["tconst", "averageRating", "numVotes"]
 # SQLite's default bound-parameter limit is 999 on older builds.
 _LOOKUP_CHUNK = 500

@@ -389,7 +389,7 @@ def _ensure_imdb_refresh() -> None:
             return
         _imdb_job_id = job_registry.submit(
             imdb_ratings.refresh, config.IMDB_RATINGS_DB_PATH,
-            label="refreshing IMDb ratings",
+            label=imdb_ratings.REFRESH_JOB_LABEL,
         )
 
 
