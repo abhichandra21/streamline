@@ -27,11 +27,19 @@ class FakeWatchIndex:
 
 
 class FakeUserState:
-    def __init__(self, archived_ids=()):
+    def __init__(self, archived_ids=(), saved_ids=(), dismissed_ids=()):
         self.archived = set(archived_ids)
+        self.saved = set(saved_ids)
+        self.dismissed = set(dismissed_ids)
 
     def is_manually_watched(self, meta) -> bool:
         return meta.tmdb_id in self.archived
+
+    def is_in_watchlist(self, meta) -> bool:
+        return meta.tmdb_id in self.saved
+
+    def is_dismissed(self, meta) -> bool:
+        return meta.tmdb_id in self.dismissed
 
 
 class FakeTmdb:
@@ -173,6 +181,18 @@ def test_stops_at_batch_size_without_reading_extra_pages():
 def test_manual_archive_entries_are_excluded():
     tmdb = FakeTmdb({1: [_title(i) for i in range(1, 13)]})
     results = _run(tmdb, user_state=FakeUserState({2, 3}))
+    assert [r.title.tmdb_id for r in results.rows] == [1, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+
+def test_watchlist_titles_are_excluded():
+    tmdb = FakeTmdb({1: [_title(i) for i in range(1, 13)]})
+    results = _run(tmdb, user_state=FakeUserState(saved_ids={2, 3}))
+    assert [r.title.tmdb_id for r in results.rows] == [1, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+
+def test_dismissed_titles_are_excluded():
+    tmdb = FakeTmdb({1: [_title(i) for i in range(1, 13)]})
+    results = _run(tmdb, user_state=FakeUserState(dismissed_ids={2, 3}))
     assert [r.title.tmdb_id for r in results.rows] == [1, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
 
@@ -455,11 +475,13 @@ def test_language_mode_filters_type_period_genre_votes_rating_and_watched(tmp_pa
         {"tmdb_id": 7},                                   # watched
         {"tmdb_id": 8},                                   # manual archive
         {"tmdb_id": 9, "release_date": None},             # no date: cannot place in a period
+        {"tmdb_id": 10},                                  # on the watchlist
+        {"tmdb_id": 11},                                  # dismissed
     ])
     criteria = FindCriteria(language="hi", genre="drama", min_rating=7.0)
 
     results = _run_language(tmp_path, criteria, watch_index=FakeWatchIndex({7}),
-                            user_state=FakeUserState({8}))
+                            user_state=FakeUserState({8}, saved_ids={10}, dismissed_ids={11}))
 
     assert [r.title.tmdb_id for r in results.rows] == [1]
 

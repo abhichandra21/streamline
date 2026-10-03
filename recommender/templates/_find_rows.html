@@ -83,16 +83,15 @@
 
 
     {%- set wl_id = 'find-wl-' ~ title.content_type ~ '-' ~ title.tmdb_id %}
-    {%- set saved = title.tmdb_id in saved_ids %}
     <div class="find-actions">
       {%- if row.in_theaters %}
       <span class="find-cinema"><i></i>In theaters</span>
       {%- endif %}
       <a class="find-where" href="https://www.themoviedb.org/{{ title.content_type }}/{{ title.tmdb_id }}/watch?locale=US"
          target="_blank" rel="noopener">Where to watch</a>
-      <span id="{{ wl_id }}" class="find-save{% if saved %} is-saved{% endif %}">
-        <form method="post" action="{{ '/watchlist/unsave' if saved else '/watchlist/save' }}"
-              hx-post="{{ '/watchlist/unsave' if saved else '/watchlist/save' }}" hx-target="#{{ wl_id }}" hx-swap="outerHTML">
+      <span id="{{ wl_id }}" class="find-save">
+        <form method="post" action="/watchlist/save"
+              hx-post="/watchlist/save" hx-target="#{{ wl_id }}" hx-swap="outerHTML">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="title" value="{{ title.title }}">
           <input type="hidden" name="content_type" value="{{ title.content_type }}">
@@ -100,7 +99,7 @@
           <input type="hidden" name="mode" value="toggle">
           <input type="hidden" name="target_id" value="{{ wl_id }}">
           <input type="hidden" name="redirect" value="{{ return_to }}">
-          <button type="submit" title="{{ 'Remove from watchlist' if saved else 'Save to watchlist' }}">{{ 'Saved' if saved else '+ Save' }}</button>
+          <button type="submit" title="Save to watchlist">+ Save</button>
         </form>
       </span>
     </div>

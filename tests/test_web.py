@@ -2395,6 +2395,9 @@ class FindTestSupport:
             def is_in_watchlist(self, meta):
                 return False
 
+            def is_dismissed(self, meta):
+                return False
+
         def fake_user_state():
             calls["user_state"] += 1
             return _UserState()
@@ -2811,19 +2814,13 @@ class TestFindRendering(FindTestSupport):
         assert 'name="redirect" value="/find?period=1y"' in card
         assert "Save" in card
 
-    def test_card_shows_saved_state_when_already_in_watchlist(self, client, find_env, monkeypatch):
-        class _UserState:
-            def is_manually_watched(self, meta):
-                return False
-
-            def is_in_watchlist(self, meta):
-                return meta.tmdb_id == 2
-        monkeypatch.setattr(web, "_load_user_state", lambda: _UserState())
+    def test_overview_only_expands_on_hover_capable_devices(self, client, find_env):
+        # On touch screens the first tap is a hover. Expanding there moves Save away.
         body = client.get("/find").get_data(as_text=True)
-        card1 = body[body.index('id="find-wl-movie-1"'):body.index('id="find-wl-movie-2"')]
-        card2 = body[body.index('id="find-wl-movie-2"'):body.index('class="find-more"')]
-        assert 'action="/watchlist/save"' in card1 and "Saved" not in card1
-        assert 'action="/watchlist/unsave"' in card2 and "Saved" in card2
+        rule = ".find-card:hover .find-overview"
+        assert body.count(rule) == 1
+        media = body.rindex("@media", 0, body.index(rule))
+        assert body[media:body.index(rule)].startswith("@media (hover: hover)")
 
     def test_htmx_continuation_cards_also_carry_save_forms(self, client, find_env):
         body = client.get("/find?cursor=1.12&start=10", headers={"HX-Request": "true"}).get_data(as_text=True)
