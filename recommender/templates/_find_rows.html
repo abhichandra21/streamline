@@ -48,9 +48,17 @@
         <a href="https://www.themoviedb.org/{{ title.content_type }}/{{ title.tmdb_id }}" target="_blank" rel="noopener">{{ title.title }}</a>
         {%- if title.year %} <span class="find-year">{{ title.year }}</span>{% endif %}
       </h2>
-      <div class="find-score" title="{{ '{:,}'.format(title.vote_count) }} TMDB votes">
-        <span class="find-score-n">{{ "%.1f"|format(title.vote_average) }}</span>
-        <span class="find-score-v">{{ "{:,}".format(title.vote_count) }} votes</span>
+      <div class="find-scores">
+        {%- if row.imdb %}
+        <div class="find-score" title="{{ '{:,}'.format(row.imdb.votes) }} IMDb votes">
+          <span class="find-score-n">{{ "%.1f"|format(row.imdb.rating) }}</span>
+          <span class="find-score-v">IMDb · {{ "{:,}".format(row.imdb.votes) }}</span>
+        </div>
+        {%- endif %}
+        <div class="find-score{% if row.imdb %} is-secondary{% endif %}" title="{{ '{:,}'.format(title.vote_count) }} TMDB votes">
+          <span class="find-score-n">{{ "%.1f"|format(title.vote_average) }}</span>
+          <span class="find-score-v">TMDB · {{ "{:,}".format(title.vote_count) }}</span>
+        </div>
       </div>
     </header>
 

@@ -81,7 +81,8 @@ def print_recommendations(results: list[Recommendation], query: str) -> None:
     console_out.print(f'\n[bold]Results for:[/bold] "{query}"\n')
     for i, rec in enumerate(results, 1):
         genres_str = ", ".join(rec.genres[:3])
-        title_line = f"{rec.title}  ★ {rec.vote_average:.1f}  [{genres_str}]"
+        source = "IMDb" if rec.rating_source == "imdb" else "TMDB"
+        title_line = f"{rec.title}  {source} {rec.vote_average:.1f}  [{genres_str}]"
         body = rec.explanation
         if rec.streaming_providers:
             body += f"\n\n[dim]Available on: {', '.join(rec.streaming_providers[:4])}[/dim]"

@@ -977,3 +977,65 @@ def test_get_never_exposes_the_api_key_in_connection_errors(tmp_path):
 def test_config_has_find_cache_dir():
     import config
     assert config.FIND_CACHE_DIR.endswith("recommender/cache/find")
+
+
+def test_parse_metadata_reads_imdb_id_for_movies_and_tv(tmp_path):
+    client = make_client(str(tmp_path))
+    movie = client._parse_metadata({"id": 1, "title": "Dhurandhar", "imdb_id": "tt33014583"}, "movie")
+    show = client._parse_metadata(
+        {"id": 2, "name": "Panchayat", "external_ids": {"imdb_id": "tt12004706"}}, "tv")
+    neither = client._parse_metadata({"id": 3, "name": "Unknown", "imdb_id": ""}, "tv")
+
+    assert movie.imdb_id == "tt33014583"
+    assert show.imdb_id == "tt12004706"
+    assert neither.imdb_id is None
+
+
+def test_rating_prefers_imdb_and_falls_back_to_tmdb():
+    tmdb_only = TmdbMetadata(tmdb_id=1, content_type="movie", title="A",
+                             vote_average=6.1, vote_count=30)
+    with_imdb = TmdbMetadata(tmdb_id=2, content_type="movie", title="B",
+                             vote_average=6.1, vote_count=30,
+                             imdb_rating=8.2, imdb_votes=151638)
+
+    assert (tmdb_only.rating, tmdb_only.rating_votes, tmdb_only.rating_source) == (6.1, 30, "tmdb")
+    assert (with_imdb.rating, with_imdb.rating_votes, with_imdb.rating_source) == (8.2, 151638, "imdb")
+
+
+def test_detail_fetch_asks_for_external_ids(tmp_path):
+    client = make_client(str(tmp_path))
+    with patch.object(client, "_get", return_value={"id": 42}) as mock_get:
+        client._fetch_details(42, "tv")
+    assert "external_ids" in mock_get.call_args[0][1]["append_to_response"]
+
+
+def test_get_imdb_id_uses_cached_details_without_a_call(tmp_path):
+    client = make_client(str(tmp_path))
+    client._save_cache("movie", 7, {"id": 7, "title": "X", "imdb_id": "tt0000007"})
+    with patch.object(client, "_get") as mock_get:
+        assert client.get_imdb_id(7, "movie") == "tt0000007"
+    mock_get.assert_not_called()
+
+
+def test_get_imdb_id_fetches_external_ids_once_and_caches(tmp_path):
+    client = make_client(str(tmp_path))
+    with patch.object(client, "_get", return_value={"imdb_id": "tt12004706"}) as mock_get:
+        assert client.get_imdb_id(2, "tv") == "tt12004706"
+        assert client.get_imdb_id(2, "tv") == "tt12004706"
+    mock_get.assert_called_once_with("tv/2/external_ids")
+
+
+def test_get_imdb_id_rechecks_a_missing_id_only_after_retry_age(tmp_path):
+    import recommender.tmdb_client as tc
+    client = make_client(str(tmp_path))
+    with patch.object(client, "_get", return_value={"imdb_id": None}) as mock_get:
+        assert client.get_imdb_id(5, "movie") is None
+        assert client.get_imdb_id(5, "movie") is None
+    assert mock_get.call_count == 1
+
+    path = client._imdb_id_cache_path("movie", 5)
+    old = time.time() - tc.IMDB_ID_RETRY_AGE_SECONDS - 10
+    os.utime(path, (old, old))
+    with patch.object(client, "_get", return_value={"imdb_id": "tt0000005"}) as mock_get:
+        assert client.get_imdb_id(5, "movie") == "tt0000005"
+    mock_get.assert_called_once()

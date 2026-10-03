@@ -10,3 +10,5 @@ class Recommendation:
     genres: list[str]
     explanation: str
     streaming_providers: list[str] = field(default_factory=list)
+    # Which service vote_average came from: "imdb" or "tmdb".
+    rating_source: str = "tmdb"

@@ -2583,7 +2583,7 @@ class TestFindRendering(FindTestSupport):
         assert 'name="keyword"' in body and 'maxlength="80"' in body
         assert 'name="rating"' in body
         assert 'name="sort"' in body
-        for key, label in (("rating", "Rating"), ("newest", "Newest"), ("popular", "Most popular"), ("votes", "Most voted")):
+        for key, label in (("rating", "TMDB rating"), ("newest", "Newest"), ("popular", "Most popular"), ("votes", "Most voted")):
             assert f'value="{key}"' in body and f">{label}<" in body
         assert "Show results" in body
         for key, label in PERIOD_OPTIONS:
@@ -2630,7 +2630,7 @@ class TestFindRendering(FindTestSupport):
 
         assert "https://image.tmdb.org/t/p/w342/p1.jpg" in body
         assert "Playing Now" in body and 'class="find-year">2026<' in body
-        assert 'class="find-score-n">8.4<' in body and "1,234 votes" in body
+        assert 'class="find-score-n">8.4<' in body and "TMDB · 1,234" in body
         assert "Overview 1" in body
         assert body.count('class="find-card"') == 3
         assert 'class="find-rank"><span>1</span>' in body
@@ -2828,3 +2828,68 @@ class TestFindRendering(FindTestSupport):
     def test_find_is_not_active_on_other_pages(self, client):
         body = client.get("/help").get_data(as_text=True)
         assert 'href="/find" title="Find" class="nav-link "' in body
+
+
+def test_rating_label_names_the_source():
+    from recommender.web import _rating_label
+    assert _rating_label(8.24, "imdb") == "IMDb 8.2"
+    assert _rating_label(7.1, "tmdb") == "TMDB 7.1"
+    assert _rating_label(7.1, None) == "TMDB 7.1"
+    assert _rating_label(0, "imdb") == ""
+
+
+class _RecordingRegistry:
+    def __init__(self):
+        self.submitted = []
+
+    def submit(self, fn, *args, label="job", **kwargs):
+        self.submitted.append((fn, args, label))
+        return f"job-{len(self.submitted)}"
+
+    def get(self, job_id):
+        return Job(id=job_id, label="x", status="done", started_at=0.0)
+
+
+def test_imdb_refresh_starts_once_when_due_and_waits_for_the_check_window(monkeypatch):
+    registry = _RecordingRegistry()
+    monkeypatch.setattr(web, "job_registry", registry)
+    monkeypatch.setattr(web, "_imdb_job_id", None)
+    monkeypatch.setattr(web, "_imdb_next_check_at", 0.0)
+
+    web._ensure_imdb_refresh()
+    web._ensure_imdb_refresh()
+
+    assert len(registry.submitted) == 1
+    fn, args, label = registry.submitted[0]
+    assert fn is web.imdb_ratings.refresh
+    assert args == (web.config.IMDB_RATINGS_DB_PATH,)
+
+
+def test_imdb_refresh_skips_a_fresh_copy(monkeypatch):
+    registry = _RecordingRegistry()
+    monkeypatch.setattr(web, "job_registry", registry)
+    monkeypatch.setattr(web, "_imdb_job_id", None)
+    monkeypatch.setattr(web, "_imdb_next_check_at", 0.0)
+    monkeypatch.setattr(web.imdb_ratings, "refresh_is_due", lambda path: False)
+
+    web._ensure_imdb_refresh()
+
+    assert registry.submitted == []
+
+
+@patch("recommender.web.job_registry")
+@patch("recommender.web._get_context")
+def test_status_reports_imdb_ratings_age(mock_get_context, mock_jobs, client):
+    import gzip
+    mock_get_context.return_value = MagicMock(watch_index=MagicMock(entries=[]))
+    mock_jobs.running_jobs.return_value = []
+    mock_jobs.recent_jobs.return_value = []
+
+    assert client.get("/status").get_json()["imdb_ratings_refreshed_at"] is None
+
+    def download(dest):
+        with gzip.open(dest, "wt", encoding="utf-8") as f:
+            f.write("tconst\taverageRating\tnumVotes\ntt0000001\t7.0\t1000\n")
+    web.imdb_ratings.refresh(web.config.IMDB_RATINGS_DB_PATH, download=download)
+
+    assert client.get("/status").get_json()["imdb_ratings_refreshed_at"]

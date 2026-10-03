@@ -245,7 +245,9 @@
     margin-left: 0.4rem;
     vertical-align: 0.25em;
   }
+  .find-scores { display: flex; gap: 1.1rem; align-items: flex-start; }
   .find-score { text-align: right; line-height: 1; }
+  .find-score.is-secondary .find-score-n { font-size: 1.3rem; color: var(--muted); }
   .find-score-n {
     display: block;
     font-family: 'DM Serif Display', serif;
@@ -358,8 +360,10 @@
     .find-rank { font-size: 1.4rem; }
     .find-poster { width: 72px; height: 108px; }
     .find-head { grid-template-columns: 1fr; gap: 0.35rem; }
+    .find-scores { gap: 0.9rem; }
     .find-score { text-align: left; display: flex; align-items: baseline; gap: 0.6rem; }
     .find-score-n { font-size: 1.4rem; }
+    .find-score.is-secondary .find-score-n { font-size: 1.1rem; }
     .find-score-v { margin-top: 0; }
     .find-title { font-size: 1.2rem; }
     .find-overview { -webkit-line-clamp: 2; }
@@ -377,7 +381,7 @@
     <p class="find-lede">
       {%- set lede_sort = dict(sort_options).get(criteria.sort, 'Rating') | lower %}
       {{ 'TV series' if criteria.content_type == 'tv' else 'Movies' }} you have not watched, straight from TMDB and ordered by {{ lede_sort }}.
-      Titles need at least 100 votes. Keep scrolling; the list continues as far as TMDB does.
+      Titles need at least 100 TMDB votes. Keep scrolling; the list continues as far as TMDB does.
     </p>
   </div>
   {%- if results is not none and not results.keyword_missing %}
@@ -385,7 +389,7 @@
     <b>{{ results.release_start.strftime('%d %b %Y') }}</b> to <b>{{ results.release_end.strftime('%d %b %Y') }}</b><br>
     {%- if results.keyword_name %}keyword <b>{{ results.keyword_name }}</b><br>{% endif %}
     {%- if criteria.genre %}genre <b>{{ criteria.genre }}</b><br>{% endif %}
-    {%- if criteria.min_rating %}rated <b>{{ criteria.min_rating }}+</b><br>{% endif %}
+    {%- if criteria.min_rating %}TMDB rated <b>{{ criteria.min_rating }}+</b><br>{% endif %}
   </div>
   {%- endif %}
 </section>
@@ -424,7 +428,7 @@
   </label>
 
   <label class="find-field">
-    <span class="find-cap">Minimum rating</span>
+    <span class="find-cap">Minimum TMDB rating</span>
     <select name="rating">
       {%- for key, label, value in rating_options %}
       <option value="{{ key }}" {% if criteria.min_rating == value %}selected{% endif %}>{{ label }}</option>

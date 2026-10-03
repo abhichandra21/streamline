@@ -96,6 +96,7 @@ Everything goes through `./recommend`:
 ./recommend setup                               # first-time setup
 ./recommend setup --refresh-data                # re-fetch TMDB + rebuild everything
 ./recommend setup --refresh-profile             # rebuild taste profile only
+./recommend setup --refresh-imdb                # re-download IMDb ratings only
 
 # Feedback
 ./recommend --liked "Tinker Tailor Soldier Spy"

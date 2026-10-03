@@ -18,6 +18,9 @@ MAX_DISCOVER_PAGES = 20
 # "In theaters" honest without a call per request.
 NOW_PLAYING_TTL_SECONDS = 6 * 3600
 
+# How long "TMDB has no IMDb ID for this title" is trusted before asking again.
+IMDB_ID_RETRY_AGE_SECONDS = 7 * 86400
+
 TMDB_BASE = "https://api.themoviedb.org/3"
 
 MOVIE_GENRE_IDS: dict[str, int] = {
@@ -50,6 +53,24 @@ class TmdbMetadata:
     vote_count: int = 0
     runtime_minutes: int | None = None
     release_year: int | None = None
+    imdb_id: str | None = None
+    # Filled from the local IMDb ratings copy (recommender/imdb_ratings.py);
+    # None when the title has no IMDb rating or no local copy exists.
+    imdb_rating: float | None = None
+    imdb_votes: int | None = None
+
+    @property
+    def rating_source(self) -> str:
+        return "imdb" if self.imdb_rating is not None else "tmdb"
+
+    @property
+    def rating(self) -> float:
+        """IMDb rating when known, TMDB's otherwise."""
+        return self.imdb_rating if self.imdb_rating is not None else self.vote_average
+
+    @property
+    def rating_votes(self) -> int:
+        return self.imdb_votes if self.imdb_rating is not None else self.vote_count
 
 
 @dataclass(frozen=True)
@@ -110,6 +131,13 @@ class DisambiguationResult:
     candidates: list[DisambiguationCandidate] = field(default_factory=list)
     hinted_type_failed: bool = False
     alternate_type_failed: bool = False
+
+
+def _imdb_id_from_details(data: dict) -> str | None:
+    """IMDb ID from a TMDB details payload: top level for movies, external_ids for TV."""
+    external = data.get("external_ids")
+    imdb_id = data.get("imdb_id") or (external.get("imdb_id") if isinstance(external, dict) else None)
+    return imdb_id if isinstance(imdb_id, str) and imdb_id.startswith("tt") else None
 
 
 def _normalize_for_match(s: str) -> str:
@@ -463,7 +491,8 @@ class TmdbClient:
 
     def _fetch_details(self, tmdb_id: int, content_type: str) -> dict:
         endpoint = f"tv/{tmdb_id}" if content_type == "tv" else f"movie/{tmdb_id}"
-        return self._get(endpoint, {"append_to_response": "keywords,credits"})
+        # external_ids carries the IMDb ID for TV; movie details have it at the top level.
+        return self._get(endpoint, {"append_to_response": "keywords,credits,external_ids"})
 
     def fetch_tv_series_details(self, tmdb_id: int) -> dict:
         """Fetch raw TV-series release data without using the metadata cache."""
@@ -570,7 +599,38 @@ class TmdbClient:
             vote_count=data.get("vote_count", 0),
             runtime_minutes=runtime_minutes,
             release_year=release_year,
+            imdb_id=_imdb_id_from_details(data),
         )
+
+    def _imdb_id_cache_path(self, content_type: str, tmdb_id: int) -> Path:
+        return self.cache_dir / "external_ids" / content_type / f"{tmdb_id}.json"
+
+    def get_imdb_id(self, tmdb_id: int, content_type: str) -> str | None:
+        """IMDb ID for a TMDB title, fetching TMDB's external IDs at most once.
+
+        Cached details answer for most movies. TV details fetched before
+        external_ids was appended do not, so those cost one call, cached
+        permanently. A title TMDB has no IMDb ID for is re-checked after
+        IMDB_ID_RETRY_AGE, since new releases often gain one later.
+        """
+        imdb_id = _imdb_id_from_details(self._load_cache(content_type, tmdb_id) or {})
+        if imdb_id:
+            return imdb_id
+        path = self._imdb_id_cache_path(content_type, tmdb_id)
+        try:
+            cached = json.loads(path.read_text())
+            if cached.get("imdb_id") or time.time() - path.stat().st_mtime < IMDB_ID_RETRY_AGE_SECONDS:
+                return cached.get("imdb_id") or None
+        except FileNotFoundError:
+            pass
+        except (OSError, json.JSONDecodeError, AttributeError) as exc:
+            log.warning("Corrupt IMDb ID cache file %s, refetching: %s", path, exc)
+        prefix = "tv" if content_type == "tv" else "movie"
+        data = self._get(f"{prefix}/{tmdb_id}/external_ids")
+        imdb_id = data.get("imdb_id") or None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"imdb_id": imdb_id}))
+        return imdb_id
 
     def _clean_title_variants(self, title: str) -> list[str]:
         """Generate cleaned title variants for TMDB search fallback.

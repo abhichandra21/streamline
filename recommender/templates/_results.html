@@ -72,7 +72,7 @@
       </div>
 
       <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.4rem;">
-        <span class="mono" style="font-size:0.65rem; color:var(--accent2);">★ {{ "%.1f"|format(r.vote_average) }}</span>
+        <span class="mono" style="font-size:0.65rem; color:var(--accent2);">{{ r.vote_average|rating_label(r.rating_source) }}</span>
         {% if r.genres %}
         <span style="color:var(--border);">·</span>
         <span class="mono" style="font-size:0.62rem; color:var(--muted);">{{ r.genres | join("  ·  ") }}</span>

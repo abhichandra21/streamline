@@ -503,3 +503,21 @@ def test_structured_profile_invalid_output_removes_stale_cache(tmp_path, monkeyp
 
     assert (tmp_path / "taste_profile.txt").read_text() == "profile text"
     assert not structured_path.exists()
+
+
+def test_refresh_imdb_ratings_reports_failure_without_raising(monkeypatch):
+    from recommender import setup
+    assert setup.refresh_imdb_ratings() is False
+
+
+def test_refresh_imdb_ratings_loads_the_dataset(monkeypatch):
+    import gzip
+    from recommender import imdb_ratings, setup
+
+    def download(dest):
+        with gzip.open(dest, "wt", encoding="utf-8") as f:
+            f.write("tconst\taverageRating\tnumVotes\ntt0000001\t7.0\t1000\n")
+    monkeypatch.setattr(imdb_ratings, "_download", download)
+
+    assert setup.refresh_imdb_ratings() is True
+    assert imdb_ratings.lookup(setup.config.IMDB_RATINGS_DB_PATH, ["tt0000001"])

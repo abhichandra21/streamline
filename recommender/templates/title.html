@@ -22,8 +22,8 @@
       {% if meta.original_language %}
       <span class="badge" style="background:var(--surface2); color:var(--muted);">{{ meta.original_language | upper }}</span>
       {% endif %}
-      <span class="mono" style="font-size:0.65rem; color:var(--accent2);">★ {{ "%.1f"|format(meta.vote_average) }}</span>
-      <span class="mono" style="font-size:0.58rem; color:var(--muted);">({{ meta.vote_count }})</span>
+      <span class="mono" style="font-size:0.65rem; color:var(--accent2);">{{ meta.rating|rating_label(meta.rating_source) }}</span>
+      <span class="mono" style="font-size:0.58rem; color:var(--muted);">({{ "{:,}".format(meta.rating_votes) }} votes)</span>
     </div>
 
     <h1 style="font-size:clamp(1.6rem, 3.5vw, 2.6rem); line-height:1.1; margin-bottom:0.6rem;">{{ meta.title }}</h1>
