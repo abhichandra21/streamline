@@ -161,7 +161,7 @@ def find_unwatched_titles(
     exclude: frozenset[int] = frozenset(),
     imdb_db_path: str | None = None,
 ) -> FindResults:
-    """One batch of unwatched titles.
+    """One batch of titles that are not watched, saved, or marked not interested.
 
     exclude holds TMDB ids already shown in earlier batches. TMDB may reorder
     between requests, so the cursor alone cannot stop a title being served
@@ -208,7 +208,8 @@ def find_unwatched_titles(
             if row.tmdb_id in seen:
                 continue
             seen.add(row.tmdb_id)
-            if watch_index.is_watched(row) or user_state.is_manually_watched(row):
+            if (watch_index.is_watched(row) or user_state.is_manually_watched(row)
+                    or user_state.is_in_watchlist(row) or user_state.is_dismissed(row)):
                 continue
             titles.append(row)
         offset = 0
@@ -322,10 +323,10 @@ def _find_in_language_list(
     """One batch from the saved language list, filtered and sorted locally.
 
     The cursor's offset is a position in the list filtered by the criteria
-    alone; its page part is unused. Watched titles and exclude (repeats after
-    a rebuild) are skipped while walking from the offset, not filtered out
-    first, so marking a title watched between clicks cannot shift the offset
-    past titles not yet shown. TMDB mode counts raw Discover rows the same way.
+    alone; its page part is unused. Watched, watchlisted or dismissed titles
+    and exclude (repeats after a rebuild) are skipped while walking from the
+    offset, not filtered out first, so marking a title watched or saving it
+    between clicks cannot shift the offset past titles not yet shown. TMDB mode counts raw Discover rows the same way.
     """
     base = dict(criteria=criteria, release_start=release_start, release_end=release_end)
     if criteria.keyword:
@@ -360,7 +361,9 @@ def _find_in_language_list(
         position += 1
         if (candidate.title.tmdb_id not in exclude
                 and not watch_index.is_watched(candidate.title)
-                and not user_state.is_manually_watched(candidate.title)):
+                and not user_state.is_manually_watched(candidate.title)
+                and not user_state.is_in_watchlist(candidate.title)
+                and not user_state.is_dismissed(candidate.title)):
             batch.append(candidate)
     next_cursor = f"1.{position}" if position < len(matches) else None
     rows, rate_limited = _annotate_cinema(

@@ -273,7 +273,11 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
-  .find-card:hover .find-overview { -webkit-line-clamp: unset; }
+  /* Touch screens apply :hover on the first tap. Expanding the overview there
+     moves the Save button out from under the finger and swallows the tap. */
+  @media (hover: hover) {
+    .find-card:hover .find-overview { -webkit-line-clamp: unset; }
+  }
 
   /* Per-card actions: cinema badge, where-to-watch link, Save. */
   .find-cinema {
@@ -313,8 +317,6 @@
     transition: border-color 0.2s, color 0.2s, background 0.2s;
   }
   .find-save button:hover { border-color: var(--accent); color: var(--text); background: rgba(232,93,74,0.08); }
-  .find-save.is-saved button { border-color: var(--teal); color: var(--teal); }
-  .find-save.is-saved button:hover { background: rgba(58,184,160,0.1); }
   .find-save .result-link, .find-save > span > form button { color: var(--muted); }
 
   /* Continue / end: a ruled line with a mono label set into it. */

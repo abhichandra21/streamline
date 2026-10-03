@@ -1393,16 +1393,12 @@ def _find_url(criteria: FindCriteria, cursor: str, start: int, shown: list[int])
     return url_for("find_page", **params)
 
 
-def _find_saved_ids(rows, user_state) -> set[int]:
-    """TMDB ids among the batch rows that are already on the watchlist."""
-    return {r.title.tmdb_id for r in rows if user_state.is_in_watchlist(r.title)}
-
-
 @app.route("/find")
 def find_page() -> str:
     """Highest-rated unwatched titles for a few explicit criteria, one batch at a time.
 
-    Reads the watch index and manual archive directly and talks only to TMDB.
+    Titles saved or marked not interested are left out too. Reads the watch index
+    and user state directly and talks only to TMDB.
     No LLM, no taste profile, no shared recommendation context. A cursor
     continues the list; with HTMX only the next batch is returned and appended,
     without it the same URL renders a full page.
@@ -1428,7 +1424,6 @@ def find_page() -> str:
         "error": None,
         "start": start,
         "more_url": None,
-        "saved_ids": set(),
         # Plain-form fallback for the save buttons: come back to this exact list.
         "return_to": request.full_path.rstrip("?"),
     }
@@ -1459,7 +1454,6 @@ def find_page() -> str:
             imdb_db_path=config.IMDB_RATINGS_DB_PATH,
         )
         page["results"] = results
-        page["saved_ids"] = _find_saved_ids(results.rows, user_state)
         if results.next_cursor:
             page["more_url"] = _find_url(
                 criteria, results.next_cursor, start + len(results.rows),
