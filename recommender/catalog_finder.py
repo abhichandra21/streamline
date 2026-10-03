@@ -321,9 +321,10 @@ def _find_in_language_list(
 ) -> FindResults:
     """One batch from the saved language list, filtered and sorted locally.
 
-    The cursor's offset indexes the filtered, sorted list; its page part is
-    unused. The list only changes once a day, so the order is stable between
-    batches.
+    The cursor's offset is a position in the filtered, sorted list; its page
+    part is unused. exclude only suppresses repeats (the list can be rebuilt
+    between clicks and shift titles back): it is applied while walking from
+    the offset, so it never moves the offset past titles not yet shown.
     """
     base = dict(criteria=criteria, release_start=release_start, release_end=release_end)
     if criteria.keyword:
@@ -347,16 +348,20 @@ def _find_in_language_list(
         and (genre_id is None or genre_id in t.genre_ids)
         and t.imdb.votes >= LANGUAGE_MIN_IMDB_VOTES
         and (criteria.min_rating is None or t.imdb.rating >= criteria.min_rating)
-        and t.title.tmdb_id not in exclude
         and not watch_index.is_watched(t.title)
         and not user_state.is_manually_watched(t.title)
     ]
     matches.sort(key=_language_sort_key(criteria.sort, average), reverse=True)
 
     _page, offset = parse_cursor(cursor)
-    batch = matches[offset:offset + limit]
-    end = offset + len(batch)
-    next_cursor = f"1.{end}" if end < len(matches) else None
+    batch: list[language_catalog.LanguageTitle] = []
+    position = offset
+    while position < len(matches) and len(batch) < limit:
+        candidate = matches[position]
+        position += 1
+        if candidate.title.tmdb_id not in exclude:
+            batch.append(candidate)
+    next_cursor = f"1.{position}" if position < len(matches) else None
     rows, rate_limited = _annotate_cinema(
         tmdb, [t.title for t in batch], criteria.content_type, region, cache_dir)
     rows = [replace(row, imdb=t.imdb) for row, t in zip(rows, batch)]

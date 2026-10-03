@@ -39,7 +39,8 @@ LANGUAGES = dict(LANGUAGE_OPTIONS)
 # Matches Find's longest period, so every period is a filter on one list.
 BUILD_YEARS = 10
 REBUILD_AGE = timedelta(days=1)
-# TMDB refuses Discover pages past 500.
+# TMDB refuses Discover pages past 500, so the build reads one year at a time
+# and refuses to publish if even a single year needs more.
 MAX_DISCOVER_PAGES = 500
 _LOOKUP_CONCURRENCY = 8
 _RETRIES = 5
@@ -100,6 +101,17 @@ def _parse_date(value: str | None) -> date | None:
         return None
 
 
+def _year_windows(start: date, end: date) -> list[tuple[date, date]]:
+    """Split [start, end] into consecutive, non-overlapping windows of at most a year."""
+    windows = []
+    window_start = start
+    while window_start <= end:
+        window_end = min(window_start + relativedelta(years=1) - timedelta(days=1), end)
+        windows.append((window_start, window_end))
+        window_start = window_end + timedelta(days=1)
+    return windows
+
+
 def build(
     tmdb: TmdbClient,
     language: str,
@@ -124,19 +136,26 @@ def build(
     raw_rows: list[tuple[str, dict]] = []
     seen: set[tuple[str, int]] = set()
     for content_type in ("movie", "tv"):
-        page = 1
-        while True:
-            results, total_pages = _retry_transient(
-                lambda: tmdb.discover_language_page(content_type, language, start, end, page))
-            for item in results:
-                key = (content_type, int(item["id"]))
-                # Popularity can shift between page reads; keep the first sighting.
-                if key not in seen:
-                    seen.add(key)
-                    raw_rows.append((content_type, item))
-            if not results or page >= min(total_pages, MAX_DISCOVER_PAGES):
-                break
-            page += 1
+        for window_start, window_end in _year_windows(start, end):
+            page = 1
+            while True:
+                results, total_pages = _retry_transient(
+                    lambda: tmdb.discover_language_page(
+                        content_type, language, window_start, window_end, page))
+                if total_pages > MAX_DISCOVER_PAGES:
+                    raise RuntimeError(
+                        f"{language} {content_type} titles from {window_start} to {window_end} span "
+                        f"{total_pages} TMDB pages, past TMDB's {MAX_DISCOVER_PAGES}-page limit; "
+                        "the list would be incomplete")
+                for item in results:
+                    key = (content_type, int(item["id"]))
+                    # Popularity can shift between page reads; keep the first sighting.
+                    if key not in seen:
+                        seen.add(key)
+                        raw_rows.append((content_type, item))
+                if not results or page >= total_pages:
+                    break
+                page += 1
 
     done = 0
     done_lock = threading.Lock()

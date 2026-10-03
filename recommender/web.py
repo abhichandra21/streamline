@@ -416,18 +416,21 @@ def _run_language_build(language: str, job=None) -> int:
 def _ensure_language_list_build(language: str):
     """Start or return the background build of a language list when one is due.
 
-    Returns the running Job, or None. Waits for IMDb ratings to exist first,
-    and checks again on the next request rather than an hour later, since the
-    IMDb refresh that unblocks it takes seconds.
+    Returns the running Job; the failed Job until its hourly retry, so Find
+    can say the build failed rather than that it is still running; or None.
+    Waits for IMDb ratings to exist first, and checks again on the next
+    request rather than an hour later, since the IMDb refresh that unblocks
+    it takes seconds.
     """
     global _language_job_id, _language_next_check_at
     now = time.time()
     with _language_job_lock:
-        if _language_job_id:
-            current = job_registry.get(_language_job_id)
-            if current and current.status in ("pending", "running"):
-                return current
-        if now < _language_next_check_at or not config.TMDB_API_KEY:
+        current = job_registry.get(_language_job_id) if _language_job_id else None
+        if current and current.status in ("pending", "running"):
+            return current
+        if now < _language_next_check_at:
+            return current if current and current.status == "error" else None
+        if not config.TMDB_API_KEY:
             return None
         if imdb_ratings.refreshed_at(config.IMDB_RATINGS_DB_PATH) is None:
             return None
@@ -1410,6 +1413,7 @@ def find_page() -> str:
         "language_min_votes": LANGUAGE_MIN_IMDB_VOTES,
         "local_tz": ZoneInfo("America/Chicago"),
         "language_job": None,
+        "language_retry_at": None,
         "results": None,
         "error": None,
         "start": start,
@@ -1434,6 +1438,8 @@ def find_page() -> str:
     user_state = _load_user_state()
     if criteria.language:
         page["language_job"] = _ensure_language_list_build(criteria.language)
+        page["language_retry_at"] = datetime.fromtimestamp(
+            _language_next_check_at, ZoneInfo("America/Chicago"))
 
     tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
     try:

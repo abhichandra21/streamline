@@ -21,6 +21,11 @@
   <span class="find-cap">Keyword</span>
   <div>Keyword search is not available with a language selected: the {{ dict(language_options)[criteria.language] }} list is read from a saved copy, and TMDB keywords need a live search. Clear the keyword or the language, then press Show results.</div>
 </div>
+{%- elif results.language_pending and language_job and language_job.status == 'error' %}
+<div class="find-note is-error">
+  <span class="find-cap">Build failed</span>
+  <div>The {{ dict(language_options)[criteria.language] }} list could not be built: {{ language_job.error }}. It retries automatically after {{ language_retry_at.strftime('%-I:%M %p') }} CT, or run <code>./recommend setup --refresh-imdb</code> to try now.</div>
+</div>
 {%- elif results.language_pending %}
 <div class="find-note">
   <span class="find-cap">Building</span>

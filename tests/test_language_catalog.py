@@ -36,9 +36,16 @@ class FakeTmdb:
         self.discover_calls = []
 
     def discover_language_page(self, content_type, language, start, end, page=1):
+        """Serve each scripted page only to the window holding its items' dates."""
         self.discover_calls.append((content_type, language, start, end, page))
-        total = max([p for (ct, p) in self.pages if ct == content_type], default=0)
-        return list(self.pages.get((content_type, page), [])), total
+        date_key = "first_air_date" if content_type == "tv" else "release_date"
+
+        def in_window(items):
+            return [i for i in items if start <= date.fromisoformat(i[date_key]) <= end]
+        pages = {p: in_window(items) for (ct, p), items in self.pages.items() if ct == content_type}
+        pages = {p: items for p, items in pages.items() if items}
+        total = max(pages, default=0)
+        return list(pages.get(page, [])), total
 
     def get_imdb_id(self, tmdb_id, content_type):
         pending = self.errors.get(tmdb_id)
@@ -70,8 +77,14 @@ def test_build_reads_every_page_for_movies_and_tv_and_keeps_rated_titles(tmp_pat
     assert first.imdb == ImdbRating(8.2, 151638)
     assert first.release_date == date(2026, 5, 1)
     assert first.genre_ids == frozenset({18})
-    assert [c[4] for c in tmdb.discover_calls] == [1, 2, 1]
-    assert tmdb.discover_calls[0][1:4] == ("hi", date(2016, 10, 3), TODAY)
+    reads = [(c[0], c[2], c[4]) for c in tmdb.discover_calls if c[4] > 1 or c[0] == "movie"]
+    assert ("movie", date(2025, 10, 3), 2) in reads    # second page of the window holding May 2026
+    windows = [(c[2], c[3]) for c in tmdb.discover_calls if c[0] == "movie" and c[4] == 1]
+    assert windows[0] == (date(2016, 10, 3), date(2017, 10, 2))
+    # Ten one-year windows plus today itself, since the range includes both ends.
+    assert windows[-2] == (date(2025, 10, 3), date(2026, 10, 2))
+    assert windows[-1] == (TODAY, TODAY)
+    assert len(windows) == 11
 
 
 def test_build_keeps_the_first_sighting_of_a_title_seen_on_two_pages(tmp_path, imdb_db):
@@ -152,3 +165,22 @@ def test_unreadable_list_loads_as_missing(tmp_path):
     lc.list_path(tmp_path, "hi").write_text("{not json")
     assert lc.load(tmp_path, "hi") is None
     assert lc.build_is_due(tmp_path, "hi", now=datetime.now(timezone.utc)) is True
+
+
+def test_year_windows_cover_the_range_without_gaps_or_overlap():
+    windows = lc._year_windows(date(2016, 10, 3), TODAY)
+    assert windows[0][0] == date(2016, 10, 3) and windows[-1][1] == TODAY
+    for (_, end), (next_start, _) in zip(windows, windows[1:]):
+        assert (next_start - end).days == 1
+
+
+def test_build_refuses_to_publish_when_a_year_exceeds_tmdbs_page_limit(tmp_path, imdb_db):
+    lc.build(FakeTmdb({("movie", 1): [_item(1)]}, {1: "tt0000001"}), "hi", imdb_db, tmp_path, today=TODAY)
+
+    class Huge(FakeTmdb):
+        def discover_language_page(self, content_type, language, start, end, page=1):
+            return [_item(page)], 600
+
+    with pytest.raises(RuntimeError, match="500-page limit"):
+        lc.build(Huge({}, {}), "hi", imdb_db, tmp_path, today=TODAY)
+    assert [t.title.tmdb_id for t in lc.load(tmp_path, "hi").titles] == [1]

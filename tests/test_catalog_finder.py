@@ -531,3 +531,31 @@ def test_language_rating_sort_ranks_widely_rated_titles_above_thinly_rated_ones(
 def test_weighted_rating_pulls_thin_ratings_toward_the_average():
     assert cf.weighted_rating(9.9, 5000, 6.2) == pytest.approx(7.433, abs=0.001)
     assert cf.weighted_rating(8.3, 250000, 6.2) == pytest.approx(8.219, abs=0.001)
+
+
+def test_language_show_more_with_shown_ids_continues_without_skipping(tmp_path):
+    """web.py sends the shown ids and the cursor together; the cursor must win."""
+    _write_language_list(tmp_path, [{"tmdb_id": i, "imdb_rating": 9.0 - i / 100} for i in range(1, 31)])
+
+    first = _run_language(tmp_path)
+    shown = frozenset(r.title.tmdb_id for r in first.rows)
+    second = _run_language(tmp_path, cursor=first.next_cursor, exclude=shown)
+    shown |= {r.title.tmdb_id for r in second.rows}
+    third = _run_language(tmp_path, cursor=second.next_cursor, exclude=shown)
+
+    assert [r.title.tmdb_id for r in second.rows] == list(range(11, 21))
+    assert [r.title.tmdb_id for r in third.rows] == list(range(21, 31))
+    assert third.next_cursor is None
+
+
+def test_language_show_more_does_not_repeat_a_title_pushed_forward_by_a_rebuild(tmp_path):
+    _write_language_list(tmp_path, [{"tmdb_id": i, "imdb_rating": 9.0 - i / 100} for i in range(1, 16)])
+    first = _run_language(tmp_path)
+    # A rebuild between clicks adds title 0 at the top, so title 10 (already shown)
+    # moves to position 10, where the next batch starts.
+    _write_language_list(tmp_path, [{"tmdb_id": i, "imdb_rating": 9.0 - i / 100} for i in range(0, 16)])
+
+    second = _run_language(tmp_path, cursor=first.next_cursor,
+                           exclude=frozenset(r.title.tmdb_id for r in first.rows))
+
+    assert [r.title.tmdb_id for r in second.rows] == [11, 12, 13, 14, 15]

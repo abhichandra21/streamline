@@ -3009,3 +3009,41 @@ def test_find_lede_keeps_source_names_capitalised(client, monkeypatch):
     monkeypatch.setattr(web.config, "TMDB_API_KEY", "")
     assert "ordered by TMDB rating" in client.get("/find").get_data(as_text=True)
     assert "ordered by IMDb rating" in client.get("/find?language=hi").get_data(as_text=True)
+
+
+def test_failed_language_build_is_reported_until_its_retry(monkeypatch):
+    class FailedRegistry(_RecordingRegistry):
+        def get(self, job_id):
+            return Job(id=job_id, label="x", status="error", started_at=0.0,
+                       error="ConnectionError: TMDB request failed for discover/movie")
+    registry = FailedRegistry()
+    monkeypatch.setattr(web, "job_registry", registry)
+    monkeypatch.setattr(web, "_language_job_id", "failed-job")
+    monkeypatch.setattr(web.config, "TMDB_API_KEY", "test-key")
+
+    monkeypatch.setattr(web, "_language_next_check_at", time.time() + 600)
+    job = web._ensure_language_list_build("hi")
+    assert job.status == "error" and registry.submitted == []
+
+    # Once the retry time passes, a new build starts.
+    monkeypatch.setattr(web, "_language_next_check_at", 0.0)
+    monkeypatch.setattr(web.imdb_ratings, "refreshed_at", lambda path: object())
+    monkeypatch.setattr(web.language_catalog, "build_is_due", lambda *a: True)
+    web._ensure_language_list_build("hi")
+    assert len(registry.submitted) == 1
+
+
+class TestFindLanguageFailure(FindTestSupport):
+    def test_failed_first_build_says_so_instead_of_building(self, client, find_env, monkeypatch):
+        from recommender import catalog_finder
+        monkeypatch.setattr(web, "find_unwatched_titles", catalog_finder.find_unwatched_titles)
+        failed = Job(id="j", label="x", status="error", started_at=0.0,
+                     error="ConnectionError: TMDB request failed for discover/movie")
+        monkeypatch.setattr(web, "_ensure_language_list_build", lambda lang: failed)
+        monkeypatch.setattr(web, "_language_next_check_at", 1790000000.0)
+
+        body = client.get("/find?language=hi").get_data(as_text=True)
+
+        assert "Build failed" in body and "could not be built: ConnectionError" in body
+        assert "retries automatically after" in body and "--refresh-imdb" in body
+        assert "list is being built" not in body
