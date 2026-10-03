@@ -1290,12 +1290,21 @@ _FIND_RATING_KEYS = {value: key for key, _label, value in RATING_OPTIONS}
 _FIND_SORT_KEYS = {key for key, _label in SORT_OPTIONS}
 
 
+# A language list is ordered by IMDb numbers; everything else by TMDB Discover.
+_FIND_IMDB_SORT_LABELS = {"rating": "IMDb rating", "votes": "Most IMDb votes"}
+
+
 def _find_sort_options(language: str | None) -> tuple[tuple[str, str], ...]:
     """Sort labels name the source the order comes from: TMDB Discover, or IMDb for a language list."""
     if not language:
         return SORT_OPTIONS
-    imdb_labels = {"rating": "IMDb rating", "votes": "Most IMDb votes"}
-    return tuple((key, imdb_labels.get(key, label)) for key, label in SORT_OPTIONS)
+    return tuple((key, _FIND_IMDB_SORT_LABELS.get(key, label)) for key, label in SORT_OPTIONS)
+
+
+def _find_sort_label_pairs() -> tuple[tuple[str, str, str], ...]:
+    """(key, TMDB-mode label, language-mode label), so the page can relabel
+    the sort options the moment the language changes, before Show results."""
+    return tuple((key, label, _FIND_IMDB_SORT_LABELS.get(key, label)) for key, label in SORT_OPTIONS)
 
 
 def _find_genres(content_type: str) -> list[str]:
@@ -1409,6 +1418,7 @@ def find_page() -> str:
         "period_options": PERIOD_OPTIONS,
         "rating_options": RATING_OPTIONS,
         "sort_options": _find_sort_options(criteria.language),
+        "sort_label_pairs": _find_sort_label_pairs(),
         "language_options": LANGUAGE_OPTIONS,
         "language_min_votes": LANGUAGE_MIN_IMDB_VOTES,
         "local_tz": ZoneInfo("America/Chicago"),
