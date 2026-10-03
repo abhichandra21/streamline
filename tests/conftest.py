@@ -5,7 +5,7 @@ import time
 import pytest
 
 import config
-from recommender import imdb_ratings
+from recommender import imdb_ratings, language_catalog
 from recommender.jobs import registry as job_registry
 
 
@@ -45,7 +45,19 @@ def _isolate_imdb_ratings_path(tmp_path, monkeypatch):
     # monkeypatch restores the real downloader, and a job that reached
     # _download after that would fetch the live dataset.
     deadline = time.monotonic() + 10
-    while any(j.label == imdb_ratings.REFRESH_JOB_LABEL for j in job_registry.running_jobs()):
+    background_labels = {imdb_ratings.REFRESH_JOB_LABEL, language_catalog.BUILD_JOB_LABEL}
+    while any(j.label in background_labels for j in job_registry.running_jobs()):
         if time.monotonic() > deadline:
-            raise RuntimeError("IMDb refresh job did not finish within 10 seconds")
+            raise RuntimeError("IMDb background job did not finish within 10 seconds")
         time.sleep(0.01)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_find_cache_dir(tmp_path, monkeypatch):
+    """Point FIND_CACHE_DIR at a per-test directory.
+
+    The saved language lists live there. Without this, a setup test would see
+    the user's real list and, once it was a day old, rebuild it from live TMDB.
+    The path keeps its real suffix for tests that check the configured name.
+    """
+    monkeypatch.setattr(config, "FIND_CACHE_DIR", str(tmp_path / "recommender/cache/find"))

@@ -940,6 +940,32 @@ class TmdbClient:
             total_pages=int(data.get("total_pages") or 1),
         )
 
+    def discover_language_page(
+        self,
+        content_type: str,
+        language: str,
+        release_start: date,
+        release_end: date,
+        page: int = 1,
+    ) -> tuple[list[dict], int]:
+        """One raw Discover page of titles originally in `language`, most popular first.
+
+        No vote floor: for non-English titles TMDB's own votes are too thin to
+        filter on, so callers filter on IMDb votes instead. Returns the raw
+        result rows (which carry release dates, popularity, and genre_ids that
+        CatalogTitle drops) and TMDB's total page count.
+        """
+        is_tv = content_type == "tv"
+        date_field = "first_air_date" if is_tv else "primary_release_date"
+        data = self._get(f"discover/{'tv' if is_tv else 'movie'}", params={
+            "with_original_language": language,
+            "sort_by": "popularity.desc",
+            f"{date_field}.gte": release_start.isoformat(),
+            f"{date_field}.lte": release_end.isoformat(),
+            "page": page,
+        })
+        return list(data.get("results", [])), int(data.get("total_pages") or 0)
+
     @staticmethod
     def _parse_catalog_row(item: dict, content_type: str) -> CatalogTitle:
         is_tv = content_type == "tv"

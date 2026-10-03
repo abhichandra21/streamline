@@ -38,7 +38,7 @@ python3 -m pytest tests/test_query_engine.py -v
 ./recommend setup --refresh-data               # re-fetch TMDB + rebuild all
 ./recommend setup --refresh-profile            # rebuild taste profile only
 ./recommend setup --ingest-only                # validate configured provider zips
-./recommend setup --refresh-imdb               # re-download IMDb ratings only
+./recommend setup --refresh-imdb               # re-download IMDb ratings, rebuild Find's language lists
 ./recommend --debug "spy thriller"             # full pipeline trace
 ./recommend --provider gemini "spy thriller"   # use Gemini instead of default
 ./recommend --liked "Title"                    # feedback
@@ -74,6 +74,7 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `recommender/ingestion/` — Platform parsers. Manual titles use `datetime.now()` for competitive scoring.
 - `recommender/tmdb_client.py` — Metadata lookup with guessit title classification, title cleanup fallback (strips suffixes, tries alternate content type), discover endpoint (page-limited), watch providers. `get_imdb_id()` maps a TMDB title to its IMDb ID.
 - `recommender/imdb_ratings.py` — Local copy of IMDb's daily `title.ratings.tsv.gz` in SQLite. TMDB stays the catalogue and identity; IMDb only supplies rating and vote count. Every displayed, filtered, or ranked rating prefers IMDb and falls back to TMDB (`TmdbMetadata.rating` / `rating_source`). Refreshed by setup and, in the web UI, by a background job once the copy is a day old.
+- `recommender/language_catalog.py` — Find's original-language lists (Hindi). A background build reads every TMDB Discover page for the language over 10 years with no TMDB vote floor, attaches IMDb ratings, and saves the list; Find then filters (period, genre, `LANGUAGE_MIN_IMDB_VOTES`, IMDb rating) and sorts it locally. Built on first use from the Find page or by `--refresh-imdb`, then rebuilt daily.
 - `recommender/watch_index.py` — Content-type-aware dual-key dedup (TMDB ID + `(normalized_title, content_type)`). Post-build rapidfuzz dedup. Stale cache cleanup.
 - `recommender/enricher.py` — LLM enrichment (role=fast), 30s timeout, rate limit retry. Only caches successful responses. Identity-keyed index (`content_type/tmdb_id` or `unknown/slug`).
 - `recommender/taste_profile_builder.py` — Batched profile builder (200 titles/batch, rate limit retry, merge pass). No top-N limit.
@@ -96,7 +97,7 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `UsageStats` — accumulated token counts and cost per query
 
 ### Cache Layout
-All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ identity-keyed index.json), `providers/`, `find/` (Find page: US now-playing ids on a 6h TTL), `tmdb/external_ids/` (TMDB-to-IMDb ID map), `imdb_ratings.db` (IMDb ratings copy), `watch_index.json`, `taste_profile.txt` (+ timestamped backups), `feedback.json`. User-managed state (watchlist, ratings, manual archive) and query history live in the same SQLite database as imported watch events (`events.db`). A pre-SQLite `query_history.json` is imported once and kept as `query_history.json.migrated`.
+All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ identity-keyed index.json), `providers/`, `find/` (Find page: US now-playing ids on a 6h TTL, and `language_<code>.json` IMDb-rated language lists), `tmdb/external_ids/` (TMDB-to-IMDb ID map), `imdb_ratings.db` (IMDb ratings copy), `watch_index.json`, `taste_profile.txt` (+ timestamped backups), `feedback.json`. User-managed state (watchlist, ratings, manual archive) and query history live in the same SQLite database as imported watch events (`events.db`). A pre-SQLite `query_history.json` is imported once and kept as `query_history.json.migrated`.
 
 ## Configuration
 

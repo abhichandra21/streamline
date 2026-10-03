@@ -379,17 +379,24 @@
     <div class="find-kicker">Catalogue · unwatched only</div>
     <h1 class="find-h1">Find something<br>you <em>haven't</em> seen.</h1>
     <p class="find-lede">
-      {%- set lede_sort = dict(sort_options).get(criteria.sort, 'Rating') | lower %}
+      {%- set lede_sort = dict(sort_options).get(criteria.sort, 'Rating') | lower | replace('imdb', 'IMDb') | replace('tmdb', 'TMDB') %}
+      {%- if criteria.language %}
+      {{ dict(language_options)[criteria.language] }} {{ 'TV series' if criteria.content_type == 'tv' else 'movies' }} you have not watched, rated by IMDb and ordered by {{ lede_sort }}.
+      Titles need at least {{ "{:,}".format(language_min_votes) }} IMDb votes{% if criteria.sort == 'rating' %}, and titles rated by more people rank higher{% endif %}.
+      {%- if results is not none and results.list_built_at %} List updated {{ results.list_built_at.astimezone(local_tz).date().isoformat() | human_date }}.{% endif %}
+      {%- else %}
       {{ 'TV series' if criteria.content_type == 'tv' else 'Movies' }} you have not watched, straight from TMDB and ordered by {{ lede_sort }}.
       Titles need at least 100 TMDB votes. Keep scrolling; the list continues as far as TMDB does.
+      {%- endif %}
     </p>
   </div>
-  {%- if results is not none and not results.keyword_missing %}
+  {%- if results is not none and not results.keyword_missing and not results.keyword_unsupported and not results.language_pending %}
   <div class="find-window">
     <b>{{ results.release_start.strftime('%d %b %Y') }}</b> to <b>{{ results.release_end.strftime('%d %b %Y') }}</b><br>
     {%- if results.keyword_name %}keyword <b>{{ results.keyword_name }}</b><br>{% endif %}
     {%- if criteria.genre %}genre <b>{{ criteria.genre }}</b><br>{% endif %}
-    {%- if criteria.min_rating %}TMDB rated <b>{{ criteria.min_rating }}+</b><br>{% endif %}
+    {%- if criteria.language %}language <b>{{ dict(language_options)[criteria.language] }}</b><br>{% endif %}
+    {%- if criteria.min_rating %}{{ 'IMDb' if criteria.language else 'TMDB' }} rated <b>{{ criteria.min_rating }}+</b><br>{% endif %}
   </div>
   {%- endif %}
 </section>
@@ -402,6 +409,16 @@
       <label><input type="radio" name="type" value="tv" {% if criteria.content_type == 'tv' %}checked{% endif %}>TV</label>
     </div>
   </div>
+
+  <label class="find-field">
+    <span class="find-cap">Original language</span>
+    <select name="language">
+      <option value="" {% if not criteria.language %}selected{% endif %}>Any</option>
+      {%- for code, label in language_options %}
+      <option value="{{ code }}" {% if criteria.language == code %}selected{% endif %}>{{ label }}</option>
+      {%- endfor %}
+    </select>
+  </label>
 
   <label class="find-field">
     <span class="find-cap">Released in the last</span>
@@ -428,7 +445,7 @@
   </label>
 
   <label class="find-field">
-    <span class="find-cap">Minimum TMDB rating</span>
+    <span class="find-cap">Minimum {{ 'IMDb' if criteria.language else 'TMDB' }} rating</span>
     <select name="rating">
       {%- for key, label, value in rating_options %}
       <option value="{{ key }}" {% if criteria.min_rating == value %}selected{% endif %}>{{ label }}</option>

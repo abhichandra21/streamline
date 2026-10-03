@@ -26,6 +26,7 @@ from markupsafe import Markup, escape
 import config
 from recommender import history as query_history
 from recommender import imdb_ratings
+from recommender import language_catalog
 from recommender import show_tracker
 from recommender import user_store
 from recommender import watch_index as wi
@@ -40,8 +41,10 @@ from recommender import wizard
 from recommender import wizard_flow
 from recommender.structured_profile import load_structured_profile
 from recommender.tmdb_client import MOVIE_GENRE_IDS, TV_GENRE_IDS, TmdbClient, TmdbRateLimitError
+from recommender.language_catalog import LANGUAGE_OPTIONS, LANGUAGES
 from recommender.catalog_finder import (
-    FindCriteria, PERIOD_OPTIONS, RATING_OPTIONS, SORT_OPTIONS, find_unwatched_titles,
+    LANGUAGE_MIN_IMDB_VOTES, FindCriteria, PERIOD_OPTIONS, RATING_OPTIONS, SORT_OPTIONS,
+    find_unwatched_titles,
 )
 
 def _events_loader_fallback() -> list:
@@ -77,6 +80,12 @@ IMDB_REFRESH_CHECK_SECONDS = 3600
 _imdb_job_id: str | None = None
 _imdb_next_check_at = 0.0
 _imdb_job_lock = threading.Lock()
+
+# One language-list build at a time, started when Find asks for a language
+# whose saved list is missing or a day old. Same hourly check as IMDb ratings.
+_language_job_id: str | None = None
+_language_next_check_at = 0.0
+_language_job_lock = threading.Lock()
 
 # ── User store initialization ─────────────────────────────────────────────────
 # Run once per process. ensure_user_store does IF-NOT-EXISTS DDL + migration
@@ -391,6 +400,48 @@ def _ensure_imdb_refresh() -> None:
             imdb_ratings.refresh, config.IMDB_RATINGS_DB_PATH,
             label=imdb_ratings.REFRESH_JOB_LABEL,
         )
+
+
+def _run_language_build(language: str, job=None) -> int:
+    client = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+
+    def report(completed: int, total: int) -> None:
+        if job is not None:
+            job.progress = (completed, total)
+
+    return language_catalog.build(
+        client, language, config.IMDB_RATINGS_DB_PATH, config.FIND_CACHE_DIR, progress=report)
+
+
+def _ensure_language_list_build(language: str):
+    """Start or return the background build of a language list when one is due.
+
+    Returns the running Job; the failed Job until its hourly retry, so Find
+    can say the build failed rather than that it is still running; or None.
+    Waits for IMDb ratings to exist first, and checks again on the next
+    request rather than an hour later, since the IMDb refresh that unblocks
+    it takes seconds.
+    """
+    global _language_job_id, _language_next_check_at
+    now = time.time()
+    with _language_job_lock:
+        current = job_registry.get(_language_job_id) if _language_job_id else None
+        if current and current.status in ("pending", "running"):
+            return current
+        if now < _language_next_check_at:
+            return current if current and current.status == "error" else None
+        if not config.TMDB_API_KEY:
+            return None
+        if imdb_ratings.refreshed_at(config.IMDB_RATINGS_DB_PATH) is None:
+            return None
+        _language_next_check_at = now + IMDB_REFRESH_CHECK_SECONDS
+        if not language_catalog.build_is_due(config.FIND_CACHE_DIR, language):
+            return None
+        _language_job_id = job_registry.submit(
+            _run_language_build, language,
+            label=language_catalog.BUILD_JOB_LABEL, pass_job=True,
+        )
+        return job_registry.get(_language_job_id)
 
 
 def _ensure_show_refresh(archive_entries: list[dict], tracking_rows: list[dict]) -> str | None:
@@ -1239,6 +1290,14 @@ _FIND_RATING_KEYS = {value: key for key, _label, value in RATING_OPTIONS}
 _FIND_SORT_KEYS = {key for key, _label in SORT_OPTIONS}
 
 
+def _find_sort_options(language: str | None) -> tuple[tuple[str, str], ...]:
+    """Sort labels name the source the order comes from: TMDB Discover, or IMDb for a language list."""
+    if not language:
+        return SORT_OPTIONS
+    imdb_labels = {"rating": "IMDb rating", "votes": "Most IMDb votes"}
+    return tuple((key, imdb_labels.get(key, label)) for key, label in SORT_OPTIONS)
+
+
 def _find_genres(content_type: str) -> list[str]:
     genre_map = TV_GENRE_IDS if content_type == "tv" else MOVIE_GENRE_IDS
     return sorted(genre_map)
@@ -1267,8 +1326,12 @@ def _find_criteria(args) -> FindCriteria:
     if sort not in _FIND_SORT_KEYS:
         sort = "rating"
 
+    language = args.get("language") or None
+    if language not in LANGUAGES:
+        language = None
+
     return FindCriteria(content_type=content_type, period=period, genre=genre,
-                        keyword=keyword, min_rating=min_rating, sort=sort)
+                        keyword=keyword, min_rating=min_rating, sort=sort, language=language)
 
 
 def _find_start(args) -> int:
@@ -1313,6 +1376,7 @@ def _find_url(criteria: FindCriteria, cursor: str, start: int, shown: list[int])
         "keyword": criteria.keyword or "",
         "rating": _FIND_RATING_KEYS.get(criteria.min_rating, "any"),
         "sort": criteria.sort,
+        "language": criteria.language or "",
         "cursor": cursor,
         "start": start,
         "shown": ",".join(str(i) for i in shown[-FIND_SHOWN_MAX:]),
@@ -1344,7 +1408,12 @@ def find_page() -> str:
         "genres": _find_genres(criteria.content_type),
         "period_options": PERIOD_OPTIONS,
         "rating_options": RATING_OPTIONS,
-        "sort_options": SORT_OPTIONS,
+        "sort_options": _find_sort_options(criteria.language),
+        "language_options": LANGUAGE_OPTIONS,
+        "language_min_votes": LANGUAGE_MIN_IMDB_VOTES,
+        "local_tz": ZoneInfo("America/Chicago"),
+        "language_job": None,
+        "language_retry_at": None,
         "results": None,
         "error": None,
         "start": start,
@@ -1367,6 +1436,10 @@ def find_page() -> str:
         page["error"] = "Watch index is missing or unreadable. Run ./recommend setup, then reload this page."
         return _find_response(cursor, page)
     user_state = _load_user_state()
+    if criteria.language:
+        page["language_job"] = _ensure_language_list_build(criteria.language)
+        page["language_retry_at"] = datetime.fromtimestamp(
+            _language_next_check_at, ZoneInfo("America/Chicago"))
 
     tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
     try:

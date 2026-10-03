@@ -402,3 +402,171 @@ def test_rows_have_no_imdb_ratings_without_a_local_copy(tmp_path):
     results = _run(tmdb, imdb_db_path=str(tmp_path / "missing.db"))
 
     assert results.rows[0].imdb is None
+
+
+# ── Language lists (saved, IMDb-rated) ────────────────────────────────────────
+def _write_language_list(cache_dir, titles, built_at="2026-09-12T06:00:00+00:00"):
+    import json
+    from recommender import language_catalog
+    rows = []
+    for t in titles:
+        row = {"content_type": "movie", "title": f"Title {t['tmdb_id']}", "year": 2026,
+               "poster_path": None, "overview": "", "vote_average": 6.0, "vote_count": 3,
+               "release_date": "2026-06-01", "popularity": 1.0, "genre_ids": [18],
+               "imdb_id": f"tt{t['tmdb_id']:07d}", "imdb_rating": 7.0, "imdb_votes": 5000}
+        row.update(t)
+        rows.append(row)
+    language_catalog.list_path(cache_dir, "hi").write_text(
+        json.dumps({"language": "hi", "built_at": built_at, "titles": rows}))
+
+
+def _run_language(tmp_path, criteria=None, **kwargs):
+    criteria = criteria or FindCriteria(language="hi")
+    return find_unwatched_titles(
+        kwargs.pop("tmdb", FakeTmdb({})), kwargs.pop("watch_index", FakeWatchIndex()),
+        kwargs.pop("user_state", FakeUserState()), criteria,
+        cache_dir=str(tmp_path), today=TODAY, **kwargs,
+    )
+
+
+def test_language_mode_sorts_by_imdb_rating_and_never_calls_discover(tmp_path):
+    _write_language_list(tmp_path, [
+        {"tmdb_id": 1, "imdb_rating": 6.5}, {"tmdb_id": 2, "imdb_rating": 8.2},
+        {"tmdb_id": 3, "imdb_rating": 7.4},
+    ])
+    tmdb = FakeTmdb({})
+
+    results = _run_language(tmp_path, tmdb=tmdb)
+
+    assert [r.title.tmdb_id for r in results.rows] == [2, 3, 1]
+    assert results.rows[0].imdb.rating == 8.2
+    assert tmdb.discover_calls == []
+    assert results.list_built_at is not None and results.catalog_exhausted
+
+
+def test_language_mode_filters_type_period_genre_votes_rating_and_watched(tmp_path):
+    _write_language_list(tmp_path, [
+        {"tmdb_id": 1},                                   # kept
+        {"tmdb_id": 2, "content_type": "tv", "first_air_date": "2026-06-01"},
+        {"tmdb_id": 3, "release_date": "2025-01-01"},     # outside 6 months
+        {"tmdb_id": 4, "genre_ids": [35]},                # not drama
+        {"tmdb_id": 5, "imdb_votes": 499},                # below the IMDb vote floor
+        {"tmdb_id": 6, "imdb_rating": 6.9},               # below min rating
+        {"tmdb_id": 7},                                   # watched
+        {"tmdb_id": 8},                                   # manual archive
+        {"tmdb_id": 9, "release_date": None},             # no date: cannot place in a period
+    ])
+    criteria = FindCriteria(language="hi", genre="drama", min_rating=7.0)
+
+    results = _run_language(tmp_path, criteria, watch_index=FakeWatchIndex({7}),
+                            user_state=FakeUserState({8}))
+
+    assert [r.title.tmdb_id for r in results.rows] == [1]
+
+
+def test_language_mode_other_sorts(tmp_path):
+    _write_language_list(tmp_path, [
+        {"tmdb_id": 1, "release_date": "2026-05-01", "popularity": 9.0, "imdb_votes": 3000},
+        {"tmdb_id": 2, "release_date": "2026-08-01", "popularity": 2.0, "imdb_votes": 90000},
+        {"tmdb_id": 3, "release_date": "2026-07-01", "popularity": 5.0, "imdb_votes": 8000},
+    ])
+
+    def order(sort):
+        return [r.title.tmdb_id for r in _run_language(tmp_path, FindCriteria(language="hi", sort=sort)).rows]
+
+    assert order("newest") == [2, 3, 1]
+    assert order("popular") == [1, 3, 2]
+    assert order("votes") == [2, 3, 1]
+
+
+def test_language_mode_pages_with_an_offset_cursor(tmp_path):
+    _write_language_list(tmp_path, [{"tmdb_id": i, "imdb_rating": 9.0 - i / 10} for i in range(1, 26)])
+
+    first = _run_language(tmp_path)
+    second = _run_language(tmp_path, cursor=first.next_cursor)
+    third = _run_language(tmp_path, cursor=second.next_cursor)
+
+    assert [r.title.tmdb_id for r in first.rows] == list(range(1, 11))
+    assert [r.title.tmdb_id for r in second.rows] == list(range(11, 21))
+    assert [r.title.tmdb_id for r in third.rows] == list(range(21, 26))
+    assert third.next_cursor is None and third.catalog_exhausted
+
+
+def test_language_mode_marks_titles_in_theaters(tmp_path):
+    _write_language_list(tmp_path, [{"tmdb_id": 1}, {"tmdb_id": 2}])
+
+    results = _run_language(tmp_path, tmdb=FakeTmdb({}, now_playing={2}))
+
+    assert {r.title.tmdb_id: r.in_theaters for r in results.rows} == {1: False, 2: True}
+
+
+def test_language_mode_without_a_built_list_is_pending(tmp_path):
+    results = _run_language(tmp_path)
+
+    assert results.language_pending and results.rows == ()
+
+
+def test_language_mode_refuses_a_keyword_rather_than_ignoring_it(tmp_path):
+    _write_language_list(tmp_path, [{"tmdb_id": 1}])
+
+    results = _run_language(tmp_path, FindCriteria(language="hi", keyword="heist"))
+
+    assert results.keyword_unsupported and results.rows == ()
+
+
+def test_language_rating_sort_ranks_widely_rated_titles_above_thinly_rated_ones(tmp_path):
+    _write_language_list(tmp_path, [
+        {"tmdb_id": 1, "imdb_rating": 9.9, "imdb_votes": 5013},     # few fans, near-perfect
+        {"tmdb_id": 2, "imdb_rating": 8.3, "imdb_votes": 248733},   # Dangal-like
+        {"tmdb_id": 3, "imdb_rating": 6.0, "imdb_votes": 20000},
+        {"tmdb_id": 4, "imdb_rating": 5.0, "imdb_votes": 20000},
+    ])
+
+    results = _run_language(tmp_path)
+
+    assert [r.title.tmdb_id for r in results.rows] == [2, 1, 3, 4]
+    assert results.rows[1].imdb.rating == 9.9   # the shown rating is IMDb's own
+
+
+def test_weighted_rating_pulls_thin_ratings_toward_the_average():
+    assert cf.weighted_rating(9.9, 5000, 6.2) == pytest.approx(7.433, abs=0.001)
+    assert cf.weighted_rating(8.3, 250000, 6.2) == pytest.approx(8.219, abs=0.001)
+
+
+def test_language_show_more_with_shown_ids_continues_without_skipping(tmp_path):
+    """web.py sends the shown ids and the cursor together; the cursor must win."""
+    _write_language_list(tmp_path, [{"tmdb_id": i, "imdb_rating": 9.0 - i / 100} for i in range(1, 31)])
+
+    first = _run_language(tmp_path)
+    shown = frozenset(r.title.tmdb_id for r in first.rows)
+    second = _run_language(tmp_path, cursor=first.next_cursor, exclude=shown)
+    shown |= {r.title.tmdb_id for r in second.rows}
+    third = _run_language(tmp_path, cursor=second.next_cursor, exclude=shown)
+
+    assert [r.title.tmdb_id for r in second.rows] == list(range(11, 21))
+    assert [r.title.tmdb_id for r in third.rows] == list(range(21, 31))
+    assert third.next_cursor is None
+
+
+def test_language_show_more_does_not_repeat_a_title_pushed_forward_by_a_rebuild(tmp_path):
+    _write_language_list(tmp_path, [{"tmdb_id": i, "imdb_rating": 9.0 - i / 100} for i in range(1, 16)])
+    first = _run_language(tmp_path)
+    # A rebuild between clicks adds title 0 at the top, so title 10 (already shown)
+    # moves to position 10, where the next batch starts.
+    _write_language_list(tmp_path, [{"tmdb_id": i, "imdb_rating": 9.0 - i / 100} for i in range(0, 16)])
+
+    second = _run_language(tmp_path, cursor=first.next_cursor,
+                           exclude=frozenset(r.title.tmdb_id for r in first.rows))
+
+    assert [r.title.tmdb_id for r in second.rows] == [11, 12, 13, 14, 15]
+
+
+def test_language_show_more_survives_a_title_marked_watched_between_clicks(tmp_path):
+    _write_language_list(tmp_path, [{"tmdb_id": i, "imdb_rating": 9.0 - i / 100} for i in range(1, 16)])
+    first = _run_language(tmp_path)
+
+    second = _run_language(tmp_path, cursor=first.next_cursor,
+                           exclude=frozenset(r.title.tmdb_id for r in first.rows),
+                           watch_index=FakeWatchIndex({1}))
+
+    assert [r.title.tmdb_id for r in second.rows] == [11, 12, 13, 14, 15]
