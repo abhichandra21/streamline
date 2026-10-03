@@ -16,15 +16,23 @@ from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
 
-from recommender import imdb_ratings
+from recommender import imdb_ratings, language_catalog
 from recommender.imdb_ratings import ImdbRating
-from recommender.tmdb_client import CatalogTitle, TmdbClient, TmdbRateLimitError
+from recommender.tmdb_client import MOVIE_GENRE_IDS, TV_GENRE_IDS, CatalogTitle, TmdbClient, TmdbRateLimitError
 
 log = logging.getLogger("recommender.catalog_finder")
 
 LOCAL_TZ = ZoneInfo("America/Chicago")
 DEFAULT_PERIOD = "6m"
 DEFAULT_LIMIT = 10
+# With a language selected, TMDB's votes are too thin to trust, so a title needs
+# this many IMDb votes instead. Kept low so new releases appear within days;
+# the rating sort below, not this floor, keeps thinly rated titles off the top.
+LANGUAGE_MIN_IMDB_VOTES = 500
+# The rating sort ranks by IMDb's Top 250 weighted rating: each title's rating
+# is blended with the list average as if it had this many extra votes at that
+# average. A 9.9 from 5,000 votes then ranks below an 8.3 from 250,000.
+LANGUAGE_RATING_PRIOR_VOTES = 10000
 
 # Cursor = "<tmdb_page>.<row offset within that page>", both non-negative, page >= 1.
 _CURSOR_RE = re.compile(r"^([1-9]\d*)\.(\d+)$")
@@ -74,6 +82,8 @@ class FindCriteria:
     keyword: str | None = None
     min_rating: float | None = None
     sort: str = DEFAULT_SORT
+    # An original-language code from language_catalog.LANGUAGES, or None for TMDB Discover.
+    language: str | None = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +111,12 @@ class FindResults:
     catalog_exhausted: bool = False
     # Where the next batch starts, or None when TMDB has nothing more.
     next_cursor: str | None = None
+    # Language mode only: the saved list has not been built yet. No rows.
+    language_pending: bool = False
+    # Language mode only: a keyword was given, which the saved list cannot answer. No rows.
+    keyword_unsupported: bool = False
+    # Language mode only: when the saved list was built.
+    list_built_at: datetime | None = None
 
 
 def chicago_today() -> date:
@@ -153,6 +169,11 @@ def find_unwatched_titles(
     FIND_SHOWN_MAX for the bound on that window).
     """
     release_start, release_end = release_window(criteria.period, today)
+    if criteria.language:
+        return _find_in_language_list(
+            tmdb, watch_index, user_state, criteria, cache_dir, region,
+            release_start, release_end, limit, cursor, exclude,
+        )
 
     keyword_id: int | None = None
     keyword_name: str | None = None
@@ -268,3 +289,82 @@ def _annotate_imdb(tmdb: TmdbClient, rows: list[FindRow], db_path: str) -> list[
         replace(row, imdb=found.get(imdb_id)) if imdb_id else row
         for row, imdb_id in zip(rows, imdb_ids)
     ]
+
+
+def weighted_rating(rating: float, votes: int, average: float,
+                    prior_votes: int = LANGUAGE_RATING_PRIOR_VOTES) -> float:
+    return (votes * rating + prior_votes * average) / (votes + prior_votes)
+
+
+def _language_sort_key(sort: str, average: float):
+    if sort == "newest":
+        return lambda t: (t.release_date or date.min, t.imdb.votes)
+    if sort == "popular":
+        return lambda t: (t.popularity, t.imdb.votes)
+    if sort == "votes":
+        return lambda t: (t.imdb.votes, t.imdb.rating)
+    return lambda t: (weighted_rating(t.imdb.rating, t.imdb.votes, average), t.imdb.votes)
+
+
+def _find_in_language_list(
+    tmdb: TmdbClient,
+    watch_index,
+    user_state,
+    criteria: FindCriteria,
+    cache_dir: str,
+    region: str,
+    release_start: date,
+    release_end: date,
+    limit: int,
+    cursor: str | None,
+    exclude: frozenset[int],
+) -> FindResults:
+    """One batch from the saved language list, filtered and sorted locally.
+
+    The cursor's offset indexes the filtered, sorted list; its page part is
+    unused. The list only changes once a day, so the order is stable between
+    batches.
+    """
+    base = dict(criteria=criteria, release_start=release_start, release_end=release_end)
+    if criteria.keyword:
+        # Never silently drop the keyword: that would answer a different question.
+        return FindResults(**base, keyword_unsupported=True)
+    saved = language_catalog.load(cache_dir, criteria.language)
+    if saved is None:
+        return FindResults(**base, language_pending=True)
+
+    # The average comes from every listed title of this type, not just the
+    # filtered ones, so a title's place does not shift when a filter changes.
+    eligible = [t for t in saved.titles
+                if t.title.content_type == criteria.content_type and t.imdb.votes >= LANGUAGE_MIN_IMDB_VOTES]
+    average = sum(t.imdb.rating for t in eligible) / len(eligible) if eligible else 0.0
+    genre_map = TV_GENRE_IDS if criteria.content_type == "tv" else MOVIE_GENRE_IDS
+    genre_id = genre_map.get(criteria.genre) if criteria.genre else None
+    matches = [
+        t for t in saved.titles
+        if t.title.content_type == criteria.content_type
+        and t.release_date is not None and release_start <= t.release_date <= release_end
+        and (genre_id is None or genre_id in t.genre_ids)
+        and t.imdb.votes >= LANGUAGE_MIN_IMDB_VOTES
+        and (criteria.min_rating is None or t.imdb.rating >= criteria.min_rating)
+        and t.title.tmdb_id not in exclude
+        and not watch_index.is_watched(t.title)
+        and not user_state.is_manually_watched(t.title)
+    ]
+    matches.sort(key=_language_sort_key(criteria.sort, average), reverse=True)
+
+    _page, offset = parse_cursor(cursor)
+    batch = matches[offset:offset + limit]
+    end = offset + len(batch)
+    next_cursor = f"1.{end}" if end < len(matches) else None
+    rows, rate_limited = _annotate_cinema(
+        tmdb, [t.title for t in batch], criteria.content_type, region, cache_dir)
+    rows = [replace(row, imdb=t.imdb) for row, t in zip(rows, batch)]
+    return FindResults(
+        **base,
+        rows=tuple(rows),
+        now_playing_rate_limited=rate_limited,
+        catalog_exhausted=next_cursor is None,
+        next_cursor=next_cursor,
+        list_built_at=saved.built_at,
+    )

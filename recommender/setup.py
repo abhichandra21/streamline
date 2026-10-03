@@ -28,7 +28,7 @@ from recommender.ingestion.apple_tv import parse as parse_apple_tv
 from recommender.ingestion.disney import parse as parse_disney
 from recommender.ingestion.hbo import parse as parse_hbo
 from recommender.ingestion.manual import parse as parse_manual
-from recommender import imdb_ratings
+from recommender import imdb_ratings, language_catalog
 from recommender.signals import compute_scores
 from recommender.tmdb_client import TmdbClient, TmdbMetadata, MatchHints
 from recommender.enricher import (
@@ -757,6 +757,34 @@ def refresh_imdb_ratings() -> bool:
     return True
 
 
+def refresh_language_lists(only_existing: bool = False) -> bool:
+    """Rebuild Find's IMDb-rated language lists from TMDB.
+
+    With only_existing, rebuild just the lists already built once that are a
+    day old, so a plain setup run does not start a first build nobody asked
+    for. A failure warns and keeps the previous list.
+    """
+    if not config.TMDB_API_KEY:
+        console.print("  Language lists: [yellow]skipped[/yellow] (TMDB_API_KEY not set)")
+        return False
+    ok = True
+    tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+    for code, label in language_catalog.LANGUAGE_OPTIONS:
+        saved = language_catalog.load(config.FIND_CACHE_DIR, code)
+        if only_existing and (saved is None or not language_catalog.build_is_due(config.FIND_CACHE_DIR, code)):
+            continue
+        console.print(f"\nBuilding the {label} list for Find (the first build takes a few minutes)...")
+        try:
+            count = language_catalog.build(tmdb, code, config.IMDB_RATINGS_DB_PATH, config.FIND_CACHE_DIR)
+        except Exception as exc:
+            console.print(f"  {label} list: [yellow]not rebuilt[/yellow] ({type(exc).__name__}: {exc}). "
+                          "Find keeps the previous list, if any.")
+            ok = False
+            continue
+        console.print(f"  {label} list: [green]ok[/green] {count:,} IMDb-rated titles")
+    return ok
+
+
 def run_ingest_only() -> None:
     """Strict preflight validation of configured provider zips, persist to SQLite."""
     ingest_providers(fail_on_error=True)
@@ -1036,6 +1064,7 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         refresh_imdb_ratings()
     else:
         console.print("\nIMDb ratings are less than a day old, skipping (use --refresh-imdb to force).")
+    refresh_language_lists(only_existing=True)
 
     console.print("\n[green]Setup complete![/green]")
 
@@ -1049,7 +1078,7 @@ if __name__ == "__main__":
     parser.add_argument("--ingest-only", action="store_true",
                         help="Load and report on ingested data without TMDB or LLM calls")
     parser.add_argument("--refresh-imdb", action="store_true",
-                        help="Only re-download IMDb ratings, then exit")
+                        help="Only re-download IMDb ratings and rebuild Find's language lists, then exit")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
     parser.add_argument("--provider", choices=["anthropic", "gemini", "openai", "local"],
@@ -1060,7 +1089,9 @@ if __name__ == "__main__":
     from recommender.log import setup_logging
     setup_logging(level_override="DEBUG" if args.debug else None)
     if args.refresh_imdb:
-        sys.exit(0 if refresh_imdb_ratings() else 1)
+        ratings_ok = refresh_imdb_ratings()
+        lists_ok = refresh_language_lists() if ratings_ok else False
+        sys.exit(0 if ratings_ok and lists_ok else 1)
     elif args.ingest_only:
         run_ingest_only()
     else:

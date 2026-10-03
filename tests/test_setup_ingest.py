@@ -521,3 +521,42 @@ def test_refresh_imdb_ratings_loads_the_dataset(monkeypatch):
 
     assert setup.refresh_imdb_ratings() is True
     assert imdb_ratings.lookup(setup.config.IMDB_RATINGS_DB_PATH, ["tt0000001"])
+
+
+def test_refresh_language_lists_builds_each_language(monkeypatch):
+    from recommender import language_catalog, setup
+    monkeypatch.setattr(setup.config, "TMDB_API_KEY", "test-key")
+    built = []
+    monkeypatch.setattr(language_catalog, "build",
+                        lambda tmdb, code, *a, **k: built.append(code) or 5)
+
+    assert setup.refresh_language_lists() is True
+    assert built == [code for code, _ in language_catalog.LANGUAGE_OPTIONS]
+
+
+def test_refresh_language_lists_only_existing_skips_lists_never_built(monkeypatch, tmp_path):
+    from recommender import language_catalog, setup
+    monkeypatch.setattr(setup.config, "TMDB_API_KEY", "test-key")
+    monkeypatch.setattr(setup.config, "FIND_CACHE_DIR", str(tmp_path))
+    built = []
+    monkeypatch.setattr(language_catalog, "build", lambda *a, **k: built.append(a[1]) or 5)
+
+    assert setup.refresh_language_lists(only_existing=True) is True
+    assert built == []
+
+
+def test_refresh_language_lists_reports_failure_without_raising(monkeypatch):
+    from recommender import language_catalog, setup
+    monkeypatch.setattr(setup.config, "TMDB_API_KEY", "test-key")
+
+    def broken(*a, **k):
+        raise RuntimeError("TMDB down")
+    monkeypatch.setattr(language_catalog, "build", broken)
+
+    assert setup.refresh_language_lists() is False
+
+
+def test_refresh_language_lists_needs_a_tmdb_key(monkeypatch):
+    from recommender import setup
+    monkeypatch.setattr(setup.config, "TMDB_API_KEY", "")
+    assert setup.refresh_language_lists() is False

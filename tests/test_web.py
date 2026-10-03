@@ -2593,11 +2593,15 @@ class TestFindRendering(FindTestSupport):
         for g in MOVIE_GENRE_IDS:
             assert f'value="{g}"' in body
 
-        # No natural language, provider, country, language, archive actions, or numbered paging.
+        # Original language is a fixed list of saved IMDb-rated catalogues, not free text.
+        from recommender.language_catalog import LANGUAGE_OPTIONS
+        assert '<select name="language">' in body and '<option value="" selected>Any</option>' in body
+        for code, label in LANGUAGE_OPTIONS:
+            assert f'value="{code}"' in body and f">{label}<" in body
+        # No natural language, provider, country, archive actions, or numbered paging.
         assert 'name="q"' not in body
         assert 'name="provider"' not in body
         assert 'name="country"' not in body
-        assert 'name="language"' not in body
         assert "/archive/add" not in body
         assert "Next" not in body
         assert "Previous" not in body
@@ -2893,3 +2897,115 @@ def test_status_reports_imdb_ratings_age(mock_get_context, mock_jobs, client):
     web.imdb_ratings.refresh(web.config.IMDB_RATINGS_DB_PATH, download=download)
 
     assert client.get("/status").get_json()["imdb_ratings_refreshed_at"]
+
+
+class TestFindLanguage(FindTestSupport):
+    """GET /find?language=hi: the saved IMDb-rated list, filtered and sorted locally."""
+
+    @pytest.fixture
+    def language_env(self, find_env, monkeypatch, tmp_path):
+        import json
+        from recommender import catalog_finder, language_catalog
+        monkeypatch.setattr(web, "find_unwatched_titles", catalog_finder.find_unwatched_titles)
+        builds = []
+        monkeypatch.setattr(web, "_ensure_language_list_build", lambda lang: builds.append(lang))
+        cache = tmp_path / "find"
+        cache.mkdir(exist_ok=True)
+
+        def write(titles):
+            rows = [{"tmdb_id": tid, "content_type": "movie", "title": name, "year": 2026,
+                     "poster_path": None, "overview": "", "vote_average": 6.0, "vote_count": 4,
+                     "release_date": "2026-08-01", "popularity": 1.0, "genre_ids": [18],
+                     "imdb_id": f"tt{tid:07d}", "imdb_rating": rating, "imdb_votes": votes}
+                    for tid, name, rating, votes in titles]
+            language_catalog.list_path(cache, "hi").write_text(json.dumps(
+                {"language": "hi", "built_at": "2026-10-03T06:00:00+00:00", "titles": rows}))
+        return {"write": write, "builds": builds}
+
+    def test_language_is_parsed_and_unknown_codes_are_dropped(self, client, find_env):
+        client.get("/find?language=hi")
+        client.get("/find?language=xx")
+        assert [c["criteria"].language for c in find_env["finder"]] == ["hi", None]
+
+    def test_hindi_list_renders_in_imdb_order_with_imdb_labels(self, client, language_env):
+        language_env["write"]([(1, "Lower Rated", 7.1, 5000), (2, "Higher Rated", 8.2, 151638),
+                               (3, "Too Few Votes", 9.3, 499)])
+
+        body = client.get("/find?language=hi").get_data(as_text=True)
+
+        assert body.index("Higher Rated") < body.index("Lower Rated")
+        assert "Too Few Votes" not in body
+        assert "IMDb · 151,638" in body
+        assert "rated by IMDb" in body and "500 IMDb votes" in body
+        assert "titles rated by more people rank higher" in body
+        assert "List updated 3 Oct 2026" in body
+        assert ">IMDb rating<" in body and "Minimum IMDb rating" in body
+        assert language_env["builds"] == ["hi"]
+
+    def test_show_more_keeps_the_language(self, client, language_env):
+        language_env["write"]([(i, f"Film {i}", 8.0, 5000) for i in range(1, 15)])
+
+        body = client.get("/find?language=hi").get_data(as_text=True)
+
+        assert "language=hi" in body and "cursor=1.10" in body
+
+    def test_missing_list_says_it_is_being_built(self, client, language_env):
+        body = client.get("/find?language=hi").get_data(as_text=True)
+        assert "list is being built" in body
+
+    def test_keyword_with_language_is_refused_not_ignored(self, client, language_env):
+        language_env["write"]([(1, "Film", 8.0, 5000)])
+        body = client.get("/find?language=hi&keyword=heist").get_data(as_text=True)
+        assert "Keyword search is not available with a language selected" in body
+        assert "Film</a>" not in body
+
+    def test_without_language_no_build_starts_and_labels_stay_tmdb(self, client, language_env):
+        body = client.get("/find").get_data(as_text=True)
+        assert language_env["builds"] == []
+        assert ">TMDB rating<" in body and "Minimum TMDB rating" in body
+
+
+def test_language_build_starts_once_when_due_and_waits_for_imdb(monkeypatch, tmp_path):
+    import gzip
+    registry = _RecordingRegistry()
+    monkeypatch.setattr(web, "job_registry", registry)
+    monkeypatch.setattr(web, "_language_job_id", None)
+    monkeypatch.setattr(web, "_language_next_check_at", 0.0)
+    monkeypatch.setattr(web.config, "TMDB_API_KEY", "test-key")
+    monkeypatch.setattr(web.config, "FIND_CACHE_DIR", str(tmp_path / "find"))
+
+    web._ensure_language_list_build("hi")
+    assert registry.submitted == []   # no IMDb ratings yet: nothing to build from
+
+    def download(dest):
+        with gzip.open(dest, "wt", encoding="utf-8") as f:
+            f.write("tconst\taverageRating\tnumVotes\ntt0000001\t7.0\t1000\n")
+    web.imdb_ratings.refresh(web.config.IMDB_RATINGS_DB_PATH, download=download)
+
+    web._ensure_language_list_build("hi")
+    web._ensure_language_list_build("hi")
+
+    assert len(registry.submitted) == 1
+    fn, args, label = registry.submitted[0]
+    assert fn is web._run_language_build and args == ("hi",)
+    assert label == web.language_catalog.BUILD_JOB_LABEL
+
+
+def test_language_build_skips_a_fresh_list(monkeypatch):
+    registry = _RecordingRegistry()
+    monkeypatch.setattr(web, "job_registry", registry)
+    monkeypatch.setattr(web, "_language_job_id", None)
+    monkeypatch.setattr(web, "_language_next_check_at", 0.0)
+    monkeypatch.setattr(web.config, "TMDB_API_KEY", "test-key")
+    monkeypatch.setattr(web.imdb_ratings, "refreshed_at", lambda path: object())
+    monkeypatch.setattr(web.language_catalog, "build_is_due", lambda *a: False)
+
+    web._ensure_language_list_build("hi")
+
+    assert registry.submitted == []
+
+
+def test_find_lede_keeps_source_names_capitalised(client, monkeypatch):
+    monkeypatch.setattr(web.config, "TMDB_API_KEY", "")
+    assert "ordered by TMDB rating" in client.get("/find").get_data(as_text=True)
+    assert "ordered by IMDb rating" in client.get("/find?language=hi").get_data(as_text=True)
