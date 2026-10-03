@@ -3047,3 +3047,27 @@ class TestFindLanguageFailure(FindTestSupport):
         assert "Build failed" in body and "could not be built: ConnectionError" in body
         assert "retries automatically after" in body and "--refresh-imdb" in body
         assert "list is being built" not in body
+
+
+class TestFindRelabel(FindTestSupport):
+    """The rating labels can switch source before Show results, without submitting."""
+
+    def test_every_rating_label_carries_both_sources(self, client, find_env):
+        body = client.get("/find").get_data(as_text=True)
+        assert 'data-label-tmdb="TMDB rating" data-label-imdb="IMDb rating">TMDB rating<' in body
+        assert 'data-label-tmdb="Most voted" data-label-imdb="Most IMDb votes">Most voted<' in body
+        assert 'data-label-tmdb="Newest" data-label-imdb="Newest">Newest<' in body
+        assert ('data-label-tmdb="Minimum TMDB rating" data-label-imdb="Minimum IMDb rating">'
+                'Minimum TMDB rating<') in body
+
+    def test_language_page_renders_the_imdb_labels_first(self, client, find_env):
+        body = client.get("/find?language=hi").get_data(as_text=True)
+        assert 'data-label-imdb="IMDb rating">IMDb rating<' in body
+        assert ">Minimum IMDb rating<" in body
+
+    def test_relabel_script_sits_outside_the_form_and_never_submits(self, client, find_env):
+        body = client.get("/find").get_data(as_text=True)
+        after_form = body[body.index("</form>"):]
+        script = after_form[after_form.index("<script>"):after_form.index("</script>")]
+        assert "select[name=\"language\"]" in script and "data-label-" in script
+        assert "submit" not in script and "fetch" not in script and "htmx" not in script

@@ -445,7 +445,7 @@
   </label>
 
   <label class="find-field">
-    <span class="find-cap">Minimum {{ 'IMDb' if criteria.language else 'TMDB' }} rating</span>
+    <span class="find-cap" data-label-tmdb="Minimum TMDB rating" data-label-imdb="Minimum IMDb rating">Minimum {{ 'IMDb' if criteria.language else 'TMDB' }} rating</span>
     <select name="rating">
       {%- for key, label, value in rating_options %}
       <option value="{{ key }}" {% if criteria.min_rating == value %}selected{% endif %}>{{ label }}</option>
@@ -456,14 +456,34 @@
   <label class="find-field">
     <span class="find-cap">Sort by</span>
     <select name="sort">
-      {%- for key, label in sort_options %}
-      <option value="{{ key }}" {% if criteria.sort == key %}selected{% endif %}>{{ label }}</option>
+      {%- for key, tmdb_label, imdb_label in sort_label_pairs %}
+      <option value="{{ key }}" {% if criteria.sort == key %}selected{% endif %}
+              data-label-tmdb="{{ tmdb_label }}" data-label-imdb="{{ imdb_label }}">{{ imdb_label if criteria.language else tmdb_label }}</option>
       {%- endfor %}
     </select>
   </label>
 
   <button type="submit" class="find-go">Show results</button>
 </form>
+{#- Relabel the rating fields as soon as the language changes, so they say which
+    rating Show results will use. Labels only: nothing submits until the button.
+    Without this script the labels describe the last submitted search. -#}
+<script>
+(function () {
+  var form = document.getElementById('find-form');
+  var language = form && form.querySelector('select[name="language"]');
+  if (!language) return;
+  function relabel() {
+    var source = language.value ? 'imdb' : 'tmdb';
+    form.querySelectorAll('[data-label-tmdb]').forEach(function (el) {
+      el.textContent = el.getAttribute('data-label-' + source);
+    });
+  }
+  language.addEventListener('change', relabel);
+  // The browser can restore a different language on Back; match it.
+  relabel();
+})();
+</script>
 
 {%- if error %}
 <div class="find-note is-error"><span class="find-cap">Stopped</span><div>{{ error }}</div></div>
