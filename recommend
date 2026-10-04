@@ -8,6 +8,10 @@ case "${1:-}" in
         shift
         exec python3 -m recommender.setup "$@"
         ;;
+    plex)
+        shift
+        exec python3 -m recommender.plex "$@"
+        ;;
     *)
         exec python3 -m recommender.main "$@"
         ;;

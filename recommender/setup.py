@@ -385,6 +385,29 @@ def _build_hints_map(events: list) -> dict[tuple[str, str], MatchHints]:
     return {key: MatchHints(**fields) for key, fields in accum.items()}
 
 
+def _build_tmdb_id_hints(events: list) -> dict[tuple[str, str], int]:
+    """Map each (title, content_type) group to the exact TMDB ID a source supplied.
+
+    Only Plex supplies IDs today. Setup fetches one TMDB entry per group, so
+    the first hinted event in a group decides; a later event in the same
+    group with a different ID is logged, not used.
+    """
+    hints: dict[tuple[str, str], int] = {}
+    for e in events:
+        tmdb_id = getattr(e, 'tmdb_id_hint', None)
+        if not tmdb_id:
+            continue
+        key = (e.series_name if e.content_type == 'tv' else e.title, e.content_type)
+        if key not in hints:
+            hints[key] = tmdb_id
+        elif hints[key] != tmdb_id:
+            log.warning(
+                "Conflicting TMDB IDs for %r (%s): keeping %s, ignoring %s",
+                key[0], key[1], hints[key], tmdb_id,
+            )
+    return hints
+
+
 def _audit_cache_mismatches(
     index,
     cache_dir: str,
@@ -895,6 +918,7 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
 
         # Build source hints for TMDB candidate ranking
         hints_map = _build_hints_map(events)
+        tmdb_id_hints = _build_tmdb_id_hints(events)
 
         metadata = {}
         skipped = len(skip_titles)
@@ -930,8 +954,15 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                         if meta:
                             metadata[(title, ct)] = meta
                 else:
-                    hints = hints_map.get((title, ct))
-                    meta = tmdb.get_metadata(title, ct, hints=hints)
+                    meta = None
+                    hinted_id = tmdb_id_hints.get((title, ct))
+                    if hinted_id:
+                        # The source matched its own file to this ID (Plex's
+                        # agent), so it is trusted like a verified override.
+                        meta = _resolve_tmdb_id_override(tmdb, title, ct, hinted_id, trust=True)
+                    if meta is None:
+                        hints = hints_map.get((title, ct))
+                        meta = tmdb.get_metadata(title, ct, hints=hints)
                     if meta:
                         metadata[(title, ct)] = meta
         console.print(f"  {len(metadata)} titles with TMDB metadata")

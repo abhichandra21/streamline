@@ -84,6 +84,7 @@ class WatchEvent:
     profile: str
     release_year_hint: int | None = None  # source year for TMDB matching
     language_hint: str | None = None      # TMDB original_language code (e.g. "hi"), if detected
+    tmdb_id_hint: int | None = None       # exact TMDB ID when the source supplies one (Plex)
 
 
 # Non-Latin scripts whose presence in a title is a strong language signal

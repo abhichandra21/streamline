@@ -6,7 +6,7 @@ from pathlib import Path
 from recommender.ingestion.base import WatchEvent
 from recommender.event_store import (
     _connect, _compute_source_hash, init_db, replace_provider_events,
-    load_events, get_import_info,
+    append_provider_events, remove_disabled_providers, load_events, get_import_info,
 )
 
 
@@ -616,3 +616,88 @@ def test_load_events_on_database_without_watch_events_table(tmp_path):
 
     assert Path(db_path).exists()
     assert load_events(db_path) == []
+
+
+# ---------------------------------------------------------------------------
+# tmdb_id_hint, append_provider_events, and Plex preservation
+# ---------------------------------------------------------------------------
+
+def test_load_events_round_trips_tmdb_id_hint(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    event = _make_event(platform="plex", title="House of Gucci", content_type="movie",
+                        series_name="House of Gucci")
+    event.tmdb_id_hint = 644495
+    append_provider_events(db_path, "plex", [event])
+    assert load_events(db_path)[0].tmdb_id_hint == 644495
+
+
+def test_init_db_backfills_tmdb_id_hint_onto_existing_table(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    replace_provider_events(db_path, "netflix", [_make_event()], _MANIFEST, _SNAP_SHA)
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE watch_events DROP COLUMN tmdb_id_hint")
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    events = load_events(db_path)
+    assert len(events) == 1
+    assert events[0].tmdb_id_hint is None
+
+
+def test_append_provider_events_adds_without_replacing(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    first = _make_event(platform="plex", timestamp=datetime(2026, 10, 1, 20, 0, 0))
+    second = _make_event(platform="plex", timestamp=datetime(2026, 10, 2, 20, 0, 0))
+
+    assert append_provider_events(db_path, "plex", [first]) == 1
+    assert append_provider_events(db_path, "plex", [second]) == 1
+
+    assert len(load_events(db_path, provider="plex")) == 2
+    conn = sqlite3.connect(db_path)
+    imports = conn.execute("SELECT COUNT(*) FROM imports WHERE provider = 'plex'").fetchone()[0]
+    conn.close()
+    assert imports == 1
+
+
+def test_append_provider_events_skips_a_play_it_already_has(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    event = _make_event(platform="plex")
+
+    append_provider_events(db_path, "plex", [event])
+    assert append_provider_events(db_path, "plex", [event]) == 0
+
+    assert len(load_events(db_path, provider="plex")) == 1
+
+
+def test_append_provider_events_updates_imported_at(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    append_provider_events(db_path, "plex", [_make_event(platform="plex")])
+    conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE imports SET imported_at = '2000-01-01T00:00:00.000Z'")
+    conn.commit()
+    conn.close()
+
+    append_provider_events(db_path, "plex", [_make_event(
+        platform="plex", timestamp=datetime(2026, 10, 2, 20, 0, 0))])
+
+    assert get_import_info(db_path)["plex"]["imported_at"] > "2000-01-01T00:00:00.000Z"
+
+
+def test_remove_disabled_providers_never_deletes_plex(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    replace_provider_events(db_path, "netflix", [_make_event()], _MANIFEST, _SNAP_SHA)
+    append_provider_events(db_path, "plex", [_make_event(platform="plex")])
+
+    remove_disabled_providers(db_path, ["prime"])
+    assert [e.platform for e in load_events(db_path)] == ["plex"]
+
+    remove_disabled_providers(db_path, [])
+    assert [e.platform for e in load_events(db_path)] == ["plex"]

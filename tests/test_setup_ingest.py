@@ -560,3 +560,90 @@ def test_refresh_language_lists_needs_a_tmdb_key(monkeypatch):
     from recommender import setup
     monkeypatch.setattr(setup.config, "TMDB_API_KEY", "")
     assert setup.refresh_language_lists() is False
+
+
+# ---------------------------------------------------------------------------
+# Plex: exact TMDB IDs and preserved history
+# ---------------------------------------------------------------------------
+
+def _plex_episode(series="Grand Designs", tmdb_id=1831, day=1):
+    event = _make_event(platform="plex", title=f"{series}: Season 25: E6",
+                        series_name=series, timestamp=datetime(2026, 10, day, 20, 0, 0))
+    event.tmdb_id_hint = tmdb_id
+    return event
+
+
+def test_build_tmdb_id_hints_takes_the_first_hint_per_title():
+    from recommender.setup import _build_tmdb_id_hints
+
+    events = [_make_event(), _plex_episode(tmdb_id=1831), _plex_episode(tmdb_id=1831, day=2)]
+
+    assert _build_tmdb_id_hints(events) == {("Grand Designs", "tv"): 1831}
+
+
+def test_build_tmdb_id_hints_logs_conflicting_hints(monkeypatch):
+    from unittest.mock import MagicMock
+
+    import recommender.setup as setup
+
+    events = [_plex_episode(tmdb_id=1831), _plex_episode(tmdb_id=9999, day=2)]
+    # Assert on the module logger directly: setup_logging() elsewhere in the
+    # suite turns off propagation, which hides records from caplog.
+    monkeypatch.setattr(setup, "log", MagicMock())
+
+    hints = setup._build_tmdb_id_hints(events)
+
+    assert hints == {("Grand Designs", "tv"): 1831}
+    args = setup.log.warning.call_args.args
+    assert "Grand Designs" in args and 9999 in args
+
+
+def test_setup_indexes_plex_plays_by_their_tmdb_id_and_keeps_them(monkeypatch, tmp_path):
+    import json
+
+    import config
+    import recommender.setup as setup
+    import recommender.watch_index as wi
+    from recommender.event_store import append_provider_events, init_db, load_events
+
+    db_path = str(tmp_path / "streamline.db")
+    init_db(db_path)
+    append_provider_events(db_path, "plex", [_plex_episode()])
+
+    cache_dir = tmp_path / "cache"
+    (cache_dir / "tv").mkdir(parents=True)
+    (cache_dir / "tv" / "1831.json").write_text(json.dumps(
+        {"id": 1831, "name": "Grand Designs", "first_air_date": "1999-04-29"}))
+
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": ["/tmp/netflix_export.zip"]})
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("netflix", lambda _path: [])])
+    monkeypatch.setattr(setup, "_compute_file_sha256", lambda _path: "sha")
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "TMDB_API_KEY", "fake-tmdb-key")
+    monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(tmp_path / "watch_index.json"))
+    monkeypatch.setattr(config, "CACHE_DIR", str(cache_dir))
+    monkeypatch.setattr(config, "ENRICHMENT_CACHE_DIR", str(tmp_path / "enrichments"))
+    monkeypatch.setattr(config, "PROVIDERS_CACHE_DIR", str(tmp_path / "providers"))
+    monkeypatch.setattr(config, "OVERRIDES_PATH", str(tmp_path / "overrides.json"))
+    monkeypatch.setattr(config, "TMDB_AUDIT_PATH", str(tmp_path / "audit.txt"))
+    monkeypatch.setattr(config, "TASTE_PROFILE_PATH", str(tmp_path / "profile.txt"))
+    monkeypatch.setattr(setup, "enrich_batch", lambda *_a, **_kw: {})
+
+    class _FakeLLM:
+        provider = "anthropic"
+    monkeypatch.setattr(setup, "create_client", lambda _provider=None: _FakeLLM())
+
+    def _no_search(self, *_a, **_kw):
+        raise AssertionError("a hinted title must not be searched by name")
+    monkeypatch.setattr(setup.TmdbClient, "get_metadata", _no_search)
+
+    try:
+        setup.run_setup(refresh_data=True)
+    except (SystemExit, Exception):
+        pass  # The profile build downstream is not mocked here.
+
+    index = wi.load(config.WATCH_INDEX_PATH)
+    assert [(e["title"], e["tmdb_id"]) for e in index.entries] == [("Grand Designs", 1831)]
+    assert [e.platform for e in load_events(db_path)] == ["plex"]

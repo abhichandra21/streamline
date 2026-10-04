@@ -13,6 +13,9 @@ fi
 
 PORT="${STREAMLINE_PORT:-5051}"
 HOST="${STREAMLINE_HOST:-127.0.0.1}"
+# Gunicorn's default access format, with the path (%(U)s) in place of the raw
+# URI (%(r)s): the Plex webhook carries its token in the query string.
+ACCESS_LOG_FORMAT='%(h)s %(l)s %(u)s %(t)s "%(m)s %(U)s %(H)s" %(s)s %(b)s "%(f)s" "%(a)s"'
 
 # Activate venv
 if [ ! -d "$VENV" ]; then
@@ -121,6 +124,7 @@ start() {
         --bind "$HOST:$PORT" \
         --timeout 120 \
         --access-logfile - \
+        --access-logformat "$ACCESS_LOG_FORMAT" \
         --error-logfile - \
         'recommender.web:app' >> "$LOGFILE" 2>&1 &
     echo $! > "$PIDFILE"

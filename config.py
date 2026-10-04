@@ -43,6 +43,11 @@ TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+# Plex: the webhook token guards POST /plex/webhook; URL and token let the
+# webhook look up show IDs and sync ratings (see recommender/plex.py).
+PLEX_WEBHOOK_TOKEN = os.environ.get("PLEX_WEBHOOK_TOKEN", "")
+PLEX_URL = os.environ.get("PLEX_URL", "")
+PLEX_TOKEN = os.environ.get("PLEX_TOKEN", "")
 
 LLM_DEFAULT_API_KEY_ENVS: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",

@@ -10,6 +10,7 @@ so progress events from setup and enrichment are always recorded on disk.
 """
 
 import logging
+import re
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -22,6 +23,24 @@ import config
 # Routing both through the same Console is what lets RichHandler render log
 # records *above* an active Progress bar instead of stomping on it.
 console = Console(stderr=True)
+
+
+_QUERY_TOKEN_RE = re.compile(r"([?&]token=)[^&\s\"]+")
+
+
+class RedactQueryTokens(logging.Filter):
+    """Blank `token=` query values in request logs.
+
+    Plex can only pass the webhook token in the URL, and the request logger
+    writes every request line with its query string.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        redacted = _QUERY_TOKEN_RE.sub(r"\1[redacted]", message)
+        if redacted != message:
+            record.msg, record.args = redacted, None
+        return True
 
 
 def _configure_stream_handler(logger: logging.Logger, level: int, formatter: logging.Formatter) -> None:
@@ -121,6 +140,8 @@ def setup_logging(level_override: str | None = None) -> None:
     werkzeug_log = logging.getLogger("werkzeug")
     werkzeug_log.setLevel(logging.INFO)
     werkzeug_log.propagate = False
+    if not any(isinstance(f, RedactQueryTokens) for f in werkzeug_log.filters):
+        werkzeug_log.addFilter(RedactQueryTokens())
     _configure_stream_handler(werkzeug_log, stream_level, formatter)
     # Werkzeug logs are always INFO-bounded (no DEBUG-level traffic worth keeping).
     _configure_file_handler(werkzeug_log, formatter, logging.INFO)

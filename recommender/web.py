@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import secrets
+import sqlite3
 import sys
 import threading
 import time
@@ -27,6 +28,7 @@ import config
 from recommender import history as query_history
 from recommender import imdb_ratings
 from recommender import language_catalog
+from recommender import plex
 from recommender import show_tracker
 from recommender import user_store
 from recommender import watch_index as wi
@@ -738,12 +740,27 @@ def _api_token_valid() -> bool:
     return hmac.compare_digest(supplied.strip().encode(), token.encode())
 
 
+PLEX_WEBHOOK_PATH = "/plex/webhook"
+
+
+def _plex_webhook_token_valid() -> bool:
+    """Accept PLEX_WEBHOOK_TOKEN from the query string, the only place Plex can put it."""
+    token = config.PLEX_WEBHOOK_TOKEN.strip()
+    supplied = request.args.get("token", "")
+    if not token or not supplied:
+        return False
+    return hmac.compare_digest(supplied.encode(), token.encode())
+
+
 @app.before_request
 def _check_auth() -> Response | None:
     password = os.environ.get("STREAMLINE_PASSWORD", "").strip()
     if not password:
         return None
     if request.path == "/healthz":
+        return None
+    if request.path == PLEX_WEBHOOK_PATH:
+        # Plex cannot log in; the route checks its own token.
         return None
     if _api_token_valid():
         return None
@@ -763,10 +780,46 @@ def _check_auth() -> Response | None:
 def _check_csrf() -> tuple | None:
     if request.method not in ("POST", "DELETE", "PUT", "PATCH"):
         return None
+    if request.path == PLEX_WEBHOOK_PATH:
+        # Plex has no session to carry a CSRF token; the route checks its own token.
+        return None
     if not _csrf_valid():
         log.warning("CSRF validation failed for %s %s", request.method, request.path)
         return "Invalid or missing CSRF token", 403
     return None
+
+
+# ── Plex webhook ──────────────────────────────────────────────────────────────
+
+_plex_client: plex.PlexClient | None = None
+_plex_client_lock = threading.Lock()
+
+
+def _get_plex_client() -> plex.PlexClient | None:
+    """One client per process, so its show-ID cache lasts across webhooks."""
+    global _plex_client
+    with _plex_client_lock:
+        if _plex_client is None:
+            _plex_client = plex.client_from_config()
+        return _plex_client
+
+
+@app.route(PLEX_WEBHOOK_PATH, methods=["POST"])
+def plex_webhook() -> Response | tuple:
+    if not _plex_webhook_token_valid():
+        return "Forbidden", 403
+    try:
+        payload = json.loads(request.form.get("payload", ""))
+    except ValueError:
+        payload = None
+    if not isinstance(payload, dict):
+        return "Missing or malformed payload", 400
+    try:
+        result = plex.handle_webhook(payload, config.EVENT_DB_PATH, _get_plex_client())
+    except sqlite3.Error:
+        log.exception("Failed to save a Plex play")
+        return "Failed to save the play", 500
+    return jsonify(result)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────

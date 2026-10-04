@@ -159,7 +159,7 @@ Edit the `User`, `WorkingDirectory`, and venv paths in `streamline-web.service` 
 
 Settings live in a few places:
 
-- **Environment variables** — secrets only (`TMDB_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`)
+- **Environment variables** — secrets only (`TMDB_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, and for Plex `PLEX_WEBHOOK_TOKEN`, `PLEX_URL`, `PLEX_TOKEN`)
 - **`.env`** — optional local convenience for setting those environment variables (gitignored)
 - **`config.yaml`** — shared repo defaults and app settings
 - **`config.local.yaml`** — local overrides such as watch-history zip paths, loaded after `config.yaml`
@@ -280,6 +280,25 @@ Keep shared settings in `config.yaml` and machine-specific watch-history paths i
 `config.local.yaml` is gitignored and loaded after `config.yaml`, so local provider paths stay out of the shared repo config.
 
 Movie titles may include a trailing year (`Zodiac 2007`) which is stripped automatically.
+
+### Plex
+
+Plex sends plays as they happen instead of as an export. It needs Plex Pass.
+
+1. Set `PLEX_WEBHOOK_TOKEN` to a long random string, and `PLEX_URL` (for example `http://192.168.1.2:32400`) and `PLEX_TOKEN` to your Plex server.
+2. In Plex Web, open Settings > Webhooks and add `http://<streamline-host>:<port>/plex/webhook?token=<PLEX_WEBHOOK_TOKEN>`. Plex must be able to reach that address.
+
+Each finished movie or episode (Plex's `media.scrobble`) is saved as a `plex` play, for every account on the server. After each one, ratings changed in Plex are brought over: 4-5 stars is More like this, 3-3.5 is It was fine, 2.5 or less is Less like this, and the newer rating wins. Rating in Plex sends no webhook, so `./recommend plex ratings` runs the same rating sync by hand. Nothing is written to Plex.
+
+`PLEX_URL` and `PLEX_TOKEN` are optional. Without them plays are still saved, but shows are matched by title instead of by Plex's TMDB ID, and ratings are not synced.
+
+New plays show up after `./recommend setup --refresh-data` and a web restart, like any import.
+
+Plex plays are the only copy: there is no export to rebuild them from, so setup never deletes them, and `data/streamline.db` should be backed up. To remove a wrong play by hand:
+
+```bash
+sqlite3 data/streamline.db "DELETE FROM watch_events WHERE provider = 'plex' AND title = 'Exact Title'"
+```
 
 ## Architecture
 
