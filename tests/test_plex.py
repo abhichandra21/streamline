@@ -249,6 +249,39 @@ def test_the_mark_is_the_scan_start_so_a_rating_set_during_a_scan_is_read_again(
     assert user_store.load_ratings(db)[0]["rating"] == "neutral"
 
 
+def test_a_rating_plex_reports_late_is_still_read_on_the_next_run(db):
+    # Seen live: a rating set 23s before a sync was missing from that sync's
+    # listing, then appeared with its true (older) lastRatedAt. The next run
+    # must still read anything changed shortly before the last scan started.
+    scan_start = 1791097875
+    rated_just_before = scan_start - 23
+    user_store.set_meta(db, plex.RATINGS_MARK_KEY, str(scan_start))
+    client = FakeClient(rated=[_rated("DC League of Super-Pets", 6.0, rated_just_before, tmdb_id=539681)])
+
+    changes = plex.sync_ratings(db, client)
+
+    assert [(c.title, c.new) for c in changes] == [("DC League of Super-Pets", "neutral")]
+
+
+def test_a_rating_older_than_the_overlap_is_not_read_again(db):
+    scan_start = 1791097875
+    user_store.set_meta(db, plex.RATINGS_MARK_KEY, str(scan_start))
+    old = scan_start - plex.RATINGS_MARK_OVERLAP_SECONDS - 1
+    client = FakeClient(rated=[_rated("House of Gucci", 6.0, old, tmdb_id=644495)])
+
+    assert plex.sync_ratings(db, client) == []
+
+
+def test_an_item_in_two_libraries_is_reported_once(db):
+    item = _rated("DC League of Super-Pets", 6.0, 1791097852, tmdb_id=539681)
+    client = FakeClient(rated=[item, dict(item)])
+
+    changes = plex.sync_ratings(db, client)
+
+    assert len(changes) == 1
+    assert len(user_store.load_ratings(db)) == 1
+
+
 def test_a_failed_sync_leaves_the_mark_alone(db):
     user_store.set_meta(db, plex.RATINGS_MARK_KEY, "1000")
 

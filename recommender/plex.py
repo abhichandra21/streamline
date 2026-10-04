@@ -32,6 +32,11 @@ REQUEST_TIMEOUT_SECONDS = 5
 
 # Install-local: the time the last complete rating sync started (epoch seconds).
 RATINGS_MARK_KEY = "plex_ratings_synced_through"
+# Each sync also re-reads ratings changed this long before the last one
+# started. Plex was seen leaving a rating made 23s before a scan out of that
+# scan's listing; without the overlap the mark would skip it for good.
+# Re-reading is harmless: newer-wins skips a rating already applied.
+RATINGS_MARK_OVERLAP_SECONDS = 600
 
 # Plex stores user ratings on a 0-10 scale (half stars on a 5-star display).
 _BAND_MORE_FROM = 8.0
@@ -207,7 +212,7 @@ def sync_ratings(db_path: str, client: PlexClient,
     user_store.ensure_user_store(db_path, config.FEEDBACK_PATH)
     scan_start = int(now())
     mark_value = user_store.get_meta(db_path, RATINGS_MARK_KEY)
-    mark = int(mark_value) if mark_value else None
+    read_after = int(mark_value) - RATINGS_MARK_OVERLAP_SECONDS if mark_value else None
 
     items = client.rated_items()
 
@@ -223,7 +228,7 @@ def sync_ratings(db_path: str, client: PlexClient,
             continue
         # A rating with no rated time counts as older than anything in Streamline.
         rated_at = item.get("lastRatedAt") or 0
-        if mark is not None and rated_at <= mark:
+        if read_after is not None and rated_at <= read_after:
             continue
 
         title = item.get("title", "")
@@ -235,12 +240,19 @@ def sync_ratings(db_path: str, client: PlexClient,
 
         user_store.rate_title(db_path, title, content_type, band, tmdb_id=tmdb_id)
         change = RatingChange(title, content_type, existing["rating"] if existing else None, band)
+        # The same item can sit in two libraries; record what was just written
+        # so its second copy counts as already applied.
+        applied = {"rating": band, "updated_at": datetime.now(timezone.utc).isoformat()}
+        if tmdb_id:
+            by_tmdb[(content_type, tmdb_id)] = applied
+        by_title[(content_type, user_store._normalize(title))] = applied
         log.info("Plex rating applied: %s (%s) %s -> %s",
                  title, content_type, change.old or "unrated", band)
         changes.append(change)
 
     # The scan's start, not the newest rating seen: a rating changed during
-    # the scan in an already-read section is then read again next time.
+    # the scan in an already-read section is then read again next time, and
+    # the overlap above covers ratings Plex reports late.
     user_store.set_meta(db_path, RATINGS_MARK_KEY, str(scan_start))
     return changes
 
