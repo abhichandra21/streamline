@@ -43,6 +43,7 @@ python3 -m pytest tests/test_query_engine.py -v
 ./recommend --provider gemini "spy thriller"   # use Gemini instead of default
 ./recommend --liked "Title"                    # feedback
 ./recommend --add "Title" --type tv            # add to watch history
+./recommend plex ratings                       # bring Plex rating changes into Streamline
 
 # Web UI
 ./recommend-web start                          # http://localhost:5051
@@ -75,6 +76,7 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `recommender/tmdb_client.py` — Metadata lookup with guessit title classification, title cleanup fallback (strips suffixes, tries alternate content type), discover endpoint (page-limited), watch providers. `get_imdb_id()` maps a TMDB title to its IMDb ID.
 - `recommender/imdb_ratings.py` — Local copy of IMDb's daily `title.ratings.tsv.gz` in SQLite. TMDB stays the catalogue and identity; IMDb only supplies rating and vote count. Every displayed, filtered, or ranked rating prefers IMDb and falls back to TMDB (`TmdbMetadata.rating` / `rating_source`). Refreshed by setup and, in the web UI, by a background job once the copy is a day old.
 - `recommender/language_catalog.py` — Find's original-language lists (Hindi). A background build reads every TMDB Discover page for the language over 10 years with no TMDB vote floor, attaches IMDb ratings, and saves the list; Find then filters (period, genre, `LANGUAGE_MIN_IMDB_VOTES`, IMDb rating) and sorts it locally. Built on first use from the Find page or by `--refresh-imdb`, then rebuilt daily.
+- `recommender/plex.py` — Plex webhook (`POST /plex/webhook?token=`, exempt from password and CSRF) saves each `media.scrobble` as a `plex` watch event with an exact TMDB ID (movies from the payload, shows by one cached Plex lookup). After each play, and via `./recommend plex ratings`, syncs Plex ratings newer-wins with a scan-start high-water mark in `user_store_meta`. Plex plays exist only in SQLite, so `event_store.PRESERVED_PROVIDERS` keeps setup from deleting them. Never writes to Plex.
 - `recommender/watch_index.py` — Content-type-aware dual-key dedup (TMDB ID + `(normalized_title, content_type)`). Post-build rapidfuzz dedup. Stale cache cleanup.
 - `recommender/enricher.py` — LLM enrichment (role=fast), 30s timeout, rate limit retry. Only caches successful responses. Identity-keyed index (`content_type/tmdb_id` or `unknown/slug`).
 - `recommender/taste_profile_builder.py` — Batched profile builder (200 titles/batch, rate limit retry, merge pass). No top-N limit.
@@ -101,7 +103,7 @@ All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ identity-keyed index.
 
 ## Configuration
 
-- **Environment variables** — secrets: `TMDB_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`
+- **Environment variables** — secrets: `TMDB_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, and for Plex `PLEX_WEBHOOK_TOKEN`, `PLEX_URL`, `PLEX_TOKEN`
 - **`.env`** — optional local convenience for setting those variables
 - **`config.yaml`** — all settings in sections:
   - `provider`, `models.*` — LLM provider and model assignments

@@ -720,3 +720,26 @@ def test_find_conflict_is_scoped_to_content_type(tmp_path):
     add_to_archive(db, "Up", "movie", tmdb_id=14160)
 
     assert find_conflict(db, "tv", 14160) is None
+
+
+def test_meta_values_round_trip(tmp_path):
+    from recommender.user_store import get_meta, init_db, set_meta
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+
+    assert get_meta(db, "plex_ratings_synced_through") is None
+    set_meta(db, "plex_ratings_synced_through", "1791094053")
+    set_meta(db, "plex_ratings_synced_through", "1791094999")
+    assert get_meta(db, "plex_ratings_synced_through") == "1791094999"
+
+
+def test_load_ratings_includes_updated_at(tmp_path):
+    from recommender.user_store import init_db, load_ratings, rate_title
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    rate_title(db, "House of Gucci", "movie", "neutral", tmdb_id=644495)
+
+    (rating,) = load_ratings(db)
+    assert rating["updated_at"]

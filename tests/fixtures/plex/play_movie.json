@@ -1,0 +1,33 @@
+{
+  "event": "media.play",
+  "user": true,
+  "owner": true,
+  "Account": {
+    "id": 1,
+    "title": "household-member"
+  },
+  "Metadata": {
+    "type": "movie",
+    "title": "House of Gucci",
+    "year": 2021,
+    "duration": 9466784,
+    "lastViewedAt": 1791094008,
+    "viewCount": 1,
+    "userRating": 6.0,
+    "lastRatedAt": 1791094053,
+    "ratingKey": "623",
+    "guid": "plex://movie/5ddba97d0e3496001d14434a",
+    "librarySectionType": "movie",
+    "Guid": [
+      {
+        "id": "imdb://tt11214590"
+      },
+      {
+        "id": "tmdb://644495"
+      },
+      {
+        "id": "tvdb://145486"
+      }
+    ]
+  }
+}

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS watch_events (
     total_duration_seconds   INTEGER,
     release_year_hint        INTEGER,
     language_hint            TEXT,
+    tmdb_id_hint             INTEGER,
     timestamp_iso            TEXT NOT NULL,
     profile                  TEXT NOT NULL,
     import_id                INTEGER NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
@@ -43,7 +44,13 @@ CREATE TABLE IF NOT EXISTS watch_events (
 _WATCH_EVENT_HINT_COLUMNS = (
     ("release_year_hint", "INTEGER"),
     ("language_hint", "TEXT"),
+    ("tmdb_id_hint", "INTEGER"),
 )
+
+# Providers whose events have no source file to rebuild them from. Plex plays
+# arrive one webhook at a time and exist only in this database, so setup must
+# never treat them as a disabled provider and delete them.
+PRESERVED_PROVIDERS = ("plex",)
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
@@ -91,7 +98,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_watch_event_columns(conn: sqlite3.Connection) -> None:
-    """Backfill release_year_hint/language_hint onto a pre-existing watch_events table."""
+    """Backfill the hint columns onto a pre-existing watch_events table."""
     cols = {
         row[1]
         for row in conn.execute("PRAGMA table_info(watch_events)").fetchall()
@@ -133,26 +140,63 @@ def init_db(db_path: str) -> None:
 
 
 def remove_disabled_providers(db_path: str, active_providers: list[str]) -> None:
-    """Remove imported events for providers that are no longer configured."""
-    if not active_providers:
-        conn = _connect(db_path)
-        try:
-            with conn:
-                conn.execute("DELETE FROM imports")
-        finally:
-            conn.close()
-        return
+    """Remove imported events for providers that are no longer configured.
 
-    placeholders = ",".join("?" * len(active_providers))
+    PRESERVED_PROVIDERS are kept whatever the configuration says.
+    """
+    kept = [*active_providers, *PRESERVED_PROVIDERS]
+    placeholders = ",".join("?" * len(kept))
     conn = _connect(db_path)
     try:
         with conn:
             conn.execute(
                 f"DELETE FROM imports WHERE provider NOT IN ({placeholders})",
-                active_providers
+                kept
             )
     finally:
         conn.close()
+
+
+def _insert_events(conn: sqlite3.Connection, provider: str, import_id: int,
+                   events: list[WatchEvent]) -> int:
+    """Insert events under an import row, skipping any whose hash is already stored.
+
+    Returns the number of rows actually inserted.
+    """
+    # In-memory set to catch intra-batch duplicates before hitting the DB.
+    # First-seen profile wins for duplicate events; profile is not part of the identity key.
+    seen_hashes: set[str] = set()
+    inserted = 0
+
+    for event in events:
+        ts_iso = event.timestamp.isoformat(timespec="seconds")
+        duration_secs = int(event.watched_duration.total_seconds())
+        total_secs = (
+            int(event.total_duration.total_seconds())
+            if event.total_duration is not None
+            else None
+        )
+        source_hash = _compute_source_hash(
+            provider, event.content_type, event.series_name,
+            event.title, ts_iso, duration_secs,
+        )
+        if source_hash in seen_hashes:
+            continue
+        seen_hashes.add(source_hash)
+
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO watch_events "
+            "(provider, title, content_type, series_name, "
+            "watched_duration_seconds, total_duration_seconds, "
+            "release_year_hint, language_hint, tmdb_id_hint, "
+            "timestamp_iso, profile, import_id, source_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (provider, event.title, event.content_type, event.series_name,
+             duration_secs, total_secs, event.release_year_hint, event.language_hint,
+             event.tmdb_id_hint, ts_iso, event.profile, import_id, source_hash),
+        )
+        inserted += cursor.rowcount
+    return inserted
 
 
 def replace_provider_events(
@@ -192,43 +236,41 @@ def replace_provider_events(
             )
             import_id = cursor.lastrowid
 
-            # In-memory set to catch intra-batch duplicates before hitting the DB.
-            # First-seen profile wins for duplicate events; profile is not part of the identity key.
-            seen_hashes: set[str] = set()
-
-            for event in events:
-                ts_iso = event.timestamp.isoformat(timespec="seconds")
-                duration_secs = int(event.watched_duration.total_seconds())
-                total_secs = (
-                    int(event.total_duration.total_seconds())
-                    if event.total_duration is not None
-                    else None
-                )
-                source_hash = _compute_source_hash(
-                    provider, event.content_type, event.series_name,
-                    event.title, ts_iso, duration_secs,
-                )
-                if source_hash in seen_hashes:
-                    continue
-                seen_hashes.add(source_hash)
-
-                conn.execute(
-                    "INSERT OR IGNORE INTO watch_events "
-                    "(provider, title, content_type, series_name, "
-                    "watched_duration_seconds, total_duration_seconds, "
-                    "release_year_hint, language_hint, "
-                    "timestamp_iso, profile, import_id, source_hash) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (provider, event.title, event.content_type, event.series_name,
-                     duration_secs, total_secs, event.release_year_hint, event.language_hint,
-                     ts_iso, event.profile, import_id, source_hash),
-                )
+            _insert_events(conn, provider, import_id, events)
 
             persisted = conn.execute(
                 "SELECT COUNT(*) FROM watch_events WHERE import_id = ?",
                 (import_id,),
             ).fetchone()[0]
             return (persisted, total_raw)
+    finally:
+        conn.close()
+
+
+def append_provider_events(db_path: str, provider: str, events: list[WatchEvent]) -> int:
+    """Add events for a provider without touching the ones it already has.
+
+    For providers with no source file to replace from (Plex, one play per
+    webhook). Keeps a single imports row for the provider, creating it on
+    first use and refreshing its imported_at on every call. Events whose
+    hash is already stored are skipped.
+
+    Returns the number of new events stored.
+    """
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO imports (provider, source_manifest_json, snapshot_sha256) "
+                "VALUES (?, '[]', '') "
+                "ON CONFLICT (provider) DO UPDATE SET "
+                "imported_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+                (provider,),
+            )
+            import_id = conn.execute(
+                "SELECT id FROM imports WHERE provider = ?", (provider,),
+            ).fetchone()[0]
+            return _insert_events(conn, provider, import_id, events)
     finally:
         conn.close()
 
@@ -268,7 +310,7 @@ def load_events(db_path: str, provider: str | None = None) -> list[WatchEvent]:
     try:
         # Callers (CLI, web, tools) may read an existing on-disk database
         # without ever calling init_db() in that process. Backfill
-        # release_year_hint/language_hint here too, so a pre-migration DB
+        # the hint columns here too, so a pre-migration DB
         # doesn't raise "no such column" on a plain read.
         if not conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='watch_events'"
@@ -280,7 +322,7 @@ def load_events(db_path: str, provider: str | None = None) -> list[WatchEvent]:
         query = (
             "SELECT provider, title, content_type, series_name, "
             "watched_duration_seconds, total_duration_seconds, "
-            "release_year_hint, language_hint, "
+            "release_year_hint, language_hint, tmdb_id_hint, "
             "timestamp_iso, profile FROM watch_events"
         )
         params: tuple = ()
@@ -293,7 +335,7 @@ def load_events(db_path: str, provider: str | None = None) -> list[WatchEvent]:
         events = []
         for row in rows:
             (prov, title, ct, series, dur_secs, total_secs,
-             release_year_hint, language_hint, ts_iso, profile) = row
+             release_year_hint, language_hint, tmdb_id_hint, ts_iso, profile) = row
             events.append(WatchEvent(
                 platform=prov,
                 title=title,
@@ -305,6 +347,7 @@ def load_events(db_path: str, provider: str | None = None) -> list[WatchEvent]:
                 profile=profile,
                 release_year_hint=release_year_hint,
                 language_hint=language_hint,
+                tmdb_id_hint=tmdb_id_hint,
             ))
         return events
     finally:

@@ -405,7 +405,7 @@ def load_ratings(db_path: str) -> list[dict]:
     conn = _connect(db_path)
     try:
         rows = conn.execute(
-            "SELECT title, normalized_title, content_type, tmdb_id, rating, rated_at "
+            "SELECT title, normalized_title, content_type, tmdb_id, rating, rated_at, updated_at "
             "FROM title_ratings ORDER BY rated_at DESC",
         ).fetchall()
         return [
@@ -413,6 +413,7 @@ def load_ratings(db_path: str) -> list[dict]:
                 "title": r["title"], "normalized_title": r["normalized_title"],
                 "content_type": r["content_type"], "tmdb_id": r["tmdb_id"],
                 "rating": r["rating"], "rated_at": r["rated_at"],
+                "updated_at": r["updated_at"],
             }
             for r in rows
         ]
@@ -736,6 +737,31 @@ def list_show_tracking(db_path: str) -> list[dict]:
             "FROM show_tracking ORDER BY title COLLATE NOCASE",
         ).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_meta(db_path: str, key: str) -> str | None:
+    """Return one install-local bookkeeping value, or None if it was never set.
+
+    user_store_meta is not part of what recommend-sync moves between installs.
+    """
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT value FROM user_store_meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+    finally:
+        conn.close()
+
+
+def set_meta(db_path: str, key: str, value: str) -> None:
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO user_store_meta (key, value) VALUES (?, ?)",
+                (key, value),
+            )
     finally:
         conn.close()
 

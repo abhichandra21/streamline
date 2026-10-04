@@ -1,0 +1,30 @@
+{
+  "event": "media.stop",
+  "user": true,
+  "owner": true,
+  "Account": {
+    "id": 1,
+    "title": "household-member"
+  },
+  "Metadata": {
+    "type": "episode",
+    "title": "Newhaven Revisit 2024",
+    "grandparentTitle": "Grand Designs",
+    "grandparentRatingKey": "4132",
+    "parentIndex": 25,
+    "index": 6,
+    "year": 2024,
+    "duration": 2820000,
+    "lastViewedAt": 1791094723,
+    "viewCount": 3,
+    "ratingKey": "4140",
+    "guid": "plex://episode/66ec1f9bd07e4869e9ccb722",
+    "grandparentGuid": "plex://show/5d9c0871ba6eb9001fba425d",
+    "librarySectionType": "show",
+    "Guid": [
+      {
+        "id": "tmdb://5716864"
+      }
+    ]
+  }
+}

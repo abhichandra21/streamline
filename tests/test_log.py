@@ -360,3 +360,45 @@ class TestLogsRoute:
 
         assert resp.status_code == 302
         assert resp.headers["Location"].endswith("/logs?file=app&n=500")
+
+
+# ── Query-string tokens ───────────────────────────────────────────────────────
+
+class TestRequestLogRedaction:
+    def _werkzeug_record(self, request_line):
+        # Werkzeug logs requests as '%s - - [%s] %s' with the request line in args.
+        return logging.LogRecord(
+            "werkzeug", logging.INFO, __file__, 0, '%s - - [%s] %s',
+            ("192.168.1.2", "04/Oct/2026 02:00:00", f'"{request_line}" 200 -'), None,
+        )
+
+    def test_webhook_token_is_removed_from_request_lines(self):
+        from recommender.log import RedactQueryTokens
+
+        record = self._werkzeug_record("POST /plex/webhook?token=s3cret HTTP/1.1")
+        assert RedactQueryTokens().filter(record) is True
+
+        message = record.getMessage()
+        assert "s3cret" not in message
+        assert "/plex/webhook?token=[redacted] HTTP/1.1" in message
+
+    def test_other_request_lines_are_unchanged(self):
+        from recommender.log import RedactQueryTokens
+
+        record = self._werkzeug_record("GET /search?q=spy+thriller HTTP/1.1")
+        RedactQueryTokens().filter(record)
+
+        assert "/search?q=spy+thriller HTTP/1.1" in record.getMessage()
+
+    def test_setup_logging_installs_the_filter_on_werkzeug(self, tmp_path):
+        from recommender.log import RedactQueryTokens, setup_logging
+
+        werkzeug_log = logging.getLogger("werkzeug")
+        original_filters = werkzeug_log.filters[:]
+        try:
+            with patch("config.APP_LOG_PATH", str(tmp_path / "app.log")):
+                setup_logging()
+                setup_logging()
+            assert sum(isinstance(f, RedactQueryTokens) for f in werkzeug_log.filters) == 1
+        finally:
+            werkzeug_log.filters = original_filters
