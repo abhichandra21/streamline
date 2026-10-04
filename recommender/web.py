@@ -816,6 +816,8 @@ def plex_webhook() -> Response | tuple:
         return "Missing or malformed payload", 400
     try:
         result = plex.handle_webhook(payload, config.EVENT_DB_PATH, _get_plex_client())
+    except plex.PayloadError as exc:
+        return f"Malformed payload: {exc}", 400
     except sqlite3.Error:
         log.exception("Failed to save a Plex play")
         return "Failed to save the play", 500

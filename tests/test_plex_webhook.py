@@ -91,6 +91,14 @@ def test_a_missing_or_malformed_payload_is_a_bad_request(client, db, payload):
     assert load_events(db) == []
 
 
+def test_a_scrobble_without_a_play_time_is_a_bad_request(client, db):
+    payload = json.loads((FIXTURES / "scrobble_movie.json").read_text())
+    del payload["Metadata"]["lastViewedAt"]
+
+    assert _post(client, payload=json.dumps(payload)).status_code == 400
+    assert load_events(db) == []
+
+
 def test_a_database_failure_is_reported_as_a_server_error(client, db, monkeypatch):
     import sqlite3
 

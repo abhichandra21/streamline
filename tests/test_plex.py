@@ -151,6 +151,46 @@ def test_handle_webhook_keeps_the_play_when_the_rating_sync_fails(db):
     assert len(load_events(db, provider="plex")) == 1
 
 
+def test_a_scrobble_without_a_play_time_is_refused():
+    payload = _payload("scrobble_movie.json")
+    del payload["Metadata"]["lastViewedAt"]
+
+    with pytest.raises(plex.PayloadError):
+        plex.event_from_payload(payload, FakeClient())
+
+
+def test_handle_webhook_keeps_the_play_when_the_rating_write_fails(db, monkeypatch):
+    import sqlite3
+
+    def locked(*_a, **_kw):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(plex.user_store, "rate_title", locked)
+    client = FakeClient(rated=[_rated("The Big Short", 8.0, time.time() + 60, tmdb_id=318846)])
+
+    result = plex.handle_webhook(_payload("scrobble_movie.json"), db, client)
+
+    assert (result["status"], result["rating_changes"]) == ("saved", 0)
+    assert len(load_events(db, provider="plex")) == 1
+
+
+def test_without_a_client_the_fallbacks_are_logged_once_per_saved_play(db, monkeypatch):
+    from unittest.mock import MagicMock
+
+    # setup_logging() elsewhere in the suite stops propagation, so assert on the logger.
+    monkeypatch.setattr(plex, "log", MagicMock())
+    payload = _payload("scrobble_episode.json")
+
+    plex.handle_webhook(payload, db, None)
+    messages = [c.args[0] for c in plex.log.info.call_args_list]
+    assert any("title matcher" in m for m in messages)
+    assert sum("skipping the Plex rating sync" in m for m in messages) == 1
+
+    plex.log.reset_mock()
+    plex.handle_webhook(payload, db, None)  # duplicate
+    messages = [c.args[0] for c in plex.log.info.call_args_list]
+    assert not any("skipping the Plex rating sync" in m for m in messages)
+
+
 # ---------------------------------------------------------------------------
 # Rating sync
 # ---------------------------------------------------------------------------

@@ -23,6 +23,7 @@ import requests
 import config
 from recommender import event_store, user_store
 from recommender.ingestion.base import WatchEvent, detect_language_hint
+from recommender.user_store import _normalize as normalize_title
 
 log = logging.getLogger("recommender.plex")
 
@@ -47,6 +48,10 @@ _RATED_TYPES = {"movie": "movie", "show": "tv"}
 
 class PlexError(Exception):
     """A call to the Plex server failed or returned something unusable."""
+
+
+class PayloadError(ValueError):
+    """A webhook payload is missing what a play needs."""
 
 
 @dataclass
@@ -134,7 +139,10 @@ def rating_band(user_rating: float | None) -> str | None:
 
 
 def _show_tmdb_id(client: PlexClient | None, rating_key: str | None) -> int | None:
-    if client is None or not rating_key:
+    if not rating_key:
+        return None
+    if client is None:
+        log.info("PLEX_URL or PLEX_TOKEN not set; the show will go to the title matcher")
         return None
     try:
         return client.show_tmdb_id(str(rating_key))
@@ -144,7 +152,11 @@ def _show_tmdb_id(client: PlexClient | None, rating_key: str | None) -> int | No
 
 
 def event_from_payload(payload: dict, client: PlexClient | None) -> WatchEvent | None:
-    """Turn a webhook payload into a watch event; None for anything but a video scrobble."""
+    """Turn a webhook payload into a watch event; None for anything but a video scrobble.
+
+    Raises PayloadError for a scrobble with no lastViewedAt: the play time is
+    part of the event's identity, so guessing one would defeat duplicate detection.
+    """
     if payload.get("event") != SCROBBLE_EVENT:
         return None
     meta = payload.get("Metadata") or {}
@@ -152,11 +164,10 @@ def event_from_payload(payload: dict, client: PlexClient | None) -> WatchEvent |
     if kind not in ("movie", "episode"):
         return None
 
-    viewed_at = meta.get("lastViewedAt")
-    timestamp = (
-        datetime.fromtimestamp(viewed_at, tz=timezone.utc).replace(tzinfo=None)
-        if viewed_at else datetime.now(timezone.utc).replace(tzinfo=None)
-    )
+    viewed_at_epoch_seconds = meta.get("lastViewedAt")
+    if not viewed_at_epoch_seconds:
+        raise PayloadError("Plex scrobble has no lastViewedAt")
+    timestamp = datetime.fromtimestamp(viewed_at_epoch_seconds, tz=timezone.utc).replace(tzinfo=None)
     if meta.get("duration"):
         duration = timedelta(milliseconds=meta["duration"])
     elif kind == "movie":
@@ -199,7 +210,7 @@ def event_from_payload(payload: dict, client: PlexClient | None) -> WatchEvent |
     )
 
 
-def _epoch(iso: str) -> float:
+def _iso_to_epoch_seconds(iso: str) -> float:
     return datetime.fromisoformat(iso).timestamp()
 
 
@@ -210,9 +221,11 @@ def sync_ratings(db_path: str, client: PlexClient,
     Raises PlexError if Plex fails; the mark then stays put so the next run retries.
     """
     user_store.ensure_user_store(db_path, config.FEEDBACK_PATH)
-    scan_start = int(now())
+    scan_started_epoch_seconds = int(now())
     mark_value = user_store.get_meta(db_path, RATINGS_MARK_KEY)
-    read_after = int(mark_value) - RATINGS_MARK_OVERLAP_SECONDS if mark_value else None
+    read_after_epoch_seconds = (
+        int(mark_value) - RATINGS_MARK_OVERLAP_SECONDS if mark_value else None
+    )
 
     items = client.rated_items()
 
@@ -227,15 +240,18 @@ def sync_ratings(db_path: str, client: PlexClient,
         if content_type is None or band is None:
             continue
         # A rating with no rated time counts as older than anything in Streamline.
-        rated_at = item.get("lastRatedAt") or 0
-        if read_after is not None and rated_at <= read_after:
+        rated_at_epoch_seconds = item.get("lastRatedAt") or 0
+        if read_after_epoch_seconds is not None and rated_at_epoch_seconds <= read_after_epoch_seconds:
             continue
 
         title = item.get("title", "")
         tmdb_id = tmdb_id_from_guids(item.get("Guid"))
         existing = (by_tmdb.get((content_type, tmdb_id)) if tmdb_id else None) or \
-            by_title.get((content_type, user_store._normalize(title)))
-        if existing and (existing["rating"] == band or _epoch(existing["updated_at"]) >= rated_at):
+            by_title.get((content_type, normalize_title(title)))
+        if existing and (
+            existing["rating"] == band
+            or _iso_to_epoch_seconds(existing["updated_at"]) >= rated_at_epoch_seconds
+        ):
             continue
 
         user_store.rate_title(db_path, title, content_type, band, tmdb_id=tmdb_id)
@@ -245,7 +261,7 @@ def sync_ratings(db_path: str, client: PlexClient,
         applied = {"rating": band, "updated_at": datetime.now(timezone.utc).isoformat()}
         if tmdb_id:
             by_tmdb[(content_type, tmdb_id)] = applied
-        by_title[(content_type, user_store._normalize(title))] = applied
+        by_title[(content_type, normalize_title(title))] = applied
         log.info("Plex rating applied: %s (%s) %s -> %s",
                  title, content_type, change.old or "unrated", band)
         changes.append(change)
@@ -253,7 +269,7 @@ def sync_ratings(db_path: str, client: PlexClient,
     # The scan's start, not the newest rating seen: a rating changed during
     # the scan in an already-read section is then read again next time, and
     # the overlap above covers ratings Plex reports late.
-    user_store.set_meta(db_path, RATINGS_MARK_KEY, str(scan_start))
+    user_store.set_meta(db_path, RATINGS_MARK_KEY, str(scan_started_epoch_seconds))
     return changes
 
 
@@ -271,13 +287,16 @@ def handle_webhook(payload: dict, db_path: str, client: PlexClient | None) -> di
              event.timestamp.isoformat(timespec="seconds"))
 
     rating_changes = 0
-    if status == "saved" and client is not None:
-        try:
-            rating_changes = len(sync_ratings(db_path, client))
-        except PlexError as exc:
-            log.warning("Plex rating sync failed; it will retry after the next play: %s", exc)
-    elif client is None:
-        log.info("PLEX_URL or PLEX_TOKEN not set; skipping the Plex rating sync")
+    if status == "saved":
+        if client is None:
+            log.info("PLEX_URL or PLEX_TOKEN not set; skipping the Plex rating sync")
+        else:
+            try:
+                rating_changes = len(sync_ratings(db_path, client))
+            except Exception:
+                # The play is already stored; a rating failure must not turn
+                # this webhook into an error. The mark stays put, so it retries.
+                log.exception("Plex rating sync failed; it will retry after the next play")
     return {"status": status, "title": event.title, "rating_changes": rating_changes}
 
 
