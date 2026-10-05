@@ -3214,3 +3214,88 @@ def test_history_items_without_tmdb_id_are_not_links(client, tmp_path, monkeypat
     # Bonus Clip still appears in every view, just without a link.
     assert html.count("Bonus Clip") >= 3
     assert "/title/0" not in html
+
+
+class TestClassicsAndNotInterested:
+
+    def test_classics_page_lists_unseen_titles_with_both_actions(self, client, monkeypatch):
+        from recommender.tmdb_client import CatalogTitle
+        monkeypatch.setattr("config.TMDB_API_KEY", "key")
+        monkeypatch.setattr(web.wi, "load", lambda path: MagicMock())
+        monkeypatch.setattr(web, "_load_user_state", lambda: MagicMock())
+        title = CatalogTitle(tmdb_id=155, content_type="movie", title="The Dark Knight", year=2008,
+                             poster_path="/p.jpg", overview="", vote_average=8.5, vote_count=30000)
+        monkeypatch.setattr(web, "unseen_classics", lambda *a, **k: [title])
+
+        resp = client.get("/classics")
+
+        body = resp.get_data(as_text=True)
+        assert resp.status_code == 200
+        assert "The Dark Knight" in body
+        assert 'hx-post="/classics/seen"' in body
+        assert 'hx-post="/watchlist/dismiss"' in body
+        assert "Show more" not in body
+
+    def test_classics_seen_archives_without_a_rating_prompt(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "")
+
+        resp = client.post("/classics/seen", data={
+            **_csrf_form(), "title": "The Dark Knight", "content_type": "movie", "tmdb_id": "155",
+        })
+
+        body = resp.get_data(as_text=True)
+        assert resp.status_code == 200
+        assert "Marked seen" in body
+        assert "More like this" not in body
+        assert len(list_manual_archive(db)) == 1
+
+    def test_classics_page_offers_more_when_titles_remain(self, client, monkeypatch):
+        from recommender.tmdb_client import CatalogTitle
+        monkeypatch.setattr("config.TMDB_API_KEY", "key")
+        monkeypatch.setattr(web.wi, "load", lambda path: MagicMock())
+        monkeypatch.setattr(web, "_load_user_state", lambda: MagicMock())
+        titles = [CatalogTitle(tmdb_id=i, content_type="movie", title=f"T{i}", year=2000,
+                               poster_path=None, overview="", vote_average=8.0, vote_count=1000)
+                  for i in range(web.CLASSICS_PAGE_SIZE + 5)]
+        monkeypatch.setattr(web, "unseen_classics", lambda *a, **k: titles)
+
+        body = client.get("/classics").get_data(as_text=True)
+
+        assert "T29" in body and "T30" not in body
+        assert f"/classics?limit={web.CLASSICS_PAGE_SIZE * 2}" in body
+
+    def test_result_cards_offer_not_interested_next_to_seen_it(self, client):
+        item = {
+            "title": "Slow Horses", "content_type": "tv", "score": 0.9, "vote_average": 8.0,
+            "rating_source": "tmdb", "genres": [], "explanation": "Spies.", "streaming_providers": [],
+            "poster": None, "tmdb_url": "", "imdb_url": "", "tmdb_id": 95480,
+            "user_state": {"in_archive": False, "in_watchlist": False, "is_dismissed": False, "rating": None},
+        }
+        with app.test_request_context():
+            html = web.render_template("_results.html", results=[item], query="spies")
+
+        assert "Seen it" in html
+        assert 'hx-post="/watchlist/dismiss"' in html
+        assert "Not interested" in html
+
+    def test_recommend_job_keeps_recent_search_titles_out(self, monkeypatch):
+        seen = {}
+
+        def fake_ask(query, ctx, **kwargs):
+            seen.update(kwargs)
+            return []
+
+        monkeypatch.setattr(web, "_get_job_context", lambda: MagicMock())
+        monkeypatch.setattr(web, "ask", fake_ask)
+        monkeypatch.setattr(web, "_build_result_items", lambda results, ctx: [])
+        monkeypatch.setattr(web.query_history, "record", lambda *a, **k: None)
+        monkeypatch.setattr(web.query_history, "recent_titles", lambda query: {"Slow Horses"})
+
+        web._run_recommend_job("spy thriller")
+
+        assert seen["exclude_titles"] == {"Slow Horses"}

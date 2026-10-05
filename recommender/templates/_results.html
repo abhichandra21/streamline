@@ -119,6 +119,13 @@
             <button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;" title="Mark as already watched">Seen it</button>
           </form>
         </span>
+        <form hx-post="/watchlist/dismiss" hx-target="closest .lr-card" hx-swap="outerHTML" style="margin:0; display:inline;">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="title" value="{{ r.title }}">
+          <input type="hidden" name="content_type" value="{{ r.content_type }}">
+          {% if r.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ r.tmdb_id }}">{% endif %}
+          <button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;" title="Hide this and keep it out of future results">Not interested</button>
+        </form>
         {% endif %}
       </div>
     </div>

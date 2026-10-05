@@ -362,3 +362,19 @@ def load(limit: int | None = None, db_path: str | None = None) -> list[dict]:
         except json.JSONDecodeError:
             log.warning("Skipping unreadable query history row")
     return entries
+
+
+def recent_titles(query: str, limit: int = 20, db_path: str | None = None) -> set[str]:
+    """Titles shown by the last `limit` searches, so a new search does not repeat them.
+
+    A title the query names itself is left out of the set, since the person
+    may well be asking for it again.
+    """
+    wanted = query.lower()
+    titles = set()
+    for entry in load(limit=limit, db_path=db_path):
+        for result in entry.get("results") or []:
+            title = result.get("title")
+            if title and title.lower() not in wanted:
+                titles.add(title)
+    return titles

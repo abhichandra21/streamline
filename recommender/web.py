@@ -46,7 +46,7 @@ from recommender.tmdb_client import MOVIE_GENRE_IDS, TV_GENRE_IDS, TmdbClient, T
 from recommender.language_catalog import LANGUAGE_OPTIONS, LANGUAGES
 from recommender.catalog_finder import (
     LANGUAGE_MIN_IMDB_VOTES, FindCriteria, PERIOD_OPTIONS, RATING_OPTIONS, SORT_OPTIONS,
-    find_unwatched_titles,
+    find_unwatched_titles, unseen_classics,
 )
 
 def _events_loader_fallback() -> list:
@@ -150,9 +150,18 @@ def _get_job_context() -> RecommendContext:
 
 # ── Background job: recommendation query ─────────────────────────────────────
 
+def _recent_search_titles(query: str) -> set[str]:
+    """Titles from recent searches, to keep out of this one. Never blocks a search."""
+    try:
+        return query_history.recent_titles(query)
+    except Exception as exc:
+        log.warning("Could not read recent searches: %s", exc)
+        return set()
+
+
 def _run_recommend_job(query: str) -> dict:
     ctx = _get_job_context()
-    results = ask(query, ctx)
+    results = ask(query, ctx, exclude_titles=_recent_search_titles(query))
     items = _build_result_items(results, ctx)
     try:
         query_history.record(query, items, ctx.llm.provider, ctx.llm.usage.summary())
@@ -172,7 +181,7 @@ def _run_wizard_recommend_job(intent_dict: dict, context_note: str, summary: str
     # Use the human-readable recap as the query so semantic suggestions and the
     # ranker stay tied to the wizard answers rather than an empty string.
     results = ask(summary, ctx, intent_override=intent, context_note=context_note,
-                  exclude_titles=set(exclude) if exclude else None)
+                  exclude_titles=set(exclude or ()) | _recent_search_titles(summary))
     items = _build_result_items(results, ctx)
     label = _wizard_label(summary)
     try:
@@ -1307,7 +1316,7 @@ def recommend_post() -> str:
     # Non-HTMX: run synchronously and return full page
     try:
         ctx = _get_job_context()
-        results = ask(query, ctx)
+        results = ask(query, ctx, exclude_titles=_recent_search_titles(query))
         items = _build_result_items(results, ctx)
         try:
             query_history.record(query, items, ctx.llm.provider, ctx.llm.usage.summary())
@@ -1527,6 +1536,44 @@ def find_page() -> str:
         page["error"] = f"TMDB request failed ({type(exc).__name__}). Check the network and try again."
 
     return _find_response(cursor, page)
+
+
+CLASSICS_PAGE_SIZE = 30
+
+
+@app.route("/classics")
+def classics_page() -> str:
+    """Poster grid of famous titles not yet in the history, archive, or dismissed list.
+
+    A one-time catch-up pass: "Seen it" adds a title to the manual archive and
+    "Not interested" dismisses it. Talks only to TMDB. Showing more just raises
+    the limit, so titles marked off the page never shift the count.
+    """
+    limit = min(max(request.args.get("limit", CLASSICS_PAGE_SIZE, type=int), CLASSICS_PAGE_SIZE), 300)
+    page = {"titles": [], "has_more": False, "next_limit": limit + CLASSICS_PAGE_SIZE, "error": None}
+
+    if not config.TMDB_API_KEY:
+        page["error"] = "TMDB_API_KEY is not set. Add it to the environment (or .env) and restart the web UI."
+        return render_template("classics.html", **page)
+    try:
+        watch_index = wi.load(config.WATCH_INDEX_PATH)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        log.warning("Classics: watch index unavailable at %s: %s", config.WATCH_INDEX_PATH, exc)
+        page["error"] = "Watch index is missing or unreadable. Run ./recommend setup, then reload this page."
+        return render_template("classics.html", **page)
+
+    tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+    try:
+        remaining = unseen_classics(tmdb, watch_index, _load_user_state(), config.FIND_CACHE_DIR)
+        page["titles"] = remaining[:limit]
+        page["has_more"] = len(remaining) > limit
+    except TmdbRateLimitError:
+        page["error"] = "TMDB rate limit reached while reading the catalogue. Try again in a moment."
+    except (requests.RequestException, ValueError, KeyError) as exc:
+        # Never echo the exception text: request errors can carry the full URL.
+        log.warning("Classics: TMDB request failed: %s", type(exc).__name__)
+        page["error"] = f"TMDB request failed ({type(exc).__name__}). Check the network and try again."
+    return render_template("classics.html", **page)
 
 
 def _find_response(cursor: str | None, page: dict) -> str:
@@ -2223,6 +2270,13 @@ def archive_add() -> str:
     uid = f"aa-{hash(title) & 0xFFFFFF:06x}"
     return render_template("_rating_prompt.html", title=title, content_type=ct,
                            tmdb_id=tmdb_id, uid=uid)
+
+
+@app.route("/classics/seen", methods=["POST"])
+def classics_seen() -> str:
+    """Seen it on the Classics page: same archive add, but no rating prompt."""
+    archive_add()
+    return '<span class="mono" style="font-size:0.58rem; color:var(--teal);">Marked seen</span>'
 
 
 @app.route("/archive/resolve", methods=["POST"])

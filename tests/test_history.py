@@ -451,3 +451,17 @@ def test_legacy_entry_keeps_an_odd_results_payload_verbatim(tmp_path, monkeypatc
     db = str(tmp_path / "streamline.db")
 
     assert history.load(db_path=db) == [odd]
+
+
+def test_recent_titles_collects_the_last_searches(store):
+    history.record("old", [_rec("Too Old")], "anthropic", "", db_path=store)
+    history.record("one", [_rec("Slow Horses")], "anthropic", "", db_path=store)
+    history.record("two", [_rec("Broadchurch")], "anthropic", "", db_path=store)
+
+    assert history.recent_titles("anything", limit=2, db_path=store) == {"Slow Horses", "Broadchurch"}
+
+
+def test_recent_titles_leaves_out_a_title_the_query_names(store):
+    history.record("one", [_rec("Slow Horses"), _rec("Broadchurch")], "anthropic", "", db_path=store)
+
+    assert history.recent_titles("more like slow horses", db_path=store) == {"Broadchurch"}

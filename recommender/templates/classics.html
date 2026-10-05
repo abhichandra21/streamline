@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Classics catch-up{% endblock %}
+{% block content %}
+
+<style>
+  .classics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1rem; }
+  .classic-card { display: flex; flex-direction: column; gap: 0.4rem; }
+  .classic-poster { aspect-ratio: 2/3; border-radius: 4px; overflow: hidden; background: var(--surface2); display: block; }
+  .classic-poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .classic-title { font-size: 0.85rem; line-height: 1.3; color: var(--text); }
+  .classic-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
+</style>
+
+<div style="margin-bottom:1.5rem;">
+  <a href="/history" class="mono result-link">&larr; Archive</a>
+  <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.4rem;">Classics catch-up</h1>
+  <p style="font-size:0.88rem; color:var(--muted); margin-top:0.4rem;">
+    The most-voted movies and shows on TMDB that are not in your history. Tap "Seen it" for the ones you have watched, "Not interested" for the rest.
+  </p>
+</div>
+
+{% if error %}
+<div style="padding:1rem 1.25rem; background:rgba(232,93,74,0.08); border:1px solid rgba(232,93,74,0.2); border-radius:6px; font-size:0.88rem; color:#e88;">{{ error }}</div>
+{% elif not titles %}
+<p class="mono" style="font-size:0.7rem; text-transform:uppercase; color:var(--muted);">Nothing left to catch up on.</p>
+{% else %}
+<div class="classics-grid">
+  {% for t in titles %}
+  <div class="classic-card">
+    <a class="classic-poster" href="https://www.themoviedb.org/{{ t.content_type }}/{{ t.tmdb_id }}" target="_blank" rel="noopener">
+      {% if t.poster_path %}<img src="https://image.tmdb.org/t/p/w342{{ t.poster_path }}" alt="{{ t.title }}" loading="lazy">{% endif %}
+    </a>
+    <div class="classic-title">{{ t.title }}{% if t.year %} <span class="mono" style="font-size:0.62rem; color:var(--muted);">{{ t.year }}</span>{% endif %}</div>
+    <div class="classic-actions">
+      <span id="cl-seen-{{ t.content_type }}-{{ t.tmdb_id }}">
+        <form hx-post="/classics/seen" hx-target="#cl-seen-{{ t.content_type }}-{{ t.tmdb_id }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="title" value="{{ t.title }}">
+          <input type="hidden" name="content_type" value="{{ t.content_type }}">
+          <input type="hidden" name="tmdb_id" value="{{ t.tmdb_id }}">
+          <button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;">Seen it</button>
+        </form>
+      </span>
+      <form hx-post="/watchlist/dismiss" hx-target="closest .classic-card" hx-swap="outerHTML" style="margin:0; display:inline;">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="title" value="{{ t.title }}">
+        <input type="hidden" name="content_type" value="{{ t.content_type }}">
+        <input type="hidden" name="tmdb_id" value="{{ t.tmdb_id }}">
+        <button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;">Not interested</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% if has_more %}
+<div style="margin-top:1.5rem; text-align:center;">
+  <a href="/classics?limit={{ next_limit }}" class="btn-ghost" style="padding:0.6rem 1.2rem;">Show more</a>
+</div>
+{% endif %}
+{% endif %}
+
+{% endblock %}

@@ -592,3 +592,56 @@ def test_language_show_more_survives_a_title_marked_watched_between_clicks(tmp_p
                            watch_index=FakeWatchIndex({1}))
 
     assert [r.title.tmdb_id for r in second.rows] == [11, 12, 13, 14, 15]
+
+
+# ── Classics catch-up ─────────────────────────────────────────────────────────
+
+def _classics_tmdb(tmp_path):
+    """Movies on every movie page, one show per page: vote counts fall as ids rise."""
+    class Tmdb(FakeTmdb):
+        def discover_catalog_page(self, content_type, release_start, release_end, page=1, sort_by=None, **kw):
+            self.discover_calls.append({"content_type": content_type, "page": page, "sort_by": sort_by})
+            base = 1000 if content_type == "movie" else 2000
+            row = _title(base + page, content_type)
+            row = CatalogTitle(**{**row.__dict__, "vote_count": 100000 - base - page})
+            return CatalogPage(rows=(row,), page=page, total_pages=99)
+    return Tmdb({})
+
+
+def test_famous_titles_reads_most_voted_pages_and_caches(tmp_path):
+    tmdb = _classics_tmdb(tmp_path)
+
+    first = cf.famous_titles(tmdb, str(tmp_path), TODAY)
+    again = cf.famous_titles(tmdb, str(tmp_path), TODAY)
+
+    assert len(tmdb.discover_calls) == 15      # 10 movie pages + 5 show pages, once
+    assert {c["sort_by"] for c in tmdb.discover_calls} == {"vote_count.desc"}
+    assert [t.vote_count for t in first] == sorted((t.vote_count for t in first), reverse=True)
+    assert again == first
+
+
+def test_famous_titles_failed_page_saves_nothing(tmp_path):
+    tmdb = _classics_tmdb(tmp_path)
+    good = tmdb.discover_catalog_page
+
+    def flaky(content_type, *a, page=1, **k):
+        if content_type == "tv" and page == 2:
+            raise TmdbRateLimitError(None)
+        return good(content_type, *a, page=page, **k)
+    tmdb.discover_catalog_page = flaky
+
+    with pytest.raises(TmdbRateLimitError):
+        cf.famous_titles(tmdb, str(tmp_path), TODAY)
+    assert not (tmp_path / "classics.json").exists()
+
+
+def test_unseen_classics_drops_watched_archived_and_dismissed(tmp_path):
+    tmdb = _classics_tmdb(tmp_path)
+
+    left = cf.unseen_classics(
+        tmdb, FakeWatchIndex(watched_ids={1001}), FakeUserState(archived_ids={1002}, dismissed_ids={1003}),
+        str(tmp_path), TODAY)
+
+    ids = {t.tmdb_id for t in left}
+    assert not ids & {1001, 1002, 1003}
+    assert {1004, 2001} <= ids

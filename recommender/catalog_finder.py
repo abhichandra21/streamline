@@ -7,11 +7,13 @@ now-playing list, for a display-only "In theaters" badge on Movies, and one
 cached IMDb ID lookup per shown title, for its display-only IMDb rating.
 """
 
+import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
@@ -238,6 +240,48 @@ def find_unwatched_titles(
         catalog_exhausted=exhausted,
         next_cursor=next_cursor,
     )
+
+
+# The most-voted titles barely change, so a week-old list is fine.
+CLASSICS_TTL_SECONDS = 7 * 86400
+# TMDB returns 20 per page: about 200 movies and 100 shows.
+CLASSICS_PAGES = {"movie": 10, "tv": 5}
+
+
+def famous_titles(tmdb: TmdbClient, cache_dir: str, today: date | None = None) -> list[CatalogTitle]:
+    """The most-voted movies and shows on TMDB, most voted first (cached for a week).
+
+    A failed page raises, so a partial list is never saved.
+    """
+    cache_path = Path(cache_dir) / "classics.json"
+    cached = TmdbClient._read_fresh_cache(cache_path, CLASSICS_TTL_SECONDS)
+    if cached is not None:
+        return [CatalogTitle(**row) for row in cached.get("titles", [])]
+
+    end = today or chicago_today()
+    titles: list[CatalogTitle] = []
+    for content_type, pages in CLASSICS_PAGES.items():
+        for page in range(1, pages + 1):
+            result = tmdb.discover_catalog_page(
+                content_type, date(1900, 1, 1), end, page=page, sort_by="vote_count.desc")
+            titles.extend(result.rows)
+            if page >= result.total_pages:
+                break
+    titles.sort(key=lambda t: t.vote_count, reverse=True)
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps({"titles": [asdict(t) for t in titles]}))
+    return titles
+
+
+def unseen_classics(tmdb: TmdbClient, watch_index, user_state, cache_dir: str,
+                    today: date | None = None) -> list[CatalogTitle]:
+    """Famous titles that are not in the watch history, the manual archive, or the dismissed list."""
+    return [
+        t for t in famous_titles(tmdb, cache_dir, today)
+        if not (watch_index.is_watched(t) or user_state.is_manually_watched(t)
+                or user_state.is_dismissed(t))
+    ]
 
 
 def _annotate_cinema(
