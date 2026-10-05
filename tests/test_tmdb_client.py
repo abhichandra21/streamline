@@ -1266,3 +1266,11 @@ def test_exact_title_type_check_ignores_exact_match_released_after_first_watch(t
     hints = MatchHints(first_watch_date=date(2020, 1, 1))
     with patch.object(client, "_search_candidates_or_error", side_effect=fake):
         assert client._type_with_exact_title("24: Live Another Day", "movie", hints) == "tv"
+
+
+def test_search_by_filters_matches_any_of_several_genres():
+    client = TmdbClient(api_key="test-key", cache_dir="/tmp/unused")
+    with patch.object(client, "_get", return_value={"results": []}) as mock_get:
+        client.search_by_filters("movie", genres=["mystery", "crime", "adventure"], size=5)
+
+    assert mock_get.call_args.kwargs["params"]["with_genres"] == "9648|80|12"

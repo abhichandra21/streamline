@@ -936,7 +936,9 @@ class TmdbClient:
             if unmapped:
                 log.debug("Unmapped genres (not in TMDB genre map): %s", unmapped)
             if ids:
-                params["with_genres"] = ",".join(ids)
+                # Any of the genres, not all: "mystery, crime, adventure" as an AND
+                # leaves only a handful of films, too few to fill a request.
+                params["with_genres"] = "|".join(ids)
                 log.debug("Genre filter: %s -> TMDB IDs %s", genres, ids)
 
         if origin_countries:
