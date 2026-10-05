@@ -122,6 +122,14 @@ def test_delete_by_timestamp(store):
     assert [e["query"] for e in history.load(db_path=store)] == ["keep"]
 
 
+def test_clear_removes_every_entry(store):
+    history.record("one", [], "anthropic", "", db_path=store)
+    history.record("two", [], "anthropic", "", db_path=store)
+
+    assert history.clear(db_path=store) == 2
+    assert history.load(db_path=store) == []
+
+
 def test_delete_unknown_timestamp(store):
     history.record("keep", [], "anthropic", "", db_path=store)
 
@@ -465,3 +473,20 @@ def test_recent_titles_leaves_out_a_title_the_query_names(store):
     history.record("one", [_rec("Slow Horses"), _rec("Broadchurch")], "anthropic", "", db_path=store)
 
     assert history.recent_titles("more like slow horses", db_path=store) == {"Broadchurch"}
+
+
+def test_cleared_and_deleted_searches_still_stop_repeats(store):
+    history.record("one", [_rec("Slow Horses")], "anthropic", "", db_path=store)
+    history.record("two", [_rec("Broadchurch")], "anthropic", "", db_path=store)
+    history.delete(history.load(db_path=store)[0]["timestamp"], db_path=store)
+    history.clear(db_path=store)
+
+    assert history.load(db_path=store) == []
+    assert history.recent_titles("anything", db_path=store) == {"Slow Horses", "Broadchurch"}
+
+
+def test_clear_does_not_count_already_hidden_entries(store):
+    history.record("one", [], "anthropic", "", db_path=store)
+    history.clear(db_path=store)
+
+    assert history.clear(db_path=store) == 0

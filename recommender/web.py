@@ -1293,6 +1293,12 @@ def delete_search():
     return "", 200, {"HX-Redirect": "/searches"}
 
 
+@app.route("/searches/clear", methods=["DELETE"])
+def clear_searches():
+    query_history.clear()
+    return "", 200, {"HX-Redirect": "/searches"}
+
+
 @app.route("/recommend", methods=["GET"])
 def recommend_page() -> str:
     return render_template("recommend.html", query="")

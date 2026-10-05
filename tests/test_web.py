@@ -3299,3 +3299,14 @@ class TestClassicsAndNotInterested:
         web._run_recommend_job("spy thriller")
 
         assert seen["exclude_titles"] == {"Slow Horses"}
+
+
+def test_clear_searches_deletes_all_and_redirects(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(web.query_history, "clear", lambda: calls.append(1) or 3)
+
+    resp = client.delete("/searches/clear", headers={**_csrf_headers(), "HX-Request": "true"})
+
+    assert resp.status_code == 200
+    assert resp.headers["HX-Redirect"] == "/searches"
+    assert calls == [1]
