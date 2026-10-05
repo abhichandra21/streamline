@@ -22,7 +22,11 @@ LEGACY_HISTORY_PATH = Path(config.ENRICHMENT_CACHE_DIR).parent / "query_history.
 MAX_ENTRIES = 100
 _MIGRATION_KEY = "json_history_migrated"
 # Deleting or clearing a search hides it from the page but keeps the row.
-_VISIBLE = "json_extract(entry, '$.hidden') IS NOT 1"
+# CASE keeps an unreadable row from failing the whole query: load() still
+# selects it so the decoder can skip it, and hiding just leaves it alone.
+_VISIBLE = "CASE WHEN json_valid(entry) THEN json_extract(entry, '$.hidden') IS NOT 1 ELSE {} END"
+_SHOWN = _VISIBLE.format(1)
+_HIDEABLE = _VISIBLE.format(0)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS query_history (
@@ -341,7 +345,7 @@ def delete(timestamp: str, db_path: str | None = None) -> bool:
         with conn:
             cur = conn.execute(
                 f"UPDATE query_history SET entry = json_set(entry, '$.hidden', json('true')) "
-                f"WHERE timestamp = ? AND {_VISIBLE}", (timestamp,)
+                f"WHERE timestamp = ? AND {_HIDEABLE}", (timestamp,)
             )
         return cur.rowcount > 0
     finally:
@@ -359,7 +363,7 @@ def clear(db_path: str | None = None) -> int:
         with conn:
             cur = conn.execute(
                 f"UPDATE query_history SET entry = json_set(entry, '$.hidden', json('true')) "
-                f"WHERE {_VISIBLE}"
+                f"WHERE {_HIDEABLE}"
             )
         return cur.rowcount
     finally:
@@ -371,7 +375,7 @@ def load(limit: int | None = None, db_path: str | None = None,
     """Load history entries, most recent first. Hidden (deleted or cleared) entries are skipped unless asked for."""
     conn = _open(db_path)
     try:
-        where = "" if include_hidden else f" WHERE {_VISIBLE}"
+        where = "" if include_hidden else f" WHERE {_SHOWN}"
         sql = f"SELECT entry FROM query_history{where} ORDER BY id DESC"
         params: tuple = ()
         if limit:

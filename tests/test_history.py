@@ -490,3 +490,15 @@ def test_clear_does_not_count_already_hidden_entries(store):
     history.clear(db_path=store)
 
     assert history.clear(db_path=store) == 0
+
+
+def test_an_unreadable_row_does_not_break_loading_or_clearing(store):
+    history.record("good", [], "anthropic", "", db_path=store)
+    conn = sqlite3.connect(store)
+    with conn:
+        conn.execute("INSERT INTO query_history (timestamp, entry) VALUES ('2026-01-01T00:00:00+00:00', 'not json')")
+    conn.close()
+
+    assert [e["query"] for e in history.load(db_path=store)] == ["good"]
+    assert history.clear(db_path=store) == 1
+    assert history.load(db_path=store) == []
