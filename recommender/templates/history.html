@@ -111,9 +111,15 @@
     onmouseout="this.style.background='transparent'"
   >
     {% if item.poster %}
-    <a href="{{ link or '#' }}" style="flex-shrink:0; display:block; width:38px; height:57px; overflow:hidden; border-radius:3px;">
+    {% if link %}
+    <a href="{{ link }}" style="flex-shrink:0; display:block; width:38px; height:57px; overflow:hidden; border-radius:3px;">
       <img src="{{ item.poster }}" alt="{{ item.title }}" style="width:100%; height:100%; object-fit:cover;">
     </a>
+    {% else %}
+    <div style="flex-shrink:0; display:block; width:38px; height:57px; overflow:hidden; border-radius:3px;">
+      <img src="{{ item.poster }}" alt="{{ item.title }}" style="width:100%; height:100%; object-fit:cover;">
+    </div>
+    {% endif %}
     {% else %}
     <div style="width:38px; height:57px; background:var(--surface2); border-radius:3px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">
       <span style="font-family:'DM Serif Display',serif; font-size:0.9rem; color:var(--border);">?</span>
@@ -158,9 +164,11 @@
   <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:8px;">
     {% for item in items %}
     {% set link = "/title/" ~ item.tmdb_id ~ "?type=" ~ item.content_type if item.tmdb_id else none %}
-    <a href="{{ link or '#' }}" style="display:block; text-decoration:none; position:relative; group;" title="{{ item.title }}">
+    {# No TMDB ID means nothing to open, so draw a plain card, not a link. #}
+    {% set card_tag = 'a' if link else 'div' %}
+    <{{ card_tag }}{% if link %} href="{{ link }}"{% endif %} style="display:block; text-decoration:none; position:relative; group;" title="{{ item.title }}">
       <div style="aspect-ratio:2/3; overflow:hidden; border-radius:4px; background:var(--surface2); border:1px solid var(--border); transition:border-color 0.2s;"
-        onmouseover="this.style.borderColor='var(--accent)'; this.querySelector('.grid-title').style.opacity='1'"
+        onmouseover="{% if link %}this.style.borderColor='var(--accent)'; {% endif %}this.querySelector('.grid-title').style.opacity='1'"
         onmouseout="this.style.borderColor='var(--border)'; this.querySelector('.grid-title').style.opacity='0'"
       >
         {% if item.poster %}
@@ -180,7 +188,7 @@
           <span class="badge {{ 'badge-tv' if item.content_type == 'tv' else 'badge-movie' }}" style="margin-top:3px; font-size:0.5rem;">{{ item.content_type }}</span>
         </div>
       </div>
-    </a>
+    </{{ card_tag }}>
     {% endfor %}
   </div>
   {% else %}
@@ -296,6 +304,7 @@
   }
   #view-list > div,
   #view-grid > div > a,
+  #view-grid > div > div,
   #view-compact > div > div {
     animation: archiveIn 0.25s ease both;
   }

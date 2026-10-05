@@ -926,6 +926,116 @@ class TestTitleDetailFallback:
         assert "Title not found in cache" not in html
 
 
+class TestTitleDetailFetchOnMiss:
+    @staticmethod
+    def _user_state():
+        state = MagicMock()
+        state.is_manually_watched.return_value = False
+        state.is_in_watchlist.return_value = False
+        state.is_dismissed.return_value = False
+        state.get_rating.return_value = None
+        return state
+
+    @patch("recommender.web._load_enrichments", return_value={})
+    @patch("recommender.web._load_user_state")
+    @patch("recommender.web._get_context")
+    def test_miss_fetches_from_tmdb_and_caches(
+        self, mock_ctx, mock_user_state, _enrich, client, monkeypatch
+    ):
+        from recommender.tmdb_client import TmdbMetadata
+
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "tmdb-key")
+        mock_user_state.return_value = self._user_state()
+        meta = TmdbMetadata(tmdb_id=454639, content_type="movie", title="Masters of the Universe")
+        tmdb_client = MagicMock()
+        tmdb_client.get_cached_by_id.side_effect = [None, None, meta]
+        tmdb_client._fetch_details.return_value = {"id": 454639}
+        mock_ctx.return_value = MagicMock(
+            tmdb_client=tmdb_client,
+            watch_index=MagicMock(tmdb_ids=set(), tmdb_keys=set(), entries=[]),
+        )
+
+        resp = client.get("/title/454639?type=movie")
+
+        html = resp.data.decode()
+        assert resp.status_code == 200
+        tmdb_client._fetch_details.assert_called_once_with(454639, "movie")
+        tmdb_client._save_cache.assert_called_once_with("movie", 454639, {"id": 454639})
+        assert "Masters of the Universe" in html
+        assert "Title not found in cache" not in html
+
+    @pytest.mark.parametrize("failure", [None, "error"])
+    @patch("recommender.web._load_enrichments", return_value={})
+    @patch("recommender.web._load_user_state")
+    @patch("recommender.web._get_context")
+    def test_miss_with_nothing_from_tmdb_shows_not_found(
+        self, mock_ctx, mock_user_state, _enrich, failure, client, monkeypatch
+    ):
+        import requests
+
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "tmdb-key")
+        mock_user_state.return_value = self._user_state()
+        tmdb_client = MagicMock()
+        tmdb_client.get_cached_by_id.return_value = None
+        if failure == "error":
+            tmdb_client._fetch_details.side_effect = requests.ConnectionError("timed out")
+        else:
+            tmdb_client._fetch_details.return_value = {}
+            tmdb_client._save_cache.side_effect = AssertionError("empty result was cached")
+        mock_ctx.return_value = MagicMock(
+            tmdb_client=tmdb_client,
+            watch_index=MagicMock(tmdb_ids=set(), tmdb_keys=set(), entries=[]),
+        )
+
+        resp = client.get("/title/999999?type=movie")
+
+        assert resp.status_code == 200
+        assert "Title not found in cache" in resp.data.decode()
+
+    @patch("recommender.web._load_enrichments", return_value={})
+    @patch("recommender.web._load_user_state")
+    @patch("recommender.web._get_context")
+    def test_invalid_type_neither_fetches_nor_writes(
+        self, mock_ctx, mock_user_state, _enrich, client, monkeypatch
+    ):
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "tmdb-key")
+        mock_user_state.return_value = self._user_state()
+        tmdb_client = MagicMock()
+        tmdb_client.get_cached_by_id.return_value = None
+        mock_ctx.return_value = MagicMock(
+            tmdb_client=tmdb_client,
+            watch_index=MagicMock(tmdb_ids=set(), tmdb_keys=set(), entries=[]),
+        )
+
+        resp = client.get("/title/1?type=../releases/shows")
+
+        assert resp.status_code == 200
+        tmdb_client._fetch_details.assert_not_called()
+        tmdb_client._save_cache.assert_not_called()
+        assert "Title not found in cache" in resp.data.decode()
+
+    @patch("recommender.web._load_enrichments", return_value={})
+    @patch("recommender.web._load_user_state")
+    @patch("recommender.web._get_context")
+    def test_miss_without_api_key_does_not_fetch(
+        self, mock_ctx, mock_user_state, _enrich, client, monkeypatch
+    ):
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "")
+        mock_user_state.return_value = self._user_state()
+        tmdb_client = MagicMock()
+        tmdb_client.get_cached_by_id.return_value = None
+        mock_ctx.return_value = MagicMock(
+            tmdb_client=tmdb_client,
+            watch_index=MagicMock(tmdb_ids=set(), tmdb_keys=set(), entries=[]),
+        )
+
+        resp = client.get("/title/999999?type=movie")
+
+        assert resp.status_code == 200
+        tmdb_client._fetch_details.assert_not_called()
+        assert "Title not found in cache" in resp.data.decode()
+
+
 # ── /recommend progressive enhancement ────────────────────────────────────────
 
 class TestRecommendProgressive:
@@ -3068,3 +3178,39 @@ class TestFindRelabel(FindTestSupport):
         script = after_form[after_form.index("<script>"):after_form.index("</script>")]
         assert "select[name=\"language\"]" in script and "data-label-" in script
         assert "submit" not in script and "fetch" not in script and "htmx" not in script
+
+
+def test_history_items_without_tmdb_id_are_not_links(client, tmp_path, monkeypatch):
+    import re
+
+    monkeypatch.setattr("config.EVENT_DB_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = [
+        {"title": "Bonus Clip", "content_type": "movie", "tmdb_id": 0,
+         "poster": "/p/bonus.jpg", "platforms": ["disney_plus"]},
+        {"title": "Real Movie", "content_type": "movie", "tmdb_id": 1234,
+         "poster": "/p/real.jpg", "platforms": ["netflix"]},
+    ]
+
+    real_render = web.render_template
+
+    def render_with_posters(name, **ctx):
+        # history() drops posters for items without an ID; force one back so
+        # the list view's poster branch runs for the no-ID item.
+        for item in ctx.get("items", []):
+            item["poster"] = "/p/x.jpg"
+        return real_render(name, **ctx)
+
+    with patch("recommender.web._get_context", return_value=mock_ctx), \
+            patch("recommender.web.render_template", side_effect=render_with_posters):
+        html = client.get("/history").data.decode()
+
+    assert 'href="#" style' not in html  # the nav scrim also uses href="#"
+    hrefs = re.findall(r'<a [^>]*href="(/title/[^"]*)"', html)
+    assert hrefs and all(h == "/title/1234?type=movie" for h in hrefs)
+    # Real Movie links once in each of list (poster + title), grid, compact.
+    assert len(hrefs) == 4
+    # Bonus Clip still appears in every view, just without a link.
+    assert html.count("Bonus Clip") >= 3
+    assert "/title/0" not in html
