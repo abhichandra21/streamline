@@ -3,6 +3,8 @@ import hashlib
 import json
 import logging
 import re
+import shutil
+import sqlite3
 import sys
 import unicodedata
 from datetime import datetime
@@ -261,9 +263,30 @@ def _titles_are_compatible(index_title: str, cache_title: str) -> bool:
     return SequenceMatcher(None, index_norm, cache_norm).ratio() >= _TITLE_COMPATIBLE_THRESHOLD
 
 
+# "Furious 7 - Extended Edition" is Furious 7; the suffix names a cut, not a
+# different work. A separator is required so titles that ARE the phrase
+# ("The Final Cut") are left alone.
+_EDITION_SUFFIX_RE = re.compile(
+    r"(?:\s*[-\u2013\u2014:]\s*|\s+)(?:"
+    r"(?:extended|unrated|theatrical|director'?s|special|remastered|ultimate|final|collector'?s)"
+    r"(?:\s+[\w']+)?\s+(?:edition|cut|version)"
+    r"|extended|unrated|uncut)\s*$",
+    re.IGNORECASE,
+)
+
+# Platforms whose events carry an import-time timestamp, not a watch time.
+SYNTHETIC_TIMESTAMP_PLATFORMS = frozenset({'manual', 'hbo'})
+
+
+def _strip_edition_suffix(title: str) -> str:
+    title = title.replace("\u2019", "'").replace("\u2018", "'")
+    title = re.sub(r"\s*\([^)]*\)\s*$", "", title)
+    return _EDITION_SUFFIX_RE.sub("", title).strip()
+
+
 def _resolve_tmdb_id_override(
     tmdb: TmdbClient, title: str, ct: str, tmdb_id: int, search_title: str | None = None,
-    trust: bool = False,
+    trust: bool = False, rejected: list[str] | None = None,
 ) -> object | None:
     """Resolve a `{"tmdb_id": X}` override, rejecting it if the resolved
     TMDB entry doesn't plausibly match the source title.
@@ -288,7 +311,8 @@ def _resolve_tmdb_id_override(
 
     Returns parsed TmdbMetadata if the override is plausible (or trusted),
     or None if it was rejected (caller should fall back to a fresh search)
-    or the fetch failed.
+    or the fetch failed. Each failure is also appended to `rejected` so setup
+    can list them at the end instead of leaving them in the log.
     """
     cached = tmdb._load_cache(ct, tmdb_id)
     if cached is not None:
@@ -300,6 +324,8 @@ def _resolve_tmdb_id_override(
             msg = f"Override TMDB fetch failed for {title} (ID {tmdb_id}): {exc}"
             log.warning(msg)
             console.print(f"  [yellow]{msg}[/yellow]")
+            if rejected is not None:
+                rejected.append(f"{title!r}: tmdb_id {tmdb_id} could not be fetched")
             return None
         tmdb._save_cache(ct, tmdb_id, raw)
 
@@ -312,10 +338,19 @@ def _resolve_tmdb_id_override(
     source_titles = {title}
     if search_title:
         source_titles.add(search_title)
+    # A stripped title must match exactly after normalization: fuzzy matching
+    # would let "Scream 2 - Extended Edition" pass for "Scream 3".
+    stripped_titles = {
+        stripped for t in source_titles
+        if (stripped := _strip_edition_suffix(t)) and stripped != t
+    }
     cache_titles = {t for t in (cache_title, cache_original_title) if t}
 
     is_plausible = any(
         _titles_are_compatible(source, cache) for source in source_titles for cache in cache_titles
+    ) or any(
+        _normalize_audit_title(stripped) == _normalize_audit_title(cache)
+        for stripped in stripped_titles for cache in cache_titles
     )
     if not is_plausible:
         msg = (
@@ -326,9 +361,266 @@ def _resolve_tmdb_id_override(
         )
         log.warning(msg)
         console.print(f"  [yellow]{msg}[/yellow]")
+        if rejected is not None:
+            rejected.append(f"{title!r}: tmdb_id {tmdb_id} is {cache_title!r}")
         return None
 
     return tmdb._parse_metadata(raw, ct)
+
+
+_USER_STATE_TABLES = ("show_tracking", "title_ratings", "saved_titles", "manual_archive_entries")
+
+
+def _snapshot_previous_index(index_path: str, ts: str | None = None) -> tuple[Path | None, str | None]:
+    """Copy the index about to be overwritten to watch_index_<ts>.json beside
+    it. Returns (backup path or None if there was nothing to copy, error)."""
+    src = Path(index_path)
+    if not src.exists():
+        return None, None
+    ts = ts or datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup = src.with_name(f"{src.stem}_{ts}{src.suffix}")
+    try:
+        shutil.copy2(src, backup)
+    except OSError as exc:
+        log.warning("Could not back up previous watch index: %s", exc)
+        return None, str(exc)
+    return backup, None
+
+
+def _read_user_state(db_path: str) -> dict[str, list[dict]]:
+    """Every row of the user tables, read through a read-only connection."""
+    state: dict[str, list[dict]] = {t: [] for t in _USER_STATE_TABLES}
+    if not Path(db_path).exists():
+        return state
+    conn = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True, timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        for table in _USER_STATE_TABLES:
+            try:
+                state[table] = [dict(r) for r in conn.execute(f"SELECT * FROM {table}")]
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc):
+                    raise
+    finally:
+        conn.close()
+    return state
+
+
+def _index_keys(entries: list[dict]) -> dict[tuple[str, int], list[str]]:
+    keys: dict[tuple[str, int], list[str]] = {}
+    for e in entries:
+        if e.get("tmdb_id"):
+            keys.setdefault((e.get("content_type", "movie"), e["tmdb_id"]), []).append(e["title"])
+    return keys
+
+
+def _find_gone_keys(old_entries: list[dict], new_entries: list[dict]) -> list[dict]:
+    """Every (content_type, tmdb_id) in the old index that the new one lacks,
+    with the old titles and the new entries whose title matches one of them.
+    Keyed by ID, not title, so merges, collisions and respellings are covered."""
+    old_keys = _index_keys(old_entries)
+    new_keys = _index_keys(new_entries)
+    new_by_title: dict[str, list[dict]] = {}
+    for e in new_entries:
+        new_by_title.setdefault(_normalize_audit_title(e["title"]), []).append({
+            "title": e["title"], "content_type": e.get("content_type", "movie"),
+            "tmdb_id": e.get("tmdb_id") or None,
+        })
+    gone = []
+    for (ct, tmdb_id), titles in old_keys.items():
+        if (ct, tmdb_id) in new_keys:
+            continue
+        likely = []
+        for t in titles:
+            for cand in new_by_title.get(_normalize_audit_title(t), []):
+                if cand not in likely:
+                    likely.append(cand)
+        gone.append({
+            "old": {"content_type": ct, "tmdb_id": tmdb_id},
+            "old_titles": titles,
+            "likely_new": likely,
+        })
+    return gone
+
+
+def _attach_user_state(gone: list[dict], state: dict[str, list[dict]], new_keys: set) -> list[dict]:
+    """Add `user_state` (the actual rows) to each gone key and return those
+    that have any. A row with the same id but the other content type counts
+    as a "type mismatch", whether or not the other key is still indexed."""
+    with_state = []
+    for change in gone:
+        ct, tmdb_id = change["old"]["content_type"], change["old"]["tmdb_id"]
+        found: dict[str, list[dict]] = {}
+        for table, rows in state.items():
+            for row in rows:
+                if row.get("tmdb_id") != tmdb_id:
+                    continue
+                row_ct = row.get("content_type") or "tv"  # show_tracking is TV only
+                if row_ct == ct:
+                    found.setdefault(table, []).append({**row, "match": "exact"})
+                else:
+                    label = ("type mismatch (other type still in index)"
+                             if (row_ct, tmdb_id) in new_keys else "type mismatch")
+                    found.setdefault(table, []).append({**row, "match": label})
+        change["user_state"] = found
+        if found:
+            with_state.append(change)
+    return with_state
+
+
+def _find_ambiguous_keys(old_entries: list[dict], new_entries: list[dict]) -> list[dict]:
+    """Keys in both indexes whose watched titles or platforms differ. The ID
+    survived but it may now stand for a different watched title (e.g. /10 and
+    /20 becoming /30 and /10). `last_watched` is ignored: it changes on every
+    new watch."""
+    def collect(entries):
+        out: dict[tuple[str, int], dict] = {}
+        for e in entries:
+            if not e.get("tmdb_id"):
+                continue
+            rec = out.setdefault((e.get("content_type", "movie"), e["tmdb_id"]),
+                                 {"titles": set(), "platforms": set()})
+            rec["titles"].add(_normalize_audit_title(e["title"]))
+            rec["platforms"].update(e.get("platforms") or [])
+        return out
+
+    old, new = collect(old_entries), collect(new_entries)
+    ambiguous = []
+    for key in old.keys() & new.keys():
+        if old[key] != new[key]:
+            ambiguous.append({
+                "old": {"content_type": key[0], "tmdb_id": key[1]},
+                "old_titles": sorted(old[key]["titles"]), "new_titles": sorted(new[key]["titles"]),
+                "old_platforms": sorted(old[key]["platforms"]),
+                "new_platforms": sorted(new[key]["platforms"]),
+            })
+    return ambiguous
+
+
+def _build_rematch_report(backup_path: Path | None, backup_error: str | None,
+                          new_entries: list[dict]) -> dict:
+    """Compare the previous index (the backup) with the new one and write the
+    JSON report right away so a later failure cannot lose it. Read-only on
+    the user DB. Never raises."""
+    if backup_error:
+        return {"status": "failed", "error": f"could not back up the previous index: {backup_error}"}
+    if backup_path is None:
+        return {"status": "none"}
+    try:
+        try:
+            old_entries = wi.load(str(backup_path)).entries
+        except Exception as exc:
+            log.warning("Previous watch index unreadable: %s", exc)
+            return {"status": "unreadable", "path": str(backup_path)}
+        gone = _find_gone_keys(old_entries, new_entries)
+        candidates = _find_ambiguous_keys(old_entries, new_entries)
+        if not gone and not candidates:
+            return {"status": "ok", "all_changes": [], "with_state": [], "ambiguous": []}
+        state_error = None
+        ambiguous: list[dict] = []
+        try:
+            state = _read_user_state(config.EVENT_DB_PATH)
+            new_keys = set(_index_keys(new_entries))
+            with_state = _attach_user_state(gone, state, new_keys)
+            ambiguous = _attach_user_state(candidates, state, new_keys)
+        except Exception as exc:
+            state_error = str(exc)
+            log.warning("Could not read user state for the rematch report: %s", exc)
+            with_state = []
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = Path(config.WATCH_INDEX_PATH).parent / f"rematches_{ts}.json"
+        out_path.write_text(json.dumps({
+            "previous_index_backup": str(backup_path),
+            "user_state_check_failed": state_error,
+            "with_user_state": with_state,
+            "ambiguous": ambiguous,
+            "ambiguous_candidates": candidates if state_error else [],
+            "all_changes": gone,
+        }, indent=2, default=str))
+        return {"status": "ok", "path": str(out_path), "backup": str(backup_path),
+                "all_changes": gone, "with_state": with_state, "ambiguous": ambiguous,
+                "ambiguous_candidates": candidates if state_error else [],
+                "state_error": state_error}
+    except Exception as exc:
+        log.warning("Rematch report failed: %s", exc)
+        return {"status": "failed", "error": str(exc)}
+
+
+def _describe_gone(change: dict) -> str:
+    old = f"{change['old']['content_type']}/{change['old']['tmdb_id']}"
+    titles = ", ".join(change["old_titles"])
+    likely = ", ".join(
+        f"{c['content_type']}/{c['tmdb_id']}" if c["tmdb_id"] else "unmatched"
+        for c in change["likely_new"]
+    ) or "unknown"
+    return f"{titles}: {old} -> {likely}"
+
+
+def _describe_ambiguous(change: dict) -> str:
+    key = f"{change['old']['content_type']}/{change['old']['tmdb_id']}"
+    return (f"{key}: titles {change['old_titles']} -> {change['new_titles']}, "
+            f"platforms {change['old_platforms']} -> {change['new_platforms']}")
+
+
+def _describe_state(change: dict) -> str:
+    parts = []
+    for table, rows in change.get("user_state", {}).items():
+        label = {"show_tracking": "followed", "saved_titles": "saved",
+                 "manual_archive_entries": "manual entry"}.get(table)
+        if table == "title_ratings":
+            label = "rated " + "/".join(str(r["rating"]) for r in rows)
+        elif table == "show_tracking" and any(r["state"] == "ignored" for r in rows):
+            label = "ignored"
+        mismatch = next((r["match"] for r in rows if r["match"] != "exact"), None)
+        if mismatch:
+            label += f" ({mismatch})"
+        parts.append(label)
+    return ", ".join(parts)
+
+
+def _print_rematch_summary(result: dict) -> None:
+    status = result.get("status")
+    if status == "unreadable":
+        console.print(f"\n[yellow]Rematch check skipped: previous index unreadable "
+                      f"({result['path']})[/yellow]")
+    elif status == "failed":
+        console.print(f"\n[yellow]Rematch check failed: {result['error']}[/yellow]")
+    elif status == "ok" and (result["all_changes"] or result["ambiguous"]
+                             or result.get("ambiguous_candidates")):
+        console.print(f"\n[yellow]{len(result['all_changes'])} TMDB matches from the last build "
+                      f"are gone. Full list: {result['path']} (previous index: {result['backup']})[/yellow]")
+        if result["state_error"]:
+            console.print(f"  [red]Could not read user state ({result['state_error']}); "
+                          f"follows or ratings may be attached to these:[/red]")
+            for change in result["all_changes"]:
+                console.print(f"  {_describe_gone(change)}")
+            for change in result["ambiguous_candidates"]:
+                console.print(f"  {_describe_ambiguous(change)}")
+        elif result["with_state"]:
+            console.print(f"[yellow]{len(result['with_state'])} have user state on the old ID "
+                          f"(not moved; re-follow or re-rate if the new match is right):[/yellow]")
+            for change in result["with_state"]:
+                console.print(f"  {_describe_gone(change)} ({_describe_state(change)})")
+        if result["ambiguous"]:
+            console.print(f"[yellow]{len(result['ambiguous'])} IDs survived but now stand for different "
+                          f"watched titles or platforms, with user state attached "
+                          f"(same ID, different watched title):[/yellow]")
+            for change in result["ambiguous"]:
+                console.print(f"  {_describe_ambiguous(change)} ({_describe_state(change)})")
+
+
+def _print_override_problems(rejected: list[str], duplicate_keys: list[str]) -> None:
+    """List overrides that are not doing what the file says, at the end of setup."""
+    if rejected:
+        console.print(f"\n[yellow]{len(rejected)} tmdb_id overrides were rejected "
+                      f"(fell back to a fresh search):[/yellow]")
+        for line in rejected:
+            console.print(f"  {line}")
+    if duplicate_keys:
+        console.print(f"\n[yellow]{len(duplicate_keys)} duplicate keys in the overrides file "
+                      f"(only the last entry of each is used):[/yellow]")
+        for key in duplicate_keys:
+            console.print(f"  {key}")
 
 
 def _build_hints_map(events: list) -> dict[tuple[str, str], MatchHints]:
@@ -362,13 +654,21 @@ def _build_hints_map(events: list) -> dict[tuple[str, str], MatchHints]:
                 runtime_is_exact = False
         # Do not use manual default durations as runtime hints (they are synthetic)
 
-        if not (release_year or runtime_minutes or language):
+        # Synthetic timestamps must never become (or lower) a first-watch date.
+        watch_date = (
+            e.timestamp.date()
+            if e.platform not in SYNTHETIC_TIMESTAMP_PLATFORMS and e.timestamp else None
+        )
+
+        if not (release_year or runtime_minutes or language or watch_date):
             continue
 
         fields = accum.setdefault(map_key, {
             "release_year": None, "runtime_minutes": None,
-            "runtime_is_exact": False, "language": None,
+            "runtime_is_exact": False, "language": None, "first_watch_date": None,
         })
+        if watch_date and (fields["first_watch_date"] is None or watch_date < fields["first_watch_date"]):
+            fields["first_watch_date"] = watch_date
         if release_year and not fields["release_year"]:
             fields["release_year"] = release_year
         if language and not fields["language"]:
@@ -856,6 +1156,9 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
 
     enrichments_index_path = Path(config.ENRICHMENT_CACHE_DIR) / "index.json"
     metadata: dict = {}
+    rejected_overrides: list[str] = []
+    duplicate_override_keys: list[str] = []
+    rematch_result: dict | None = None
 
     # Auto-detect if overrides file has changed since last index build
     index_path = Path(config.WATCH_INDEX_PATH)
@@ -881,6 +1184,7 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
 
         # Load overrides
         title_overrides = ov.load(config.OVERRIDES_PATH)
+        duplicate_override_keys = ov.find_duplicate_keys(config.OVERRIDES_PATH)
         if title_overrides:
             console.print(f"  Loaded {len(title_overrides)} title overrides")
 
@@ -922,7 +1226,6 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
 
         metadata = {}
         skipped = len(skip_titles)
-        rejected_overrides = 0
         with _progress_bar("Fetching TMDB metadata") as progress:
             task_id = progress.add_task("tmdb", total=len(title_type))
             for i, ((title, _), ct) in enumerate(title_type.items()):
@@ -938,12 +1241,11 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                     if override.get("tmdb_id"):
                         meta = _resolve_tmdb_id_override(
                             tmdb, title, ct, override["tmdb_id"], search_title=search_title,
-                            trust=bool(override.get("trust")),
+                            trust=bool(override.get("trust")), rejected=rejected_overrides,
                         )
                         if meta:
                             metadata[(title, ct)] = meta
                         else:
-                            rejected_overrides += 1
                             hints = hints_map.get((title, ct))
                             meta = tmdb.get_metadata(search_title, ct, hints=hints)
                             if meta:
@@ -968,15 +1270,18 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         console.print(f"  {len(metadata)} titles with TMDB metadata")
         if skipped:
             console.print(f"  {skipped} titles skipped via overrides")
-        if rejected_overrides:
-            console.print(
-                f"  [yellow]{rejected_overrides} tmdb_id overrides did not resolve directly "
-                f"(implausible match or fetch failure — see log) — fell back to fresh search[/yellow]"
-            )
 
         console.print("\nBuilding watch index...")
         index = wi.build(events, metadata)
+        # Keep the old index and write the rematch report before anything later
+        # in setup can fail; only the console summary waits for the end.
+        backup_path, backup_error = _snapshot_previous_index(config.WATCH_INDEX_PATH)
+        if backup_error:
+            console.print(f"[red]Could not back up the existing watch index ({backup_error}). "
+                          f"Left it unchanged; fix permissions and rerun setup.[/red]")
+            sys.exit(1)
         wi.save(index, config.WATCH_INDEX_PATH)
+        rematch_result = _build_rematch_report(backup_path, backup_error, index.entries)
         console.print(f"  {len(index.entries)} unique titles indexed → {config.WATCH_INDEX_PATH}")
 
         # Report unmatched titles
@@ -1097,6 +1402,9 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         console.print("\nIMDb ratings are less than a day old, skipping (use --refresh-imdb to force).")
     refresh_language_lists(only_existing=True)
 
+    _print_override_problems(rejected_overrides, duplicate_override_keys)
+    if rematch_result:
+        _print_rematch_summary(rematch_result)
     console.print("\n[green]Setup complete![/green]")
 
 

@@ -1289,7 +1289,8 @@ def test_build_hints_map_disney_synthesized_duration_not_used():
         profile='',
     )
     hints_map = setup._build_hints_map([event])
-    assert ('Bluey: Shorts Season 1', 'tv') not in hints_map
+    hints = hints_map.get(('Bluey: Shorts Season 1', 'tv'))
+    assert hints is not None and hints.runtime_minutes is None
 
 
 def test_build_hints_map_merges_complementary_hints_across_events():
@@ -1666,3 +1667,470 @@ def test_events_fallback_trusts_an_initialized_empty_event_store(tmp_path, monke
     with patch("recommender.setup.load_platform_events_from_exports") as loader:
         assert main._events_loader_fallback() == []
     loader.assert_not_called()
+
+
+def _hint_event(platform, title, when):
+    from datetime import timedelta
+    from recommender.ingestion.base import WatchEvent
+    return WatchEvent(
+        platform=platform, title=title, content_type='movie', series_name=title,
+        watched_duration=timedelta(minutes=30), total_duration=None,
+        timestamp=when, profile='',
+    )
+
+
+def test_build_hints_map_records_earliest_watch_date():
+    from datetime import datetime
+    import recommender.setup as setup
+
+    events = [
+        _hint_event('prime', 'Shank', datetime(2019, 9, 2, 20, 0)),
+        _hint_event('prime', 'Shank', datetime(2019, 8, 26, 21, 0)),
+    ]
+    hints = setup._build_hints_map(events)[('Shank', 'movie')]
+    assert str(hints.first_watch_date) == '2019-08-26'
+
+
+def test_build_hints_map_ignores_manual_synthetic_timestamp():
+    from datetime import datetime
+    import recommender.setup as setup
+
+    events = [_hint_event('manual', 'Some Movie', datetime.now())]
+    assert ('Some Movie', 'movie') not in setup._build_hints_map(events)
+
+
+def test_build_hints_map_manual_does_not_move_first_watch_date():
+    from datetime import datetime
+    import recommender.setup as setup
+
+    events = [
+        _hint_event('manual', 'Both', datetime(2001, 1, 1)),
+        _hint_event('netflix', 'Both', datetime(2022, 3, 4)),
+    ]
+    hints = setup._build_hints_map(events)[('Both', 'movie')]
+    assert str(hints.first_watch_date) == '2022-03-04'
+
+
+def test_manual_entry_is_not_rejected_for_release_after_synthetic_timestamp(tmp_path):
+    """End to end: a manual-only title (timestamp = now) gets no first-watch
+    hint, so a freshly released candidate is still matchable."""
+    from datetime import datetime
+    from unittest.mock import patch
+    import recommender.setup as setup
+    from recommender.tmdb_client import TmdbClient
+
+    hints = setup._build_hints_map([_hint_event('manual', 'New Film', datetime(2020, 1, 1))])
+    assert ('New Film', 'movie') not in hints
+
+    tmdb = TmdbClient(api_key="unused", cache_dir=str(tmp_path))
+    cand = {"id": 9, "title": "New Film", "release_date": "2026-01-01", "poster_path": "/p"}
+    with patch.object(tmdb, "_search_candidates", return_value=[cand]):
+        assert tmdb._ranked_search("New Film", "movie", hints.get(('New Film', 'movie'))) == 9
+
+
+def test_resolve_tmdb_id_override_accepts_edition_suffix(tmp_path):
+    import json
+    import recommender.setup as setup
+    from recommender.tmdb_client import TmdbClient
+
+    cache_path = tmp_path / "movie" / "168259.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({"id": 168259, "title": "Furious 7"}))
+
+    tmdb = TmdbClient(api_key="unused", cache_dir=str(tmp_path))
+    meta = setup._resolve_tmdb_id_override(
+        tmdb, "Furious 7 - Extended Edition", "movie", 168259,
+    )
+    assert meta is not None
+
+
+def _override_with_cache_title(tmp_path, tmdb_id, cache_title, source_title):
+    import json
+    import recommender.setup as setup
+    from recommender.tmdb_client import TmdbClient
+
+    cache_path = tmp_path / "movie" / f"{tmdb_id}.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps({"id": tmdb_id, "title": cache_title}))
+    tmdb = TmdbClient(api_key="unused", cache_dir=str(tmp_path))
+    return setup._resolve_tmdb_id_override(tmdb, source_title, "movie", tmdb_id)
+
+
+def test_resolve_tmdb_id_override_edition_strip_does_not_accept_a_sequel(tmp_path):
+    assert _override_with_cache_title(
+        tmp_path, 4, "Scream 3", "Scream 2 - Extended Edition",
+    ) is None
+    assert _override_with_cache_title(
+        tmp_path, 5, "Scream 2", "Scream 2 - Extended Edition",
+    ) is not None
+
+
+@pytest.mark.parametrize("source", [
+    "Furious 7 - Director\u2019s Cut",
+    "Furious 7 - Extended Edition (2015)",
+    "Furious 7 - Extended",
+    "Furious 7: Unrated",
+    "Furious 7 Extended Edition",
+    "Furious 7-Extended Edition",
+    "Furious 7 \u2014 Extended Edition",
+])
+def test_resolve_tmdb_id_override_accepts_edition_variants(tmp_path, source):
+    assert _override_with_cache_title(tmp_path, 168259, "Furious 7", source) is not None
+
+
+def test_override_for_a_film_titled_the_final_cut_still_passes(tmp_path):
+    assert _override_with_cache_title(tmp_path, 7, "The Final Cut", "The Final Cut") is not None
+    assert _override_with_cache_title(
+        tmp_path, 8, "Blade Runner: The Final Cut", "Blade Runner: The Final Cut",
+    ) is not None
+
+
+def test_resolve_tmdb_id_override_records_rejection(tmp_path, capsys):
+    import json
+    import recommender.setup as setup
+    from recommender.tmdb_client import TmdbClient
+
+    cache_path = tmp_path / "movie" / "11467.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({"id": 11467, "title": "America's Sweethearts"}))
+
+    rejected: list[str] = []
+    tmdb = TmdbClient(api_key="unused", cache_dir=str(tmp_path))
+    assert setup._resolve_tmdb_id_override(
+        tmdb, "Don", "movie", 11467, rejected=rejected,
+    ) is None
+    assert len(rejected) == 1
+    assert "Don" in rejected[0] and "11467" in rejected[0]
+
+
+def test_print_override_problems_lists_rejections_and_duplicates(capsys):
+    import recommender.setup as setup
+
+    setup._print_override_problems(
+        ["'Don' -> tmdb_id 11467 (America's Sweethearts)"], ["Delhi Cops"],
+    )
+    out = capsys.readouterr().err
+    assert "Don" in out and "America's Sweethearts" in out
+    assert "Delhi Cops" in out
+
+
+def test_print_override_problems_is_silent_when_clean(capsys):
+    import recommender.setup as setup
+
+    setup._print_override_problems([], [])
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+
+
+def test_overrides_find_duplicate_keys(tmp_path):
+    from recommender import overrides as ov
+
+    p = tmp_path / "overrides.json"
+    p.write_text('{"A": {"skip": true}, "B": {"title": "b"}, "A": {"title": "a"}}')
+    assert ov.find_duplicate_keys(str(p)) == ["A"]
+    # Load semantics unchanged: last one wins.
+    assert ov.load(str(p))["A"] == {"title": "a"}
+
+
+def test_overrides_find_duplicate_keys_handles_missing_and_bad_files(tmp_path):
+    from recommender import overrides as ov
+
+    assert ov.find_duplicate_keys(str(tmp_path / "nope.json")) == []
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
+    assert ov.find_duplicate_keys(str(bad)) == []
+
+
+def test_build_hints_map_ignores_hbo_synthetic_timestamp():
+    from datetime import datetime
+    import recommender.setup as setup
+
+    events = [_hint_event('hbo', 'Succession', datetime.now())]
+    assert ('Succession', 'movie') not in setup._build_hints_map(events)
+
+
+def test_build_hints_map_hbo_cannot_lower_real_first_watch_date():
+    from datetime import datetime
+    import recommender.setup as setup
+
+    events = [
+        _hint_event('hbo', 'Both', datetime(2001, 1, 1)),
+        _hint_event('netflix', 'Both', datetime(2022, 3, 4)),
+    ]
+    hints = setup._build_hints_map(events)[('Both', 'movie')]
+    assert str(hints.first_watch_date) == '2022-03-04'
+
+
+def test_overrides_find_duplicate_keys_ignores_nested_duplicates(tmp_path):
+    from recommender import overrides as ov
+
+    p = tmp_path / "overrides.json"
+    p.write_text('{"A": {"title": "x", "title": "y"}, "B": {"skip": true}}')
+    assert ov.find_duplicate_keys(str(p)) == []
+
+
+def _rematch_env(monkeypatch, tmp_path):
+    from recommender import user_store
+    import config
+    db = str(tmp_path / "events.db")
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db)
+    monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(tmp_path / "watch_index.json"))
+    user_store.init_db(db)
+    return db, user_store
+
+
+def _entry(title, ct, tmdb_id):
+    return {"title": title, "content_type": ct, "tmdb_id": tmdb_id}
+
+
+def _old_index(tmp_path, entries):
+    import json
+    path = tmp_path / "old_index.json"
+    path.write_text(json.dumps(entries))
+    return path
+
+
+def _report(tmp_path, old_entries, new_entries):
+    import recommender.setup as setup
+    return setup._build_rematch_report(_old_index(tmp_path, old_entries), None, new_entries)
+
+
+def _load_json(result):
+    import json
+    from pathlib import Path
+    return json.loads(Path(result["path"]).read_text())
+
+
+def test_rematch_reports_follow_and_rating_with_restorable_rows(monkeypatch, tmp_path, capsys):
+    import recommender.setup as setup
+    db, user_store = _rematch_env(monkeypatch, tmp_path)
+    user_store.follow_show(db, "Platonic", 278011, 2)
+    user_store.mark_show_caught_up(db, 278011, 2, 5)
+    user_store.rate_title(db, "Platonic", "tv", "more", tmdb_id=278011)
+
+    result = _report(
+        tmp_path,
+        [_entry("Platonic", "tv", 278011), _entry("Same", "movie", 1)],
+        [_entry("Platonic", "tv", 112211), _entry("Same", "movie", 1)],
+    )
+    setup._print_rematch_summary(result)
+
+    err = capsys.readouterr().err
+    assert "Platonic: tv/278011 -> tv/112211" in err and "followed" in err and "rated more" in err
+    assert "Same" not in err
+    data = _load_json(result)
+    state = data["with_user_state"][0]["user_state"]
+    assert state["title_ratings"][0]["rating"] == "more"
+    follow = state["show_tracking"][0]
+    assert (follow["tracking_from_season"], follow["caught_up_season"], follow["caught_up_episode"]) == (2, 2, 5)
+    assert len(data["all_changes"]) == 1
+    # Read-only: the follow is still on the old id.
+    assert [r["tmdb_id"] for r in user_store.list_show_tracking(db)] == [278011]
+
+
+def test_rematch_reports_dedup_merged_alias(monkeypatch, tmp_path):
+    db, user_store = _rematch_env(monkeypatch, tmp_path)
+    user_store.rate_title(db, "Old Alias", "movie", "less", tmdb_id=77)
+    result = _report(
+        tmp_path,
+        [_entry("Real Title", "movie", 5), _entry("Old Alias", "movie", 77)],
+        [_entry("Real Title", "movie", 5)],
+    )
+    assert [c["old"]["tmdb_id"] for c in result["with_state"]] == [77]
+
+
+def test_rematch_reports_title_collision_by_id(monkeypatch, tmp_path):
+    """Breathe: /10 and /20 become /30 and /10; a title join sees both titles
+    as still matched, an ID join sees /20 gone."""
+    db, user_store = _rematch_env(monkeypatch, tmp_path)
+    user_store.rate_title(db, "Breathe", "movie", "more", tmdb_id=20)
+    result = _report(
+        tmp_path,
+        [_entry("Breathe", "movie", 10), _entry("Breathe", "movie", 20)],
+        [_entry("Breathe", "movie", 30), _entry("Breathe", "movie", 10)],
+    )
+    assert [c["old"]["tmdb_id"] for c in result["with_state"]] == [20]
+    assert result["with_state"][0]["user_state"]["title_ratings"][0]["rating"] == "more"
+
+
+def test_rematch_reports_type_mismatch_rating(monkeypatch, tmp_path, capsys):
+    import recommender.setup as setup
+    db, user_store = _rematch_env(monkeypatch, tmp_path)
+    user_store.rate_title(db, "21 Jump Street", "movie", "more", tmdb_id=1486)
+    result = _report(
+        tmp_path,
+        [_entry("21 Jump Street", "tv", 1486)],
+        [_entry("21 Jump Street", "movie", 64688)],
+    )
+    setup._print_rematch_summary(result)
+    assert "type mismatch" in capsys.readouterr().err
+    row = result["with_state"][0]["user_state"]["title_ratings"][0]
+    assert row["match"] == "type mismatch"
+
+
+def test_rematch_changes_without_state_only_in_full_list(monkeypatch, tmp_path, capsys):
+    import recommender.setup as setup
+    _rematch_env(monkeypatch, tmp_path)
+    result = _report(tmp_path, [_entry("Lonely", "movie", 5)], [_entry("Lonely", "movie", 0)])
+    setup._print_rematch_summary(result)
+    err = capsys.readouterr().err
+    assert "1 TMDB matches" in err and "have user state" not in err
+    data = _load_json(result)
+    assert data["with_user_state"] == []
+    assert data["all_changes"][0]["likely_new"][0]["tmdb_id"] is None
+
+
+def test_rematch_unchanged_prints_and_writes_nothing(monkeypatch, tmp_path, capsys):
+    import recommender.setup as setup
+    _rematch_env(monkeypatch, tmp_path)
+    result = _report(tmp_path, [_entry("Same", "movie", 1)], [_entry("Same", "movie", 1)])
+    setup._print_rematch_summary(result)
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+    assert not list(tmp_path.glob("rematches_*.json"))
+
+
+def test_rematch_no_previous_index_is_silent(monkeypatch, tmp_path, capsys):
+    import recommender.setup as setup
+    _rematch_env(monkeypatch, tmp_path)
+    backup, error = setup._snapshot_previous_index(str(tmp_path / "missing.json"), "20260101_000000")
+    assert backup is None and error is None
+    result = setup._build_rematch_report(backup, error, [_entry("A", "movie", 1)])
+    setup._print_rematch_summary(result)
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+
+
+def test_rematch_unreadable_previous_index_prints_skip_line(monkeypatch, tmp_path, capsys):
+    import recommender.setup as setup
+    _rematch_env(monkeypatch, tmp_path)
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
+    result = setup._build_rematch_report(bad, None, [_entry("A", "movie", 1)])
+    setup._print_rematch_summary(result)
+    err = capsys.readouterr().err
+    assert "Rematch check skipped: previous index unreadable" in err and "bad.json" in err
+
+
+def test_rematch_state_read_failure_prints_all_gone_keys(monkeypatch, tmp_path, capsys):
+    import recommender.setup as setup
+    _rematch_env(monkeypatch, tmp_path)
+    def boom(_db):
+        raise RuntimeError("db locked")
+    monkeypatch.setattr(setup, "_read_user_state", boom)
+    result = _report(tmp_path, [_entry("A", "tv", 1)], [_entry("A", "tv", 2)])
+    setup._print_rematch_summary(result)
+    err = capsys.readouterr().err
+    assert "Could not read user state" in err and "A: tv/1 -> tv/2" in err
+    assert _load_json(result)["user_state_check_failed"] == "db locked"
+
+
+def test_rematch_failure_is_reported_not_raised(monkeypatch, tmp_path, capsys):
+    import recommender.setup as setup
+    import config
+    _rematch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(tmp_path / "no_such_dir" / "watch_index.json"))
+    result = _report(tmp_path, [_entry("A", "tv", 1)], [_entry("A", "tv", 2)])
+    setup._print_rematch_summary(result)
+    assert "Rematch check failed" in capsys.readouterr().err
+
+
+def test_rematch_backup_is_created_and_json_exists_without_printing(monkeypatch, tmp_path):
+    """The JSON is written by the build step, so a later setup failure before
+    the end-of-setup summary cannot lose it."""
+    import recommender.setup as setup
+    _rematch_env(monkeypatch, tmp_path)
+    index = tmp_path / "watch_index.json"
+    index.write_text('[{"title": "A", "content_type": "tv", "tmdb_id": 1}]')
+    backup, error = setup._snapshot_previous_index(str(index), "20260101_000000")
+    assert error is None and backup.name == "watch_index_20260101_000000.json"
+    assert backup.read_text() == index.read_text()
+    result = setup._build_rematch_report(backup, error, [_entry("A", "tv", 2)])
+    assert list(tmp_path.glob("rematches_*.json")) and result["backup"] == str(backup)
+
+
+def _entry_p(title, ct, tmdb_id, platforms):
+    return {**_entry(title, ct, tmdb_id), "platforms": platforms, "last_watched": "2026-01-01"}
+
+
+def test_rematch_flags_surviving_key_with_different_title_and_state(monkeypatch, tmp_path, capsys):
+    """Breathe: /10 and /20 become /30 and /10. /20 is gone; /10 survives but
+    now stands for a different watched title, and holds a rating and a follow."""
+    import recommender.setup as setup
+    db, user_store = _rematch_env(monkeypatch, tmp_path)
+    user_store.rate_title(db, "Breathe", "tv", "more", tmdb_id=10)
+    user_store.follow_show(db, "Breathe", 10, 1)
+
+    result = _report(
+        tmp_path,
+        [_entry_p("Breathe 2014", "tv", 10, ["netflix"]), _entry_p("Breathe 2018", "tv", 20, ["prime"])],
+        [_entry_p("Breathe 2018", "tv", 10, ["prime"]), _entry_p("Breathe 2014", "tv", 30, ["netflix"])],
+    )
+    setup._print_rematch_summary(result)
+
+    assert [c["old"]["tmdb_id"] for c in result["ambiguous"]] == [10]
+    amb = result["ambiguous"][0]
+    assert amb["old_titles"] != amb["new_titles"] and amb["old_platforms"] != amb["new_platforms"]
+    assert set(amb["user_state"]) == {"title_ratings", "show_tracking"}
+    assert "same ID, different watched title" in capsys.readouterr().err
+    assert _load_json(result)["ambiguous"][0]["old"]["tmdb_id"] == 10
+
+
+def test_rematch_does_not_flag_unchanged_surviving_key_with_state(monkeypatch, tmp_path, capsys):
+    import recommender.setup as setup
+    db, user_store = _rematch_env(monkeypatch, tmp_path)
+    user_store.rate_title(db, "Same", "tv", "more", tmdb_id=10)
+    old = [_entry_p("Same", "tv", 10, ["netflix"])]
+    new = [{**_entry_p("Same", "tv", 10, ["netflix"]), "last_watched": "2026-09-09"}]
+    result = _report(tmp_path, old, new)
+    setup._print_rematch_summary(result)
+    captured = capsys.readouterr()
+    assert result["ambiguous"] == [] and captured.err == ""
+
+
+def test_rematch_reports_type_mismatch_even_when_other_key_is_indexed(monkeypatch, tmp_path):
+    db, user_store = _rematch_env(monkeypatch, tmp_path)
+    user_store.rate_title(db, "Jump", "movie", "more", tmdb_id=1486)
+    result = _report(
+        tmp_path,
+        [_entry("Jump", "tv", 1486)],
+        [_entry("Jump", "movie", 1486), _entry("Jump", "movie", 64688)],
+    )
+    row = result["with_state"][0]["user_state"]["title_ratings"][0]
+    assert row["match"] == "type mismatch (other type still in index)"
+
+
+def test_rematch_flags_21_jump_street_split_with_movie_rows(monkeypatch, tmp_path):
+    """Movie and series used to merge into tv/1486; now the movie is
+    movie/64688 and tv/1486 survives. The movie/1486 rating and manual entry
+    must still be reported."""
+    db, user_store = _rematch_env(monkeypatch, tmp_path)
+    user_store.rate_title(db, "21 Jump Street", "movie", "more", tmdb_id=1486)
+    user_store.add_to_archive(db, "21 Jump Street", "movie", tmdb_id=1486)
+
+    result = _report(
+        tmp_path,
+        [_entry_p("21 Jump Street", "tv", 1486, ["netflix", "manual"])],
+        [_entry_p("21 Jump Street", "movie", 64688, ["manual"]),
+         _entry_p("21 Jump Street", "tv", 1486, ["netflix"])],
+    )
+    assert [c["old"]["tmdb_id"] for c in result["ambiguous"]] == [1486]
+    state = result["ambiguous"][0]["user_state"]
+    assert state["title_ratings"][0]["match"] == "type mismatch"
+    assert "manual_archive_entries" in state
+
+
+def test_rematch_state_read_failure_lists_ambiguous_candidates(monkeypatch, tmp_path, capsys):
+    import recommender.setup as setup
+    _rematch_env(monkeypatch, tmp_path)
+    def boom(_db):
+        raise RuntimeError("db locked")
+    monkeypatch.setattr(setup, "_read_user_state", boom)
+    result = _report(
+        tmp_path,
+        [_entry_p("A", "tv", 1, ["netflix"])],
+        [_entry_p("A", "tv", 1, ["prime"])],
+    )
+    setup._print_rematch_summary(result)
+    err = capsys.readouterr().err
+    assert "Could not read user state" in err and "tv/1:" in err
