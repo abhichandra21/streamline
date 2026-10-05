@@ -647,3 +647,54 @@ def test_setup_indexes_plex_plays_by_their_tmdb_id_and_keeps_them(monkeypatch, t
     index = wi.load(config.WATCH_INDEX_PATH)
     assert [(e["title"], e["tmdb_id"]) for e in index.entries] == [("Grand Designs", 1831)]
     assert [e.platform for e in load_events(db_path)] == ["plex"]
+
+
+def test_setup_stops_without_saving_when_index_backup_fails(monkeypatch, tmp_path):
+    import json
+
+    import config
+    import pytest
+    import recommender.setup as setup
+    from recommender.event_store import append_provider_events, init_db
+
+    db_path = str(tmp_path / "streamline.db")
+    init_db(db_path)
+    append_provider_events(db_path, "plex", [_plex_episode()])
+    cache_dir = tmp_path / "cache"
+    (cache_dir / "tv").mkdir(parents=True)
+    (cache_dir / "tv" / "1831.json").write_text(json.dumps(
+        {"id": 1831, "name": "Grand Designs", "first_air_date": "1999-04-29"}))
+    index_path = tmp_path / "watch_index.json"
+    old_text = '[{"title": "Old", "content_type": "tv", "tmdb_id": 9}]'
+    index_path.write_text(old_text)
+
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": ["/tmp/netflix_export.zip"]})
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("netflix", lambda _path: [])])
+    monkeypatch.setattr(setup, "_compute_file_sha256", lambda _path: "sha")
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "TMDB_API_KEY", "fake-tmdb-key")
+    monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(index_path))
+    monkeypatch.setattr(config, "CACHE_DIR", str(cache_dir))
+    monkeypatch.setattr(config, "ENRICHMENT_CACHE_DIR", str(tmp_path / "enrichments"))
+    monkeypatch.setattr(config, "PROVIDERS_CACHE_DIR", str(tmp_path / "providers"))
+    monkeypatch.setattr(config, "OVERRIDES_PATH", str(tmp_path / "overrides.json"))
+    monkeypatch.setattr(config, "TMDB_AUDIT_PATH", str(tmp_path / "audit.txt"))
+    monkeypatch.setattr(config, "TASTE_PROFILE_PATH", str(tmp_path / "profile.txt"))
+    monkeypatch.setattr(setup, "enrich_batch", lambda *_a, **_kw: {})
+
+    class _FakeLLM:
+        provider = "anthropic"
+    monkeypatch.setattr(setup, "create_client", lambda _provider=None: _FakeLLM())
+
+    def _deny(*_a, **_kw):
+        raise PermissionError("read-only directory")
+    monkeypatch.setattr(setup.shutil, "copy2", _deny)
+
+    with pytest.raises(SystemExit) as exc:
+        setup.run_setup(refresh_data=True)
+
+    assert exc.value.code == 1
+    assert index_path.read_text() == old_text
+    assert not list(tmp_path.glob("watch_index_*.json"))

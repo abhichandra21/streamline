@@ -101,6 +101,9 @@ class MatchHints:
     runtime_minutes: int | None = None
     runtime_is_exact: bool = False
     language: str | None = None  # TMDB original_language code, e.g. "hi"
+    # Earliest real watch (manual entries have a synthetic timestamp and never
+    # set this). A title cannot have been watched before it existed.
+    first_watch_date: date | None = None
 
 
 @dataclass
@@ -170,6 +173,36 @@ def _title_similarity(query: str, candidate: str) -> float:
 # "is this THE title" bar. Used to catch cases like "Don" -> "America's
 # Sweethearts", where the top-ranked candidate isn't related to the query.
 _PLAUSIBLE_TITLE_THRESHOLD = 0.5
+
+
+# TMDB's date can be a later regional or theatrical release than the one the
+# viewer actually saw, so a candidate is only impossible past this margin.
+_RELEASE_AFTER_WATCH_MARGIN_DAYS = 90
+
+# A runtime only counts as evidence when the candidate is this close to the
+# watched length; a 78% ratio is as good as no data.
+_RUNTIME_CLOSE_RATIO = 0.85
+
+
+def _candidate_release_date(candidate: dict) -> date | None:
+    date_str = candidate.get("first_air_date") or candidate.get("release_date") or ""
+    try:
+        return date.fromisoformat(date_str[:10])
+    except ValueError:
+        return None
+
+
+def _released_after_first_watch(candidate: dict, hints: MatchHints | None) -> bool:
+    if not hints or not hints.first_watch_date:
+        return False
+    released = _candidate_release_date(candidate)
+    if released is None:
+        return False
+    return (released - hints.first_watch_date).days > _RELEASE_AFTER_WATCH_MARGIN_DAYS
+
+
+class AllCandidatesReleasedAfterWatch(Exception):
+    """Search found results, but every one was released after the first watch."""
 
 
 class TmdbRateLimitError(requests.HTTPError):
@@ -374,10 +407,11 @@ class TmdbClient:
                 cand_runtime = details.get("runtime")
             if cand_runtime and cand_runtime > 0:
                 runtime_ratio = min(cand_runtime, hints.runtime_minutes) / max(cand_runtime, hints.runtime_minutes)
-                if hints.runtime_is_exact:
-                    score += runtime_ratio * 15.0
-                else:
-                    score += runtime_ratio * 8.0
+                if runtime_ratio >= _RUNTIME_CLOSE_RATIO:
+                    if hints.runtime_is_exact:
+                        score += runtime_ratio * 15.0
+                    else:
+                        score += runtime_ratio * 8.0
 
         # Poster present (0-3 points, weak signal)
         if candidate.get("poster_path"):
@@ -404,6 +438,20 @@ class TmdbClient:
         candidates = self._search_candidates(title, content_type, hints)
         if not candidates:
             return None
+
+        # A title released well after the first watch cannot be what was watched.
+        possible = [c for c in candidates if not _released_after_first_watch(c, hints)]
+        if len(possible) < len(candidates):
+            log.debug("Dropped %d TMDB candidate(s) for %r released after the first watch",
+                      len(candidates) - len(possible), title)
+        if not possible:
+            # Only a too-late candidate that is plausibly the same title ends
+            # the lookup; unrelated future results are an ordinary miss, so
+            # cleaned variants and the other content type still get searched.
+            if any(_is_plausible_title_match(title, c) for c in candidates):
+                raise AllCandidatesReleasedAfterWatch(title)
+            return None
+        candidates = possible
 
         if len(candidates) == 1 and not hints:
             cand = candidates[0]
@@ -684,6 +732,46 @@ class TmdbClient:
 
         return variants
 
+    @staticmethod
+    def _is_leading_number_title(title: str) -> bool:
+        """True when guessit reads a title's leading number as an episode with
+        no season ("21 Jump Street", "24: Live Another Day"). Those are
+        ambiguous: part of the title, or really a numbered TV show."""
+        from guessit import guessit as guess
+
+        try:
+            info = guess(title)
+        except Exception:
+            return False
+        episode = info.get('episode')
+        return (
+            info.get('type') == 'episode'
+            and 'season' not in info
+            and isinstance(episode, int)
+            and re.match(rf'\s*0*{episode}\b', title) is not None
+        )
+
+    def _type_with_exact_title(self, title: str, content_type: str, hints: MatchHints | None) -> str:
+        """For an ambiguous leading-number title, search both types for the full
+        title. If exactly one type has an exact (normalized) title match among
+        candidates that could have been watched, return it; otherwise keep the
+        given type. A failed search is unknown, not "no match", so it also
+        keeps the given type."""
+        alt_type = "tv" if content_type == "movie" else "movie"
+        wanted = _normalize_for_match(title)
+        exact = []
+        for ct in (content_type, alt_type):
+            cands, ok = self._search_candidates_or_error(title, ct, hints)
+            if not ok:
+                return content_type
+            if any(
+                _normalize_for_match(c.get("name") or c.get("title") or "") == wanted
+                and not _released_after_first_watch(c, hints)
+                for c in cands
+            ):
+                exact.append(ct)
+        return exact[0] if len(exact) == 1 else content_type
+
     def classify_title(self, title: str) -> tuple[str, str]:
         """Use guessit to detect if a title is a TV episode and extract the series name.
 
@@ -695,6 +783,11 @@ class TmdbClient:
         try:
             info = guess(title)
             if info.get('type') == 'episode':
+                # "21 Jump Street" reads as episode 21 of "Jump Street". With no
+                # season, an episode number that is just the title's leading
+                # number is part of the title, not an episode.
+                if self._is_leading_number_title(title):
+                    return '', title
                 gi_title = info.get('title', '')
                 if gi_title and len(gi_title) > 2:
                     return 'tv', gi_title
@@ -779,11 +872,20 @@ class TmdbClient:
             log.debug("guessit reclassified %r: %s -> %s (title: %r)",
                        title, content_type, detected_type, detected_title)
             content_type = detected_type
+        elif not detected_type and self._is_leading_number_title(title):
+            content_type = self._type_with_exact_title(title, content_type, hints)
 
         alt_type = "tv" if content_type == "movie" else "movie"
         for variant in self._clean_title_variants(title):
             # Try the requested content type first, with ranked search
-            tmdb_id = self._ranked_search(variant, content_type, hints)
+            try:
+                tmdb_id = self._ranked_search(variant, content_type, hints)
+            except AllCandidatesReleasedAfterWatch:
+                # Every same-type result post-dates the watch. Trying another
+                # type or variant would pick an unrelated older same-name title.
+                log.warning("No TMDB match for %r (%s): every candidate was released "
+                            "after the first watch", title, content_type)
+                return None
             if tmdb_id is not None:
                 if variant != title:
                     log.debug("TMDB search hit via variant: %r -> %r -> ID %d", title, variant, tmdb_id)
@@ -791,7 +893,10 @@ class TmdbClient:
                     log.debug("TMDB search hit: %r -> ID %d", title, tmdb_id)
                 break
             # Try the alternate content type (misclassified episodes, etc.)
-            tmdb_id = self._ranked_search(variant, alt_type, hints)
+            try:
+                tmdb_id = self._ranked_search(variant, alt_type, hints)
+            except AllCandidatesReleasedAfterWatch:
+                tmdb_id = None
             if tmdb_id is not None:
                 content_type = alt_type
                 log.debug("TMDB search hit via alt type: %r -> %r (%s) -> ID %d", title, variant, alt_type, tmdb_id)

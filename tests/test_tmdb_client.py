@@ -1039,3 +1039,230 @@ def test_get_imdb_id_rechecks_a_missing_id_only_after_retry_age(tmp_path):
     with patch.object(client, "_get", return_value={"imdb_id": "tt0000005"}) as mock_get:
         assert client.get_imdb_id(5, "movie") == "tt0000005"
     mock_get.assert_called_once()
+
+
+# -- numbered titles -----------------------------------------------------
+
+@pytest.mark.parametrize("title", [
+    "21 Jump Street",
+    "12 Angry Men",
+    "10 Things I Hate About You",
+    "2 Guns",
+    "300",
+    "1917",
+    "3 Idiots",
+])
+def test_classify_title_keeps_numbered_titles_as_non_episodes(tmp_path, title):
+    client = make_client(str(tmp_path))
+    assert client.classify_title(title) == ("", title)
+
+
+@pytest.mark.parametrize("title,series", [
+    ("Breaking Bad S01E02", "Breaking Bad"),
+    ("Foo Show: Season 2: Episode 4", "Foo Show"),
+    ("The Wire S02E03", "The Wire"),
+])
+def test_classify_title_still_detects_episodes_with_a_season(tmp_path, title, series):
+    client = make_client(str(tmp_path))
+    assert client.classify_title(title) == ("tv", series)
+
+
+# -- candidate scoring ---------------------------------------------------
+
+def _platonic_candidates():
+    """Shape of the Platonic case in #112: the right show has no TMDB
+    runtime, the wrong one has 46 min and first aired after the watch."""
+    right = {
+        "id": 112211, "name": "Platonic", "first_air_date": "2023-05-24",
+        "poster_path": "/a.jpg", "vote_count": 150, "popularity": 4,
+    }
+    wrong = {
+        "id": 278011, "name": "Platonic", "first_air_date": "2025-09-12",
+        "poster_path": "/b.jpg", "vote_count": 5, "popularity": 30,
+    }
+    details = {112211: {"episode_run_time": []}, 278011: {"episode_run_time": [46]}}
+    return [wrong, right], details
+
+
+def _ranked(client, candidates, details, hints):
+    with patch.object(client, "_search_candidates", return_value=candidates), \
+         patch.object(client, "_load_cache", side_effect=lambda ct, i: details[i]):
+        return client._ranked_search("Platonic", "tv", hints)
+
+
+def test_ranked_search_rejects_candidate_released_after_first_watch(tmp_path):
+    from datetime import date
+    client = make_client(str(tmp_path))
+    candidates, details = _platonic_candidates()
+    # Make the late show score highest on every other signal.
+    candidates[0].update(vote_count=500, popularity=90)
+    hints = MatchHints(first_watch_date=date(2023, 6, 20))
+    assert _ranked(client, candidates, details, hints) == 112211
+
+
+def test_ranked_search_signals_when_every_candidate_is_too_late(tmp_path):
+    from datetime import date
+    from recommender.tmdb_client import AllCandidatesReleasedAfterWatch
+    client = make_client(str(tmp_path))
+    candidates, details = _platonic_candidates()
+    hints = MatchHints(first_watch_date=date(2019, 1, 1))
+    with pytest.raises(AllCandidatesReleasedAfterWatch):
+        _ranked(client, candidates, details, hints)
+
+
+def test_get_metadata_does_not_fall_back_to_older_wrong_type_title(tmp_path):
+    from datetime import date
+    client = make_client(str(tmp_path))
+    late_tv = {"id": 1, "name": "Platonic", "first_air_date": "2025-09-12"}
+    old_movie = {"id": 2, "title": "Platonic", "release_date": "1999-01-01", "poster_path": "/m"}
+
+    def fake_search(title, content_type, hints=None):
+        return [late_tv] if content_type == "tv" else [old_movie]
+
+    hints = MatchHints(first_watch_date=date(2023, 6, 1))
+    with patch.object(client, "_search_candidates", side_effect=fake_search), \
+         patch.object(client, "_fetch_details") as fetch:
+        assert client.get_metadata("Platonic", "tv", hints=hints) is None
+    fetch.assert_not_called()
+
+
+def test_release_within_margin_of_first_watch_is_not_rejected(tmp_path):
+    from datetime import date
+    client = make_client(str(tmp_path))
+    candidates = [{"id": 1, "title": "Dune", "release_date": "2021-10-22", "poster_path": "/a"}]
+    details = {1: {"runtime": 155}}
+    # Watched 30 days before TMDB's date (regional vs theatrical release).
+    hints = MatchHints(first_watch_date=date(2021, 9, 22))
+    with patch.object(client, "_search_candidates", return_value=candidates), \
+         patch.object(client, "_load_cache", side_effect=lambda ct, i: details[i]):
+        assert client._ranked_search("Dune", "movie", hints) == 1
+
+
+def test_no_tmdb_runtime_is_not_beaten_by_a_distant_runtime(tmp_path):
+    client = make_client(str(tmp_path))
+    candidates, details = _platonic_candidates()
+    hints = MatchHints(runtime_minutes=36, runtime_is_exact=True)
+    assert _ranked(client, candidates, details, hints) == 112211
+
+
+def test_close_runtime_still_earns_points(tmp_path):
+    client = make_client(str(tmp_path))
+    cand = {"id": 1, "name": "X", "poster_path": None}
+    hints = MatchHints(runtime_minutes=44, runtime_is_exact=True)
+    close = client._score_candidate(cand, "X", "tv", hints, {"episode_run_time": [46]})
+    none = client._score_candidate(cand, "X", "tv", hints, {"episode_run_time": []})
+    assert close > none
+
+
+def test_explicit_release_year_wins_over_first_watch_year_bound(tmp_path):
+    from datetime import date
+    client = make_client(str(tmp_path))
+    hints = MatchHints(release_year=2016, first_watch_date=date(2015, 6, 1))
+    late = {"id": 2, "title": "X", "release_date": "2016-01-01"}
+    assert client._score_candidate(late, "X", "movie", hints) >= 40.0 + 25.0
+
+
+def test_newer_title_within_margin_beats_older_namesake(tmp_path):
+    from datetime import date
+    client = make_client(str(tmp_path))
+    new = {"id": 1, "title": "Dune", "release_date": "2021-10-22", "poster_path": "/a",
+           "vote_count": 5000, "popularity": 100}
+    old = {"id": 2, "title": "Dune", "release_date": "1984-12-14", "poster_path": "/b",
+           "vote_count": 50, "popularity": 10}
+    hints = MatchHints(first_watch_date=date(2021, 9, 22))
+    with patch.object(client, "_search_candidates", return_value=[old, new]), \
+         patch.object(client, "_load_cache", return_value={}):
+        assert client._ranked_search("Dune", "movie", hints) == 1
+
+
+def test_unrelated_too_late_results_are_an_ordinary_miss(tmp_path):
+    from datetime import date
+    client = make_client(str(tmp_path))
+    unrelated = {"id": 1, "title": "Zzzz Qqqq", "release_date": "2030-01-01"}
+    hints = MatchHints(first_watch_date=date(2020, 1, 1))
+    with patch.object(client, "_search_candidates", return_value=[unrelated]):
+        assert client._ranked_search("The Matrix (English)", "movie", hints) is None
+
+
+def test_get_metadata_tries_cleaned_variant_after_unrelated_too_late_result(tmp_path):
+    from datetime import date
+    client = make_client(str(tmp_path))
+    unrelated = {"id": 1, "title": "Zzzz Qqqq", "release_date": "2030-01-01"}
+    matrix = {"id": 603, "title": "The Matrix", "release_date": "1999-03-30", "poster_path": "/m"}
+
+    def fake_search(title, content_type, hints=None):
+        if content_type == "movie" and title == "The Matrix":
+            return [matrix]
+        if content_type == "movie":
+            return [unrelated]
+        return []
+
+    hints = MatchHints(first_watch_date=date(2020, 1, 1))
+    client._save_cache("movie", 603, {"id": 603, "title": "The Matrix", "release_date": "1999-03-30"})
+    with patch.object(client, "_search_candidates", side_effect=fake_search):
+        meta = client.get_metadata("The Matrix (English)", "movie", hints=hints)
+    assert meta is not None and meta.tmdb_id == 603
+
+
+def _typed_search(results):
+    def fake(title, content_type, hints=None):
+        return results.get((title, content_type), [])
+    return fake
+
+
+def _cached_type(client, content_type, tmdb_id, **fields):
+    client._save_cache(content_type, tmdb_id, {"id": tmdb_id, **fields})
+
+
+def test_leading_number_title_with_exact_tv_match_is_tv(tmp_path):
+    client = make_client(str(tmp_path))
+    _cached_type(client, "tv", 1973, name="24: Live Another Day")
+    results = {
+        ("24: Live Another Day", "tv"): [{"id": 1973, "name": "24: Live Another Day"}],
+        ("24: Live Another Day", "movie"): [],
+    }
+    with patch.object(client, "_search_candidates", side_effect=_typed_search(results)):
+        meta = client.get_metadata("24: Live Another Day", "movie")
+    assert meta.content_type == "tv" and meta.tmdb_id == 1973
+
+
+@pytest.mark.parametrize("title,tv_hit", [
+    ("21 Jump Street", True), ("12 Angry Men", True),
+    ("10 Things I Hate About You", True), ("300: Rise of an Empire", False),
+])
+def test_leading_number_movie_stays_movie(tmp_path, title, tv_hit):
+    client = make_client(str(tmp_path))
+    _cached_type(client, "movie", 5, title=title)
+    _cached_type(client, "tv", 6, name=title)
+    results = {(title, "movie"): [{"id": 5, "title": title, "poster_path": "/p"}]}
+    if tv_hit:
+        # A same-named series exists too; both exact means keep the given type.
+        results[(title, "tv")] = [{"id": 6, "name": title, "poster_path": "/p"}]
+    with patch.object(client, "_search_candidates", side_effect=_typed_search(results)):
+        meta = client.get_metadata(title, "movie")
+    assert meta.content_type == "movie" and meta.tmdb_id == 5
+
+
+def test_exact_title_type_check_keeps_type_when_a_search_fails(tmp_path):
+    client = make_client(str(tmp_path))
+    tv_hit = [{"id": 1, "name": "24: Live Another Day"}]
+
+    def fake(title, content_type, hints=None):
+        return (tv_hit, True) if content_type == "tv" else ([], False)
+
+    with patch.object(client, "_search_candidates_or_error", side_effect=fake):
+        assert client._type_with_exact_title("24: Live Another Day", "movie", None) == "movie"
+
+
+def test_exact_title_type_check_ignores_exact_match_released_after_first_watch(tmp_path):
+    from datetime import date
+    client = make_client(str(tmp_path))
+    future_movie = [{"id": 1, "title": "24: Live Another Day", "release_date": "2030-01-01"}]
+    tv_hit = [{"id": 2, "name": "24: Live Another Day", "first_air_date": "2014-05-05"}]
+
+    def fake(title, content_type, hints=None):
+        return (tv_hit if content_type == "tv" else future_movie, True)
+
+    hints = MatchHints(first_watch_date=date(2020, 1, 1))
+    with patch.object(client, "_search_candidates_or_error", side_effect=fake):
+        assert client._type_with_exact_title("24: Live Another Day", "movie", hints) == "tv"

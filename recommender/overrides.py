@@ -49,6 +49,36 @@ def load(path: str) -> dict[str, dict]:
         return {}
 
 
+def find_duplicate_keys(path: str) -> list[str]:
+    """Return keys that appear more than once in the overrides file.
+
+    json.loads keeps the last duplicate silently, so the earlier entries are
+    dead. This only reports them; load() behavior is unchanged.
+    """
+    p = Path(path)
+    if not p.exists():
+        return []
+    duplicates: list[str] = []
+
+    def _collect(pairs: list[tuple[str, object]]) -> dict:
+        # Nested objects finish before the object that contains them, so the
+        # last call is the top-level one; only its duplicates are override keys.
+        nonlocal duplicates
+        seen: set[str] = set()
+        duplicates = []
+        for key, _ in pairs:
+            if key in seen and key not in duplicates:
+                duplicates.append(key)
+            seen.add(key)
+        return dict(pairs)
+
+    try:
+        json.loads(p.read_text(), object_pairs_hook=_collect)
+    except (json.JSONDecodeError, ValueError):
+        return []
+    return duplicates
+
+
 def report_unmatched(
     unmatched_titles: list[dict],
     overrides_path: str,
