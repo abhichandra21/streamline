@@ -1815,6 +1815,19 @@ def title_detail(tmdb_id: int) -> str:
                 meta = alt_meta
                 ct = alt_ct
 
+    # Never downloaded: fetch from TMDB by ID and cache it like any other fetch.
+    # ct comes from the query string and becomes a cache path, so only the two
+    # real types may fetch. Any failure keeps the "not found" page.
+    if meta is None and ct in ("movie", "tv") and config.TMDB_API_KEY:
+        try:
+            data = ctx.tmdb_client._fetch_details(tmdb_id, ct)
+            if data:
+                ctx.tmdb_client._save_cache(ct, tmdb_id, data)
+                meta = ctx.tmdb_client.get_cached_by_id(tmdb_id, ct)
+        except Exception as exc:
+            log.warning("Could not fetch TMDB details for %s/%s: %s", ct, tmdb_id, exc)
+            meta = None
+
     description = ""
     enrichment_path = Path(config.ENRICHMENT_CACHE_DIR) / ct / f"{tmdb_id}.txt"
     if enrichment_path.exists():
