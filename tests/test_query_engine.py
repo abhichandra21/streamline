@@ -1402,3 +1402,54 @@ def test_suggestion_prompt_carries_refinement_notes():
     llm = make_mock_llm("[]")
     _generate_suggestions("q", "P", llm, context_note="Prefer lesser-known picks.")
     assert "Prefer lesser-known picks." in llm.generate.call_args.args[0]
+
+
+def test_refill_never_relaxes_the_runtime_limit():
+    long_a = make_meta("Long A", tmdb_id=1, content_type="movie")
+    long_b = make_meta("Long B", tmdb_id=2, content_type="movie")
+    long_a.runtime_minutes = long_b.runtime_minutes = 120
+    tmdb = MagicMock()
+    tmdb.search_by_filters.side_effect = [[long_a], [long_a, long_b], [long_a, long_b]]
+    tmdb.get_metadata.return_value = None
+    # Only the first round may relax the 60-minute ceiling; Long B must not be ranked.
+    llm = make_mock_llm_sequence(["[]", _ranked("Long A"), "[]", "[]"])
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        results = ask("q", _request_ctx(tmdb, llm),
+                      intent_override=_request_intent(top_n=2, max_runtime_minutes=60))
+
+    assert [r.title for r in results] == ["Long A"]
+    assert llm.generate.call_count == 4     # no rank call for the refill batch
+
+
+def test_refill_never_falls_back_to_off_platform_titles():
+    a = make_meta("Off A", tmdb_id=1, content_type="movie")
+    b = make_meta("Off B", tmdb_id=2, content_type="movie")
+    tmdb = MagicMock()
+    tmdb.search_by_filters.side_effect = [[a], [a, b], [a, b]]
+    tmdb.get_metadata.return_value = None
+    tmdb.get_watch_providers.return_value = []
+    llm = make_mock_llm_sequence(["[]", _ranked("Off A"), "[]", _ranked("Off B"), "[]"])
+    ctx = _request_ctx(tmdb, llm)
+    ctx.providers_cache_dir = "/tmp/test_providers"
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        results = ask("q", ctx, intent_override=_request_intent(top_n=2, platforms=["Netflix"]))
+
+    # The first round falls back to unfiltered; the refill round keeps nothing off-platform.
+    assert [r.title for r in results] == ["Off A"]
+
+
+def test_refill_prompt_names_suggestions_that_were_filtered_out():
+    gone = make_meta("Gone Film", tmdb_id=7, content_type="movie")
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = []
+    tmdb.get_metadata.return_value = gone
+    llm = make_mock_llm_sequence(['["Gone Film"]', "[]"])
+    ctx = _request_ctx(tmdb, llm)
+    ctx.watch_index = WatchIndex(tmdb_ids={7}, tmdb_keys={("movie", 7)}, normalized_titles=set(), entries=[])
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        ask("q", ctx, intent_override=_request_intent())
+
+    assert "Gone Film" in llm.generate.call_args_list[1].args[0]

@@ -797,6 +797,7 @@ def ask(
 
     # Source 2: LLM suggestions (semantic, taste-aware — always runs)
     suggestion_keys: set[tuple[str, int]] = set()   # taste-aware picks to protect from the trim
+    suggested_titles: set[str] = set()   # every title the LLM named, kept or filtered out
 
     def _add_suggestions(already_seen: list[str] | None = None) -> bool:
         """Add LLM suggestions. Returns True if the LLM named any title."""
@@ -806,6 +807,7 @@ def ask(
                                              already_seen=already_seen,
                                              context_note=context_note)
         log.debug("LLM suggested %d titles: %s", len(suggestions), suggestions)
+        suggested_titles.update(suggestions)
         suggestion_count = 0
         suggestion_tasks = [(title, ct) for title in suggestions for ct in content_types]
 
@@ -834,8 +836,13 @@ def ask(
     if config.MIN_RATING > 0:
         candidates = [c for c in candidates if c.rating >= config.MIN_RATING]
 
-    def _rank_pool(candidates: list[TmdbMetadata], context_note: str | None) -> list[Recommendation]:
-        """Runtime-filter, trim, enrich, rank, and platform-filter one pool of candidates."""
+    def _rank_pool(candidates: list[TmdbMetadata], context_note: str | None,
+                   first_round: bool = True) -> list[Recommendation]:
+        """Runtime-filter, trim, enrich, rank, and platform-filter one pool of candidates.
+
+        Only the first round may relax the runtime limit or the platform filter;
+        a refill must not sneak in titles the request rules out.
+        """
         # Runtime is a hard filter when known, applied once over the whole pool so a
         # fallback is possible. If every candidate with a known runtime exceeds the
         # ceiling (e.g. "movie under an hour" — feature films are rarely that short),
@@ -843,7 +850,7 @@ def ask(
         # to a ranking signal so the user still sees the closest, shortest matches.
         if intent.max_runtime_minutes and candidates:
             within = [c for c in candidates if _within_runtime(c, intent.max_runtime_minutes)]
-            if within:
+            if within or not first_round:
                 candidates = within
             else:
                 log.debug("Runtime ceiling %d emptied the pool; relaxing to a ranking signal",
@@ -920,7 +927,7 @@ def ask(
                     break
 
             # If platform filter removed everything, fall back to unfiltered results
-            if not annotated and unfiltered and requested_platforms:
+            if first_round and not annotated and unfiltered and requested_platforms:
                 log.debug("Platform filter removed all results — returning unfiltered top %d", intent.top_n)
                 annotated = unfiltered[:intent.top_n]
 
@@ -944,14 +951,14 @@ def ask(
         before = len(candidates)
         discover_full = _add_discover(_DISCOVER_SIZE * (round_no + 1)) if discover_cts else False
         suggested_any = _add_suggestions(
-            sorted({c.title for c in candidates} | extra_excludes)[:_REFILL_SEEN_MAX])
+            sorted({c.title for c in candidates} | extra_excludes | suggested_titles)[:_REFILL_SEEN_MAX])
         fresh = candidates[before:]
         attach_imdb_ratings(fresh, ctx.tmdb_client)
         if config.MIN_RATING > 0:
             fresh = [c for c in fresh if c.rating >= config.MIN_RATING]
         if fresh:
             seen_titles = {r.title for r in results}
-            results += [r for r in _rank_pool(fresh, context_note) if r.title not in seen_titles]
+            results += [r for r in _rank_pool(fresh, context_note, first_round=False) if r.title not in seen_titles]
             results.sort(key=lambda r: r.score, reverse=True)
             results = results[:intent.top_n]
         elif not discover_full and not suggested_any:

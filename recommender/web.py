@@ -2326,9 +2326,17 @@ def archive_add() -> str:
 def classics_seen() -> str:
     """Seen it on the Have you seen these? page: same archive add, no rating prompt.
 
-    Returns nothing, so the card is removed from the page.
+    Returns nothing, so the card is removed from the page. A saved title also
+    leaves the watchlist, like the other Seen it controls.
     """
-    archive_add()
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    if title and _title_state(title, ct, _load_user_state(), tmdb_id)["in_watchlist"]:
+        user_store.mark_watched_from_watchlist(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+        Path(config.PROFILE_STALE_FLAG).touch()
+    else:
+        archive_add()
     return ""
 
 

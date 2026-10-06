@@ -3291,6 +3291,24 @@ class TestClassicsAndNotInterested:
 
         assert "been through them all" in body
 
+    def test_classics_seen_takes_a_saved_title_off_the_watchlist(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title, list_saved_titles, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "The Dark Knight", "movie", tmdb_id=155)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / "stale"))
+
+        resp = client.post("/classics/seen", data={
+            **_csrf_form(), "title": "The Dark Knight", "content_type": "movie", "tmdb_id": "155",
+        })
+
+        assert resp.get_data(as_text=True) == ""
+        assert list_saved_titles(db, status="watchlist") == []
+        assert len(list_manual_archive(db)) == 1
+
     def test_classics_seen_archives_and_removes_the_card(self, client, tmp_path, monkeypatch):
         from recommender.user_store import init_db, list_manual_archive
 
