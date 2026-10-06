@@ -80,7 +80,7 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `recommender/watch_index.py` — Content-type-aware dual-key dedup (TMDB ID + `(normalized_title, content_type)`). Post-build rapidfuzz dedup. Stale cache cleanup.
 - `recommender/enricher.py` — LLM enrichment (role=fast), 30s timeout, rate limit retry. Only caches successful responses. Identity-keyed index (`content_type/tmdb_id` or `unknown/slug`).
 - `recommender/taste_profile_builder.py` — Batched profile builder (200 titles/batch, rate limit retry, merge pass). No top-N limit.
-- `recommender/signals.py` — Scoring: completion (50%) + rewatch (30%) + true half-life recency decay (20%).
+- `recommender/signals.py` — Scoring. Every watched title scores 1.0 by default (`scoring.use_viewing_signals: false`); when on, completion (50%) + rewatch (30%) + true half-life recency decay (20%).
 - `recommender/query_engine.py` — Full online pipeline. "Why not X?" trace mode, conversational context, platform filtering.
 - `recommender/wizard.py` — Mood Match adaptive loop. One role=reason call per turn returns the next question or a finish signal carrying a synthesized `QueryIntent`. Soft floor (`WIZARD_MIN_QUESTIONS`) rejects an early recommend; hard cap (`WIZARD_MAX_QUESTIONS`) forces finalize. `WizardState` is carried in a hidden form field, size/turn-bounded.
 - `recommender/wizard_flow.py` — Deterministic side of the wizard: the instant content-type tap (counts as question 1, no LLM), recommendation seed builder, review surface, and merge of the adaptive intent over the seed.

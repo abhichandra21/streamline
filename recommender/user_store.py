@@ -444,7 +444,7 @@ def apply_rating_multipliers(scores: dict[str, float],
                              ratings: list[dict]) -> dict[str, float]:
     """Apply liked/disliked multipliers to engagement scores.
 
-    "More like this" gets a 1.3x boost (capped at 1.0); "less like this" gets a
+    "More like this" gets a 1.3x boost; "less like this" gets a
     0.5x penalty; "it was fine" is deliberately neutral.
     """
     modified = dict(scores)
@@ -453,7 +453,7 @@ def apply_rating_multipliers(scores: dict[str, float],
         rating = normalize_rating(entry["rating"])
         if title in modified:
             if rating == RATING_MORE:
-                modified[title] = min(1.0, modified[title] * MORE_MULTIPLIER)
+                modified[title] = modified[title] * MORE_MULTIPLIER
             elif rating == RATING_LESS:
                 modified[title] = modified[title] * LESS_MULTIPLIER
             # RATING_NEUTRAL leaves the score alone on purpose. Its value is

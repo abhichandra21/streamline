@@ -282,7 +282,7 @@ def test_apply_rating_multipliers(tmp_path):
     scores = {"Show A": 0.8, "Show B": 0.8, "Show C": 0.5}
     ratings = load_ratings(db)
     result = apply_rating_multipliers(scores, ratings)
-    assert result["Show A"] == min(1.0, 0.8 * 1.3)
+    assert result["Show A"] == 0.8 * 1.3
     assert result["Show B"] == 0.8 * 0.5
     assert result["Show C"] == 0.5  # unrated, unchanged
 

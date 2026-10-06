@@ -220,6 +220,11 @@
         <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Scoring</legend>
         <p class="section-intro">How engagement scores are calculated from your watch history. Weights must sum to 1.0.</p>
 
+        <div class="form-row" style="margin-bottom:1rem;">
+          <label class="form-label"><input type="checkbox" name="use_viewing_signals" {% if cfg.scoring.use_viewing_signals %}checked{% endif %}> Use viewing signals</label>
+          <span class="form-hint">Off: every watched title counts the same. On: weight titles by completion, rewatches and recency using the settings below.</span>
+        </div>
+
         <div class="form-grid" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem;">
           <div class="form-row">
             <label class="form-label">Completion weight</label>

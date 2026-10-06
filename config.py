@@ -103,6 +103,7 @@ RATE_LIMIT_WAIT = _llm_cfg.get("rate_limit_wait", 65)
 
 # ── Scoring weights ──
 _scoring = _cfg.get("scoring", {})
+USE_VIEWING_SIGNALS = _scoring.get("use_viewing_signals", False)
 WEIGHT_COMPLETION = _scoring.get("weight_completion", 0.5)
 WEIGHT_REWATCH = _scoring.get("weight_rewatch", 0.3)
 WEIGHT_RECENCY = _scoring.get("weight_recency", 0.2)

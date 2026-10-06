@@ -387,3 +387,34 @@ def test_select_profile_slice_includes_negative_preferences_for_selected_cluster
     text = select_profile_slice(make_intent(genres=["crime"]), profile)
 
     assert "negative preference: glossy cop wish fulfillment" in text
+
+
+def _structured_prompt(monkeypatch, signals, events, scores):
+    import config
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", signals)
+    client = make_mock_llm(json.dumps({"version": 1, "clusters": []}))
+    build_structured_profile(events, scores, {t: "x" for t in scores}, client)
+    return client.generate.call_args[0][0]
+
+
+def test_structured_ties_keep_newest_titles_first(monkeypatch):
+    from datetime import datetime, timedelta
+    from recommender.ingestion.base import WatchEvent
+    events = [
+        WatchEvent(platform="netflix", title=f"T{i:03d}", content_type="movie", series_name=f"T{i:03d}",
+                   watched_duration=timedelta(minutes=90), total_duration=None,
+                   timestamp=datetime(2024, 1, 1) + timedelta(days=i), profile="p")
+        for i in range(200)
+    ]
+    scores = {e.title: 1.0 for e in events}
+    prompt = _structured_prompt(monkeypatch, False, events, scores)
+    assert "T199" in prompt and "T040" in prompt
+    assert "T039" not in prompt and "T000" not in prompt
+
+
+def test_structured_prompt_wording_follows_setting(monkeypatch):
+    off = _structured_prompt(monkeypatch, False, [], {"A": 1.0})
+    assert "equal baseline weight of 1.0" in off
+    assert "engagement" not in off
+    on = _structured_prompt(monkeypatch, True, [], {"A": 0.5})
+    assert "engagement scores" in on

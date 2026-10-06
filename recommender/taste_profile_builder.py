@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 import config
-from .ingestion.base import WatchEvent
+from .ingestion.base import SYNTHETIC_TIMESTAMP_PLATFORMS, WatchEvent
 from .llm import LLMClient
 
 log = logging.getLogger("recommender.profile")
@@ -31,6 +31,38 @@ _FAMILY_CLUSTER_PATTERNS = (
 )
 
 
+_EQUAL_WEIGHT_NOTE = (
+    "Every watched title has an equal baseline weight of 1.0. The owner curates heavily, "
+    "so watched generally means liked. Higher weights mark explicit \"More like this\" "
+    "feedback; lower weights mark \"Less like this\".\n"
+)
+
+
+def history_label() -> str:
+    return "engagement score" if config.USE_VIEWING_SIGNALS else "weight, newest first among ties"
+
+
+def sort_scored(
+    events: list[WatchEvent],
+    scores: dict[str, float],
+    enrichments: dict[str, str],
+) -> list[tuple[str, float]]:
+    """Highest score first; ties go to the most recently watched title, then title."""
+    latest: dict[str, object] = {}
+    for e in events:
+        if e.platform in SYNTHETIC_TIMESTAMP_PLATFORMS:
+            continue  # import-time date, not a watch time
+        key = e.series_name if e.content_type == "tv" else e.title
+        if key not in latest or e.timestamp > latest[key]:
+            latest[key] = e.timestamp
+    items = [(title, score) for title, score in scores.items() if title in enrichments]
+    # Titles with no event sort after those with one; sort twice for stable mixed-direction keys.
+    items.sort(key=lambda x: x[0])
+    items.sort(key=lambda x: latest[x[0]].timestamp() if x[0] in latest else float("-inf"), reverse=True)
+    items.sort(key=lambda x: -x[1])
+    return items
+
+
 def _batch_fingerprint(scored: list[tuple[str, float]]) -> str:
     """Hash the scored title list to detect when batches are stale.
 
@@ -39,7 +71,8 @@ def _batch_fingerprint(scored: list[tuple[str, float]]) -> str:
     invalidating on meaningful changes (feedback, weight changes, new titles).
     """
     rounded = [(t, round(s, 2)) for t, s in scored]
-    content = json.dumps(rounded)
+    # Prompt wording differs by mode, so batches from the other mode must not be reused.
+    content = json.dumps([config.USE_VIEWING_SIGNALS, rounded])
     return hashlib.sha256(content.encode()).hexdigest()[:16]
 
 
@@ -105,7 +138,8 @@ def _build_batch_profile(
         "and notable patterns. Be thorough — capture every distinct genre or style cluster "
         "you see, even small ones.\n"
         "Write in second person (\"You gravitate toward...\").\n\n"
-        f"Watch history (sorted by engagement score):\n{history_str}"
+        f"{'' if config.USE_VIEWING_SIGNALS else _EQUAL_WEIGHT_NOTE + chr(10)}"
+        f"Watch history (sorted by {history_label()}):\n{history_str}"
     )
     return client.generate(prompt, role="reason", max_tokens=config.TOKENS_PROFILE_BATCH,
                             timeout=config.TIMEOUT_PROFILE_BATCH).strip()
@@ -271,10 +305,7 @@ def build(
     after each batch completes (cached or freshly generated) so callers can
     drive a progress bar.
     """
-    scored = sorted(
-        [(title, score) for title, score in scores.items() if title in enrichments],
-        key=lambda x: -x[1],
-    )
+    scored = sort_scored(events, scores, enrichments)
 
     if not scored:
         return "No watch history available for taste profiling."
@@ -304,10 +335,12 @@ def build(
         prompt = (
             "Analyze this person's streaming watch history and write a detailed taste profile.\n"
             "Identify distinct taste clusters, preferences for tone/pacing/culture, "
-            "what they consistently finish, and notable patterns.\n"
-            "Write in second person (\"You gravitate toward...\")."
+            + ("what they consistently finish, and notable patterns.\n" if config.USE_VIEWING_SIGNALS
+               else "what they keep coming back to, and notable patterns.\n")
+            + "Write in second person (\"You gravitate toward...\")."
             f"{negative_section}\n\n"
-            f"Watch history (sorted by engagement score):\n{history_str}"
+            f"{'' if config.USE_VIEWING_SIGNALS else _EQUAL_WEIGHT_NOTE + chr(10)}"
+            f"Watch history (sorted by {history_label()}):\n{history_str}"
         )
         return client.generate(prompt, role="reason", max_tokens=config.TOKENS_PROFILE_MERGE,
                                 timeout=config.TIMEOUT_PROFILE_MERGE).strip()
