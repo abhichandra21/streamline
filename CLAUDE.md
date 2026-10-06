@@ -52,9 +52,9 @@ python3 -m pytest tests/test_query_engine.py -v
 # Read-only JSON + iCal for Home Assistant: /api/summary, /api/on-deck,
 # /api/watchlist, /api/coming-soon.ics (see docs/home-assistant.md)
 
-# User state vs the live app on the home server
-./recommend-sync                               # review, promote what you tick, refresh local
-./recommend-sync --status                      # what differs; writes nothing
+# Make local an exact copy of the home server's state (backs up local first)
+./recommend-mirror
+./recommend-mirror --dry-run                   # show the steps, change nothing
 ```
 
 Required environment variables: `TMDB_API_KEY`, plus `ANTHROPIC_API_KEY` and/or `GEMINI_API_KEY` or `OPENAI_API_KEY`.
