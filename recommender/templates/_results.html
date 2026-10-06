@@ -95,7 +95,7 @@
         <span class="mono" style="font-size:0.58rem; color:var(--muted);">Watched</span>
         {% else %}
         {% if r.user_state.in_watchlist %}
-        <span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>
+        <span class="mono" style="font-size:0.58rem; color:var(--yours);">Saved</span>
         {% else %}
         <span id="save-{{ loop.index }}">
           <form hx-post="/watchlist/save" hx-target="#save-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">

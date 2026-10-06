@@ -3,7 +3,7 @@
 {% block main_class %}wide{% endblock %}
 {% block content %}
 <div style="margin-bottom:1.5rem;">
-  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--teal);">Queue</span>
+  <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">Queue</span>
   <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:1.25rem;">Watchlist</h1>
 
   <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
@@ -212,9 +212,9 @@
   .wl-where--none { opacity: 0.55; }
   /* How much of an evening this asks for -- the fact that settles a weeknight
      before genre or rating gets a look in. Prominent through position and
-     weight, not colour: teal means "you did something" everywhere else in the
-     app, and a runtime has not been done to. Leaving it teal put two teal
-     things on one card and made the action button compete with a number. */
+     weight, not colour: --yours means "you did something" everywhere else in
+     the app, and a runtime has not been done to. Colouring it put two status
+     colours on one card and made the action button compete with a number. */
   .wl-length {
     font-size: 0.58rem;
     font-weight: 500;
@@ -287,7 +287,7 @@
     transition: color 0.15s, background 0.15s;
   }
   .wl-pill:hover { color: var(--text); }
-  .wl-pill.active { color: var(--teal); background: rgba(58,184,160,0.1); }
+  .wl-pill.active { color: var(--accent); background: rgba(232,93,74,0.1); }
 </style>
 
 <script>

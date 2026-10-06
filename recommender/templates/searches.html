@@ -178,7 +178,7 @@
             <span class="mono" style="font-size:0.55rem; color:var(--muted);">Watched</span>
             {% elif r.user_state.in_watchlist %}
             <span id="{{ save_id }}" style="display:inline-flex; align-items:center; gap:0.3rem;">
-              <span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>
+              <span class="mono" style="font-size:0.58rem; color:var(--yours);">Saved</span>
               <form hx-post="/watchlist/unsave" hx-target="#{{ save_id }}" hx-swap="outerHTML" style="margin:0; display:inline;">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="title" value="{{ r.title }}">

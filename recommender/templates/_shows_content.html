@@ -14,7 +14,7 @@
           hx-post="/shows/follow" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
-      <button class="btn-teal" type="submit">Follow</button>
+      <button class="btn-yours" type="submit">Follow</button>
     </form>
     <form class="show-inline-form" action="/shows/ignore" method="post"
           hx-post="/shows/ignore" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">
@@ -94,7 +94,7 @@
                 hx-post="/shows/caught-up" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tmdb_id" value="{{ show.tmdb_id }}">
-            <button class="btn-teal" type="submit">Mark caught up</button>
+            <button class="btn-yours" type="submit">Mark caught up</button>
           </form>
           <form class="show-inline-form" action="/shows/unfollow" method="post"
                 hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">

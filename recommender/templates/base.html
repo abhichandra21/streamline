@@ -39,7 +39,9 @@
       --border:    #352f40;
       --accent:    #e85d4a;
       --accent2:   #f0a040;
-      --teal:      #3ab8a0;
+      --teal:      #3ab8a0;  /* TV content type only */
+      --yours:     #a3cf62;  /* something you did: saved, watched, followed, more like this */
+      --focus:     #f2eff6;  /* keyboard focus only, never a status */
       --lavender:  #a78bfa;
       --text:      #f2eff6;
       --body:      #c8c2d0;
@@ -231,7 +233,7 @@
       display: var(--sb-dot);
       position: absolute; right: 9px; top: 8px;
       width: 6px; height: 6px; border-radius: 50%;
-      background: var(--teal);
+      background: var(--yours);
     }
 
     /* The collapse control sits in the brand row, in the icon column, so it is
@@ -263,7 +265,7 @@
       transition: color 0.15s, background 0.15s;
     }
     .sidebar-toggle:hover { background: var(--surface2); color: var(--text); }
-    .sidebar-toggle:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
+    .sidebar-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     /* A panel glyph rather than a bare chevron: it says which thing is being
        toggled, where an arrow only says a direction. */
     .sidebar-toggle svg {
@@ -388,10 +390,10 @@
     }
     .btn-ghost:hover { border-color: var(--accent); color: var(--text); text-decoration: none; }
 
-    .btn-teal {
+    .btn-yours {
       background: transparent;
-      border: 1px solid var(--teal);
-      color: var(--teal);
+      border: 1px solid var(--yours);
+      color: var(--yours);
       font-family: 'JetBrains Mono', monospace;
       font-size: 0.7rem;
       letter-spacing: 0.08em;
@@ -401,9 +403,9 @@
       cursor: pointer;
       transition: background 0.15s, color 0.15s, transform 0.1s;
     }
-    .btn-teal:hover { background: rgba(58,184,160,0.12); transform: translateY(-1px); }
-    .btn-teal.is-active { background: var(--teal); color: var(--bg); }
-    .btn-teal.is-active:hover { opacity: 0.9; transform: none; }
+    .btn-yours:hover { background: rgba(163,207,98,0.12); transform: translateY(-1px); }
+    .btn-yours.is-active { background: var(--yours); color: var(--bg); }
+    .btn-yours.is-active:hover { opacity: 0.9; transform: none; }
 
     .modal-overlay {
       position: fixed; inset: 0; background: rgba(0,0,0,0.6);
@@ -471,7 +473,7 @@
       .candidate-overview { -webkit-line-clamp: 2; }
       .candidate-actions { flex-direction: row; }
     }
-    .conflict-badge { color: var(--teal); font-size: 0.6rem; margin-top: 0.15rem; }
+    .conflict-badge { color: var(--yours); font-size: 0.6rem; margin-top: 0.15rem; }
     .candidate-actions { display: flex; flex-direction: column; gap: 0.3rem; }
     .retry-form { display: flex; gap: 0.4rem; margin-top: 0.75rem; flex-wrap: wrap; }
     .unmatched-form { margin-top: 0.5rem; }
@@ -498,13 +500,13 @@
       padding: 3px 8px;
       transition: border-color 0.15s, color 0.15s, background 0.15s;
     }
-    .rate-btn--more:hover    { border-color: var(--teal);     color: var(--teal); }
+    .rate-btn--more:hover    { border-color: var(--yours);    color: var(--yours); }
     .rate-btn--neutral:hover { border-color: var(--muted);    color: var(--text); }
     .rate-btn--less:hover    { border-color: var(--accent);   color: var(--accent); }
     /* Set is a fill, not a colour change: a filled shape reads as chosen at a
        glance where a recoloured word does not. */
     .rate-btn--more.is-set {
-      background: rgba(58,184,160,0.16); border-color: var(--teal); color: var(--teal);
+      background: rgba(163,207,98,0.16); border-color: var(--yours); color: var(--yours);
     }
     .rate-btn--neutral.is-set {
       background: var(--surface2); border-color: var(--muted); color: var(--text);
@@ -534,7 +536,7 @@
       border-radius: 3px;
       transition: background 0.15s, border-color 0.15s, color 0.15s;
     }
-    .wl-btn--watched { border: 1px solid var(--teal); color: var(--teal); }
+    .wl-btn--watched { border: 1px solid var(--yours); color: var(--yours); }
     .wl-btn--watched:hover { background: rgba(58,184,160,0.1); }
     .wl-btn--dismiss { border: 1px solid var(--border); color: var(--muted); }
     .wl-btn--dismiss:hover { border-color: var(--muted); color: var(--text); }
@@ -545,7 +547,7 @@
     .nav-badge {
       font-family: 'JetBrains Mono', monospace;
       font-size: 0.5rem;
-      background: var(--teal);
+      background: var(--yours);
       color: var(--bg);
       padding: 1px 5px;
       border-radius: 8px;
@@ -724,7 +726,7 @@
         top: 4px; right: calc(50% - 17px);
         min-width: 15px; height: 15px;
         border-radius: 999px;
-        background: var(--teal);
+        background: var(--yours);
         color: var(--bg);
         font-family: 'JetBrains Mono', monospace;
         font-size: 0.5rem;
