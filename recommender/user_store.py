@@ -744,7 +744,7 @@ def list_show_tracking(db_path: str) -> list[dict]:
 def get_meta(db_path: str, key: str) -> str | None:
     """Return one install-local bookkeeping value, or None if it was never set.
 
-    user_store_meta is not part of what recommend-sync moves between installs.
+    user_store_meta holds bookkeeping for this install only.
     """
     conn = _connect(db_path)
     try:
