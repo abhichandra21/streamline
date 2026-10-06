@@ -31,6 +31,17 @@ _FAMILY_CLUSTER_PATTERNS = (
 )
 
 
+# Cluster order should follow how much of the history each cluster covers, so
+# every prompt that describes clusters asks for an approximate title count.
+_CLUSTER_COUNT_NOTE = (
+    "Cluster by genre, tone, and style, not by language or country; mention language inside a "
+    "cluster's description if it matters. Assign each title to exactly one cluster and give the "
+    "count, like \"(~34 titles)\", so counts add up to the batch. Count titles marked "
+    "\"More like this\" extra. List clusters largest first.\n"
+)
+
+_PROMPT_VERSION = "counts-v1"
+
 _EQUAL_WEIGHT_NOTE = (
     "Every watched title has an equal baseline weight of 1.0. The owner curates heavily, "
     "so watched generally means liked. Higher weights mark explicit \"More like this\" "
@@ -72,7 +83,8 @@ def _batch_fingerprint(scored: list[tuple[str, float]]) -> str:
     """
     rounded = [(t, round(s, 2)) for t, s in scored]
     # Prompt wording differs by mode, so batches from the other mode must not be reused.
-    content = json.dumps([config.USE_VIEWING_SIGNALS, rounded])
+    # Bump the version when prompt wording changes, so older cached batches are not reused.
+    content = json.dumps([_PROMPT_VERSION, config.USE_VIEWING_SIGNALS, rounded])
     return hashlib.sha256(content.encode()).hexdigest()[:16]
 
 
@@ -137,6 +149,7 @@ def _build_batch_profile(
         "Identify distinct taste clusters, preferences for tone/pacing/culture, "
         "and notable patterns. Be thorough — capture every distinct genre or style cluster "
         "you see, even small ones.\n"
+        f"{_CLUSTER_COUNT_NOTE}"
         "Write in second person (\"You gravitate toward...\").\n\n"
         f"{'' if config.USE_VIEWING_SIGNALS else _EQUAL_WEIGHT_NOTE + chr(10)}"
         f"Watch history (sorted by {history_label()}):\n{history_str}"
@@ -252,8 +265,11 @@ def _merge_profiles(
         "Below are taste profile analyses from different segments of the same person's "
         "watch history. List ONLY the distinct taste cluster names you see, merging "
         "overlapping clusters. Return a numbered list of 8-15 cluster names, nothing else.\n"
-        "Order the clusters by importance to the person's true personal taste, deprioritizing "
-        "high-volume family/co-viewing content.\n\n"
+        "Each batch gives approximate title counts for its clusters. For merged clusters, sum "
+        "those counts across batches, and order the clusters by total share, largest first. "
+        "Titles marked \"More like this\" count extra. Put family/kids/co-viewing clusters last. "
+        "Put the total after each name, like \"Franchise action and superhero blockbusters (~120 titles)\". "
+        "Do not merge clusters just because they share a language.\n\n"
         f"{profiles_str}"
     )
     clusters_text = client.generate(cluster_prompt, role="reason",
@@ -270,13 +286,17 @@ def _merge_profiles(
         f"BATCH ANALYSES:\n{profiles_str}\n\n"
         f"CONSOLIDATED CLUSTERS:\n{clusters_text}\n\n"
         "Write the final merged taste profile. Rules:\n"
-        "- Write one section (## heading) per cluster from the list above\n"
+        "- Write one section (## heading) per cluster from the list above, in the order given "
+        "(it is ordered by share of the history, largest first). Leave the counts out of the headings\n"
         "- Do not add extra ## sections beyond the consolidated cluster list; merge leftover "
         "patterns into the nearest retained cluster\n"
         "- Each section: a rich paragraph describing the pattern (tone, pacing, themes, "
         "what draws this person), followed by key titles in bold/italic\n"
         "- Merge overlapping content from different batches into the same cluster\n"
-        "- Clusters that appear across multiple batches are stronger — note this\n"
+        "- Clusters that appear across multiple batches are stronger — note this. Do not call a "
+        "small cluster the deepest or most consistent; its size is in the counts. Describe "
+        "mainstream and franchise clusters as genuine taste, not a guilty pleasure, and avoid "
+        "\"arthouse\" unless the titles are\n"
         "- Write in second person (\"You gravitate toward...\")\n"
         "- Be specific about titles and what connects them, not generic\n"
         "- IMPORTANT: You MUST complete every section. If running low on space, "
@@ -337,7 +357,8 @@ def build(
             "Identify distinct taste clusters, preferences for tone/pacing/culture, "
             + ("what they consistently finish, and notable patterns.\n" if config.USE_VIEWING_SIGNALS
                else "what they keep coming back to, and notable patterns.\n")
-            + "Write in second person (\"You gravitate toward...\")."
+            + f"{_CLUSTER_COUNT_NOTE}"
+            "Write in second person (\"You gravitate toward...\")."
             f"{negative_section}\n\n"
             f"{'' if config.USE_VIEWING_SIGNALS else _EQUAL_WEIGHT_NOTE + chr(10)}"
             f"Watch history (sorted by {history_label()}):\n{history_str}"

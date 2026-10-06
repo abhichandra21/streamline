@@ -73,7 +73,8 @@ def is_bonus_content(*parts: str) -> bool:
 
 
 # Platforms whose events carry an import-time timestamp, not a watch time.
-SYNTHETIC_TIMESTAMP_PLATFORMS = frozenset({'manual', 'hbo'})
+# 'archive' is the "Seen it" table: its date is when the owner tapped.
+SYNTHETIC_TIMESTAMP_PLATFORMS = frozenset({'manual', 'hbo', 'archive'})
 
 
 @dataclass
