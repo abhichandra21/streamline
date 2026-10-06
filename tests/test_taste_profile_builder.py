@@ -140,7 +140,7 @@ def test_equal_weight_prompt_when_signals_off(monkeypatch):
     client = make_mock_llm("profile")
     build([make_event("A")], {"A": 1.0}, {"A": "x"}, client)
     prompt = client.generate.call_args[0][0]
-    assert "equal baseline weight of 1.0" in prompt
+    assert "0.3 for titles known only from a downloads list" in prompt
     assert "engagement" not in prompt
     assert "finish" not in prompt
 

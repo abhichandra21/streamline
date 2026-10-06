@@ -31,6 +31,7 @@ from recommender.ingestion.disney import parse as parse_disney
 from recommender.ingestion.hbo import parse as parse_hbo
 from recommender.ingestion.manual import parse as parse_manual
 from recommender import imdb_ratings, language_catalog
+from recommender.franchise import collapse_collections
 from recommender.signals import compute_scores
 from recommender.tmdb_client import TmdbClient, TmdbMetadata, MatchHints
 from recommender.enricher import (
@@ -1039,6 +1040,43 @@ def _import_manual_events() -> list | None:
     return events
 
 
+def _profile_scores(
+    events: list[WatchEvent],
+    metadata: dict,
+    index_entries: list[dict],
+    ratings: list[dict],
+    tracking: list[dict],
+) -> dict[str, float]:
+    """Taste-profile scores. Ratings and follows match titles by TMDB ID.
+
+    With viewing signals off, More and Follow are built into the weights and
+    Less-rated titles are left out, so they only appear as "not for you".
+    """
+    key_for_tmdb = {
+        (e["content_type"], e["tmdb_id"]): e["title"]
+        for e in index_entries if e.get("tmdb_id")
+    }
+
+    def keys_rated(rating: str) -> set[str]:
+        return {
+            user_store.rating_score_key(r, key_for_tmdb)
+            for r in ratings if user_store.normalize_rating(r["rating"]) == rating
+        }
+
+    followed = {
+        key_for_tmdb.get(("tv", t["tmdb_id"]), t["title"])
+        for t in tracking if t["state"] == "following"
+    }
+    scores = compute_scores(
+        events, metadata, config.RECENCY_HALF_LIFE_DAYS,
+        followed_keys=followed, more_keys=keys_rated(user_store.RATING_MORE),
+    )
+    if config.USE_VIEWING_SIGNALS:
+        return user_store.apply_rating_multipliers(scores, ratings, key_for_tmdb)
+    less = keys_rated(user_store.RATING_LESS)
+    return {key: score for key, score in scores.items() if key not in less}
+
+
 def _archive_events() -> list[WatchEvent]:
     """Turn "Seen it" archive entries into watch events for this run only.
 
@@ -1415,8 +1453,16 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                 f"{less_count} less like this, {neutral_count} neutral"
             )
 
-        scores = compute_scores(events, metadata, config.RECENCY_HALF_LIFE_DAYS)
-        scores = user_store.apply_rating_multipliers(scores, ratings)
+        scores = _profile_scores(
+            events, metadata, index.entries, ratings,
+            user_store.list_show_tracking(config.EVENT_DB_PATH),
+        )
+        scores, enrichments = collapse_collections(
+            scores,
+            {e["title"]: e["tmdb_id"] for e in index.entries
+             if e.get("content_type") == "movie" and e.get("tmdb_id")},
+            enrichments, Path(config.CACHE_DIR),
+        )
         negative_prefs = user_store.get_disliked_titles(config.EVENT_DB_PATH)
 
         # We don't know batch count until inside build(); use an indeterminate

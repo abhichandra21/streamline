@@ -15,7 +15,7 @@ from .ingestion.base import WatchEvent
 from .llm import LLMClient
 from .models import Recommendation
 from .tmdb_client import TmdbClient, TmdbMetadata
-from .structured_profile import select_profile_slice
+from .structured_profile import select_profile_slice, structured_profile_text
 from .user_state import UserStateIndex
 from .watch_index import WatchIndex
 
@@ -124,6 +124,11 @@ class RecommendContext:
 def _profile_for_prompt(ctx: RecommendContext, intent: "QueryIntent") -> str:
     profile_slice = select_profile_slice(intent, ctx.structured_profile)
     return profile_slice or ctx.taste_profile
+
+
+def whole_profile(ctx: RecommendContext) -> str:
+    """The profile the home page shows, for prompts that need all of it; prose if none."""
+    return structured_profile_text(ctx.structured_profile) or ctx.taste_profile or ""
 
 
 @dataclass
@@ -407,7 +412,7 @@ def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) ->
     prompt = (
         f'A user has watched {total_hours:.1f} hours of "{target}".\n\n'
         f'About "{target}": {desc}\n\n'
-        f'Their taste profile:\n{ctx.taste_profile}\n\n'
+        f'Their taste profile:\n{whole_profile(ctx)}\n\n'
         'Should they continue watching? Give a direct yes/no with 1-2 sentences of reasoning.'
     )
     response_text = ctx.llm.generate(prompt, role="reason", max_tokens=config.TOKENS_ABANDONED,

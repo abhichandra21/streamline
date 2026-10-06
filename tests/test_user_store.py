@@ -287,6 +287,18 @@ def test_apply_rating_multipliers(tmp_path):
     assert result["Show C"] == 0.5  # unrated, unchanged
 
 
+def test_apply_rating_multipliers_matches_by_tmdb_id(tmp_path):
+    db = str(tmp_path / "test.db")
+    from recommender.user_store import init_db, rate_title, load_ratings, apply_rating_multipliers
+
+    init_db(db)
+    rate_title(db, "Film: The Director's Cut", "movie", "less", tmdb_id=42)
+
+    result = apply_rating_multipliers({"Film": 1.0}, load_ratings(db),
+                                      key_for_tmdb={("movie", 42): "Film"})
+    assert result["Film"] == 0.5
+
+
 def test_add_to_archive(tmp_path):
     db = str(tmp_path / "test.db")
     from recommender.user_store import init_db, add_to_archive, list_manual_archive

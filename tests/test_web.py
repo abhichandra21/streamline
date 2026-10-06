@@ -3246,7 +3246,7 @@ class TestClassicsAndNotInterested:
     def test_page_shows_a_set_with_both_actions_and_new_set(self, client, classics_env):
         body = client.get("/classics").get_data(as_text=True)
 
-        assert "Have you seen these?" in body
+        assert "Seen It" in body
         assert "T100" in body
         assert 'hx-post="/classics/seen"' in body
         assert 'hx-post="/watchlist/dismiss"' in body
@@ -3384,3 +3384,139 @@ def test_searches_page_results_offer_seen_it_and_not_interested(client, monkeypa
 
     assert 'hx-post="/archive/add"' in html and "Seen it" in html
     assert 'hx-post="/watchlist/dismiss"' in html and "Not interested" in html
+
+
+def test_dashboard_clusters_follow_the_structured_profile():
+    from recommender.web import _dashboard_clusters
+    structured = {"clusters": [
+        {"label": "British crime", "positive_traits": ["slow-burn detectives"],
+         "representative_titles": ["Vera", "Line of Duty"]},
+        {"label": "Franchise fun", "positive_traits": [], "representative_titles": []},
+    ]}
+    clusters = _dashboard_clusters("## Prose cluster\nbody", structured)
+    assert [c["heading"] for c in clusters] == ["British crime", "Franchise fun"]
+    assert "Vera, Line of Duty" in clusters[0]["body_html"]
+
+
+def test_dashboard_clusters_fall_back_to_prose():
+    from recommender.web import _dashboard_clusters
+    clusters = _dashboard_clusters("## 1. Prose cluster\nSome **bold** text", None)
+    assert clusters[0]["heading"] == "1. Prose cluster"
+    assert "<strong>bold</strong>" in clusters[0]["body_html"]
+
+
+def test_not_for_you_lists_eight_then_counts_the_rest():
+    from recommender.web import _not_for_you
+    assert _not_for_you([]) == ""
+    line = _not_for_you([f"T{i}" for i in range(10)])
+    assert line.startswith("T0, T1") and line.endswith("T7 and 2 more")
+
+
+class TestLovedIt:
+    @pytest.fixture
+    def archive(self, tmp_path, monkeypatch):
+        import json as _json
+        from recommender.user_store import init_db
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        cache = tmp_path / "tmdb"
+        (cache / "tv").mkdir(parents=True)
+        entries = []
+        for i in (1, 2, 3):
+            (cache / "tv" / f"{i}.json").write_text(_json.dumps({
+                "poster_path": f"/p{i}.jpg", "origin_country": ["GB"], "genres": [{"name": "Crime"}],
+                "first_air_date": "2015-01-01", "vote_count": 100 * i}))
+            entries.append({"title": f"Show {i}", "content_type": "tv", "tmdb_id": i, "platforms": ["netflix"]})
+        index = tmp_path / "watch_index.json"
+        index.write_text(_json.dumps(entries))
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+        monkeypatch.setattr("config.WATCH_INDEX_PATH", str(index))
+        monkeypatch.setattr("config.CACHE_DIR", str(cache))
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / ".stale"))
+        monkeypatch.setattr(web, "_loved_archive_cache", None)
+        return db
+
+    def _ratings(self, db):
+        from recommender.user_store import load_ratings
+        return {r["tmdb_id"]: r["rating"] for r in load_ratings(db)}
+
+    def _meta(self, key):
+        return set(web._meta_json(key))
+
+    def test_save_loves_rejects_and_sends_the_rest_to_the_second_pass(self, client, archive):
+        resp = client.post("/loved-it/save", data=_csrf_form(
+            shown=["tv:1", "tv:2", "tv:3"], loved=["tv:2"], notforme=["tv:3"]))
+        assert resp.status_code == 302
+        assert self._ratings(archive) == {2: "more", 3: "less"}
+        assert self._meta("loved_seen_once") == {"tv:1"}
+
+    def test_untapped_twice_is_retired_with_no_rating(self, client, archive):
+        for _ in range(2):
+            client.post("/loved-it/save", data=_csrf_form(shown=["tv:1"]))
+        assert self._ratings(archive) == {}
+        assert self._meta("loved_seen_once") == set() and self._meta("loved_retired") == {"tv:1"}
+
+    def test_save_keeps_a_rating_given_elsewhere_while_the_set_was_open(self, client, archive):
+        from recommender.user_store import rate_title
+        rate_title(archive, "Show 1", "tv", "less", tmdb_id=1)
+        client.post("/loved-it/save", data=_csrf_form(shown=["tv:1", "tv:2"], loved=["tv:1"]))
+        assert self._ratings(archive) == {1: "less"}
+        assert self._meta("loved_seen_once") == {"tv:2"}
+
+    def test_second_pass_starts_only_when_every_title_was_shown(self, client, archive):
+        client.post("/loved-it/save", data=_csrf_form(shown=["tv:1", "tv:2"]))
+        body = client.get("/loved-it").get_data(as_text=True)
+        assert 'value="tv:3"' in body and 'value="tv:1"' not in body
+        client.post("/loved-it/save", data=_csrf_form(shown=["tv:3"]))
+        body = client.get("/loved-it").get_data(as_text=True)
+        assert 'value="tv:1"' in body and 'value="tv:2"' in body
+
+    def test_earlier_passed_titles_join_the_second_pass(self, client, archive):
+        from recommender.user_store import set_meta
+        set_meta(archive, "loved_passed", '["tv:1"]')
+        client.get("/loved-it")
+        assert self._meta("loved_seen_once") == {"tv:1"} and self._meta("loved_passed") == set()
+
+    def test_source_filter_limits_the_set_and_the_progress(self, client, archive, tmp_path):
+        import json as _json
+        from pathlib import Path
+        index = Path(web.config.WATCH_INDEX_PATH)
+        entries = _json.loads(index.read_text())
+        entries[0]["platforms"] = ["prime"]
+        index.write_text(_json.dumps(entries))
+        web._loved_archive_cache = None
+        client.get("/loved-it")  # an All set holding all three is saved first
+        body = client.get("/loved-it?source=prime").get_data(as_text=True)
+        assert 'value="tv:1"' in body and 'value="tv:2"' not in body
+        assert "0 of 1" in body
+        client.post("/loved-it/save", data=_csrf_form(shown=["tv:1"], loved=["tv:1"], source="prime"))
+        body = client.get("/loved-it").get_data(as_text=True)
+        assert 'value="tv:2"' in body and 'value="tv:3"' in body
+
+    def test_a_set_that_shrank_is_topped_back_up(self, client, archive, monkeypatch):
+        from recommender.user_store import rate_title
+        monkeypatch.setattr(web.loved_it, "SET_SIZE", 2)
+        client.get("/loved-it")
+        first = web._meta_json("loved_current")
+        rate_title(archive, "x", "tv", "more", tmdb_id=int(first[0].split(":")[1]))
+        body = client.get("/loved-it").get_data(as_text=True)
+        assert body.count('name="notforme"') == 2
+        assert f'value="{first[1]}"' in body
+
+    def test_page_renders_the_set_progress_and_the_token(self, client, archive):
+        client.post("/loved-it/save", data=_csrf_form(shown=["tv:1"], loved=["tv:1"]))
+        body = client.get("/loved-it").get_data(as_text=True)
+        assert "Show 2" in body and "Show 3" in body and 'value="tv:1"' not in body
+        assert "1 of 3" in body
+        assert 'name="_csrf_token"' in body
+        assert 'value="tv:2"' in body
+
+
+def test_loved_it_treats_a_followed_show_as_loved(tmp_path, monkeypatch):
+    from recommender.user_store import init_db, follow_show
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    follow_show(db, "Vera", 7, 1)
+    assert web._loved_ratings() == {"tv:7": "more"}

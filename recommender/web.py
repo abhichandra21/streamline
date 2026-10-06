@@ -39,6 +39,7 @@ from recommender.llm import create_client
 from recommender.log import setup_logging
 from recommender.enricher import enrichment_key_from_parts
 from recommender.query_engine import RecommendContext, ask, attach_imdb_ratings, _safe_query_intent
+from recommender import loved_it
 from recommender import wizard
 from recommender import wizard_flow
 from recommender.structured_profile import load_structured_profile
@@ -837,17 +838,26 @@ def plex_webhook() -> Response | tuple:
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@app.route("/")
-def dashboard() -> str:
-    ctx = _get_context()
-    enrichments = _load_enrichments()
-    entries = ctx.watch_index.entries
-    tv_count = sum(1 for e in entries if e.get("content_type") == "tv")
-    movie_count = sum(1 for e in entries if e.get("content_type") == "movie")
+def _dashboard_clusters(taste_profile: str, structured_profile: dict | None) -> list[dict]:
+    """Home page clusters: the structured profile search uses, in its computed order.
+
+    Falls back to the prose profile's sections when no structured profile exists.
+    """
+    if structured_profile and structured_profile.get("clusters"):
+        clusters = []
+        for c in structured_profile["clusters"]:
+            body = ""
+            if c.get("positive_traits"):
+                body += "<p>" + str(escape("; ".join(c["positive_traits"]).capitalize())) + ".</p>"
+            if c.get("representative_titles"):
+                body += ("<p><em>For example:</em> "
+                         + str(escape(", ".join(c["representative_titles"][:6]))) + "</p>")
+            clusters.append({"heading": c["label"], "body_html": Markup(body)})
+        return clusters
 
     clusters = []
     current_cluster = None
-    for line in ctx.taste_profile.split("\n"):
+    for line in taste_profile.split("\n"):
         if line.startswith("## "):
             if current_cluster:
                 clusters.append(current_cluster)
@@ -864,6 +874,30 @@ def dashboard() -> str:
 
     for c in clusters:
         c["body_html"] = _md_to_html(c["body"].strip())
+    return clusters
+
+
+def _not_for_you(titles: list[str], shown: int = 8) -> str:
+    """One line naming the titles rated Less like this."""
+    if not titles:
+        return ""
+    line = ", ".join(titles[:shown])
+    if len(titles) > shown:
+        line += f" and {len(titles) - shown} more"
+    return line
+
+
+@app.route("/")
+def dashboard() -> str:
+    ctx = _get_context()
+    enrichments = _load_enrichments()
+    entries = ctx.watch_index.entries
+    tv_count = sum(1 for e in entries if e.get("content_type") == "tv")
+    movie_count = sum(1 for e in entries if e.get("content_type") == "movie")
+
+    clusters = _dashboard_clusters(ctx.taste_profile, ctx.structured_profile)
+    _ensure_user_store_once()
+    not_for_you = _not_for_you(user_store.get_disliked_titles(config.EVENT_DB_PATH))
 
     posters = _get_recent_posters(entries, limit=30)
     recent_queries = query_history.load(limit=5)
@@ -872,6 +906,7 @@ def dashboard() -> str:
         "index.html",
         taste_profile=ctx.taste_profile,
         clusters=clusters,
+        not_for_you=not_for_you,
         total=len(entries),
         tv_count=tv_count,
         movie_count=movie_count,
@@ -1572,7 +1607,7 @@ def _classics_shown() -> set[tuple[str, int]]:
 
 @app.route("/classics")
 def classics_page() -> str:
-    """"Have you seen these?": a set of famous titles to mark as seen or not interested.
+    """"Seen It": a set of famous titles to mark as seen or not interested.
 
     The current set is saved, so reloading shows the same titles. Titles answered
     here drop out of it; once none are left, or after "New set", a fresh random
@@ -1616,6 +1651,153 @@ def classics_page() -> str:
             page["error"] = f"TMDB request failed ({type(exc).__name__}). Check the network and try again."
     page["titles"] = titles
     return render_template("classics.html", **page)
+
+
+_LOVED_CURRENT_KEY = "loved_current"
+# Shown once and left untapped: comes back once more in the second pass.
+_LOVED_SEEN_ONCE_KEY = "loved_seen_once"
+# Left untapped twice: done, with no rating.
+_LOVED_RETIRED_KEY = "loved_retired"
+# Earlier version: untapped titles were "passed". They join the second pass.
+_LOVED_OLD_PASSED_KEY = "loved_passed"
+LOVED_SOURCES = [
+    ("netflix", "Netflix"), ("prime", "Prime Video"), ("apple_tv", "Apple TV"), ("disney", "Disney+"),
+    ("hbo", "Max"), ("plex", "Plex"), ("manual", "Downloads list"), ("archive", "Seen It"),
+]
+_loved_archive_cache: tuple[float, list] | None = None
+
+
+def _loved_archive() -> list:
+    """Every archive title Loved It can show, reloaded when the watch index changes."""
+    global _loved_archive_cache
+    mtime = Path(config.WATCH_INDEX_PATH).stat().st_mtime
+    if _loved_archive_cache is None or _loved_archive_cache[0] != mtime:
+        entries = wi.load(config.WATCH_INDEX_PATH).entries
+        _loved_archive_cache = (mtime, loved_it.load_archive(entries, Path(config.CACHE_DIR)))
+    return _loved_archive_cache[1]
+
+
+def _loved_ratings() -> dict[str, str]:
+    """Ratings keyed "type:id", read fresh. A followed show counts as loved already."""
+    ratings = {
+        f"tv:{t['tmdb_id']}": user_store.RATING_MORE
+        for t in user_store.list_show_tracking(config.EVENT_DB_PATH) if t["state"] == "following"
+    }
+    ratings.update(
+        (f"{r['content_type']}:{r['tmdb_id']}", user_store.normalize_rating(r["rating"]))
+        for r in user_store.load_ratings(config.EVENT_DB_PATH) if r.get("tmdb_id")
+    )
+    return ratings
+
+
+def _loved_passes() -> tuple[set[str], set[str]]:
+    """Titles seen once and titles retired, folding in the earlier "passed" list."""
+    seen_once = set(_meta_json(_LOVED_SEEN_ONCE_KEY))
+    old = set(_meta_json(_LOVED_OLD_PASSED_KEY))
+    if old:
+        seen_once |= old
+        user_store.set_meta(config.EVENT_DB_PATH, _LOVED_SEEN_ONCE_KEY, json.dumps(sorted(seen_once)))
+        user_store.set_meta(config.EVENT_DB_PATH, _LOVED_OLD_PASSED_KEY, "[]")
+    return seen_once, set(_meta_json(_LOVED_RETIRED_KEY))
+
+
+def _loved_history(archive: list, ratings: dict[str, str], shown: set[str]) -> dict[str, tuple[int, int]]:
+    history: dict[str, tuple[int, int]] = {}
+    for t in archive:
+        if t.key in ratings or t.key in shown:
+            count, loved = history.get(t.group, (0, 0))
+            history[t.group] = (count + 1, loved + (ratings.get(t.key) == user_store.RATING_MORE))
+    return history
+
+
+@app.route("/loved-it")
+def loved_it_page() -> str:
+    """Loved It: sets of archive titles; tap the ones you loved or don't want.
+
+    Untapped titles come back once, after everything has been shown; left
+    untapped again, they are done with no rating. The current set is saved, so
+    reloading shows the same titles, minus any rated since. ?source= limits the
+    sets to one source, for judging a new export.
+    """
+    source = request.args.get("source") or ""
+    if source not in dict(LOVED_SOURCES):
+        source = ""
+    page = {"titles": [], "judged": 0, "total": 0, "error": None, "second_pass": False,
+            "source": source, "sources": []}
+    try:
+        archive = _loved_archive()
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        log.warning("Loved It: watch index unavailable at %s: %s", config.WATCH_INDEX_PATH, exc)
+        page["error"] = "Watch index is missing or unreadable. Run ./recommend setup, then reload this page."
+        return render_template("loved_it.html", **page)
+
+    _ensure_user_store_once()
+    ratings = _loved_ratings()
+    seen_once, retired = _loved_passes()
+    open_titles = [t for t in archive if t.key not in ratings and t.key not in retired]
+    page["sources"] = [
+        {"value": value, "label": label, "open": sum(1 for t in open_titles if value in t.sources)}
+        for value, label in LOVED_SOURCES if any(value in t.sources for t in archive)
+    ]
+    scope = [t for t in archive if not source or source in t.sources]
+    open_titles = [t for t in open_titles if not source or source in t.sources]
+    page["total"] = len(scope)
+    page["judged"] = len(scope) - len(open_titles)
+
+    # Each source keeps its own current set, so switching sources draws a full set.
+    current_key = f"{_LOVED_CURRENT_KEY}:{source}" if source else _LOVED_CURRENT_KEY
+    by_key = {t.key: t for t in open_titles}
+    titles = [by_key[k] for k in _meta_json(current_key) if k in by_key]
+    fresh = [t for t in open_titles if t.key not in seen_once]
+    # Titles rated since (here or under another source) drop out; top the set back up.
+    if len(titles) < loved_it.SET_SIZE and len(open_titles) > len(titles):
+        in_set = {t.key for t in titles}
+        pool = [t for t in (fresh or open_titles) if t.key not in in_set]
+        titles += loved_it.next_set(pool, _loved_history(archive, ratings, seen_once | retired),
+                                    size=loved_it.SET_SIZE - len(titles))
+        user_store.set_meta(config.EVENT_DB_PATH, current_key, json.dumps([t.key for t in titles]))
+    page["second_pass"] = bool(titles) and not fresh
+    page["titles"] = titles
+    return render_template("loved_it.html", **page)
+
+
+@app.route("/loved-it/save", methods=["POST"])
+def loved_it_save():
+    """Loved becomes More like this, Not for me becomes Less like this.
+
+    An untapped title moves to the second pass, or is retired with no rating
+    if this was its second time. Ratings are re-read here, so a title rated
+    elsewhere while the set was open keeps that rating.
+    """
+    _ensure_user_store_once()
+    loved = set(request.form.getlist("loved"))
+    not_for_me = set(request.form.getlist("notforme")) - loved
+    by_key = {t.key: t for t in _loved_archive()}
+    ratings = _loved_ratings()
+    seen_once, retired = _loved_passes()
+    for key in request.form.getlist("shown"):
+        title = by_key.get(key)
+        if title is None or key in ratings or key in retired:
+            continue
+        if key in loved or key in not_for_me:
+            rating = user_store.RATING_MORE if key in loved else user_store.RATING_LESS
+            user_store.rate_title(config.EVENT_DB_PATH, title.title, title.content_type,
+                                  rating, tmdb_id=title.tmdb_id)
+            seen_once.discard(key)
+        elif key in seen_once:
+            seen_once.discard(key)
+            retired.add(key)
+        else:
+            seen_once.add(key)
+    user_store.set_meta(config.EVENT_DB_PATH, _LOVED_SEEN_ONCE_KEY, json.dumps(sorted(seen_once)))
+    user_store.set_meta(config.EVENT_DB_PATH, _LOVED_RETIRED_KEY, json.dumps(sorted(retired)))
+    source = request.form.get("source") or ""
+    if source not in dict(LOVED_SOURCES):
+        source = ""
+    user_store.set_meta(config.EVENT_DB_PATH,
+                        f"{_LOVED_CURRENT_KEY}:{source}" if source else _LOVED_CURRENT_KEY, "[]")
+    Path(config.PROFILE_STALE_FLAG).touch()
+    return redirect(url_for("loved_it_page", source=source or None))
 
 
 @app.route("/classics/new", methods=["POST"])
@@ -2324,7 +2506,7 @@ def archive_add() -> str:
 
 @app.route("/classics/seen", methods=["POST"])
 def classics_seen() -> str:
-    """Seen it on the Have you seen these? page: same archive add, no rating prompt.
+    """Seen it on the Seen It page: same archive add, no rating prompt.
 
     Returns nothing, so the card is removed from the page. A saved title also
     leaves the watchlist, like the other Seen it controls.

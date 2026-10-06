@@ -15,7 +15,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 import config
-from recommender.query_engine import _parse_json_response, _safe_query_intent
+from recommender.query_engine import _parse_json_response, _safe_query_intent, whole_profile
 
 log = logging.getLogger(__name__)
 
@@ -308,7 +308,7 @@ def _as_recommend(data: dict) -> dict:
 
 def next_turn(state: WizardState, ctx, force_finish: bool = False) -> dict:
     """Produce the next wizard turn: a question, or a finish signal with intent."""
-    profile = ctx.taste_profile or ""
+    profile = whole_profile(ctx)
     tags = _taste_tags(ctx)
     cap_hit = state.turn_count >= config.WIZARD_MAX_QUESTIONS
     if force_finish or cap_hit:

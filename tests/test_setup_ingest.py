@@ -784,3 +784,30 @@ def test_refresh_profile_imports_manual_once_when_none_stored(monkeypatch, tmp_p
 
     setup._import_manual_events()  # what the --refresh-profile branch calls when none are stored
     assert len(load_events(config.EVENT_DB_PATH, provider="manual")) == 4
+
+
+def test_profile_scores_match_ratings_and_follows_by_tmdb_id(monkeypatch):
+    import config
+    from recommender.setup import _profile_scores
+
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    events = [
+        _make_event(platform="archive", title="Film", content_type="movie", series_name="Film"),
+        _make_event(platform="manual", title="Scary", content_type="movie", series_name="Scary"),
+        _make_event(platform="manual", title="Vera S1E1", series_name="Vera"),
+        _make_event(platform="netflix", title="Plain", content_type="movie", series_name="Plain"),
+    ]
+    index = [
+        {"title": "Film", "content_type": "movie", "tmdb_id": 1},
+        {"title": "Scary", "content_type": "movie", "tmdb_id": 2},
+        {"title": "Vera", "content_type": "tv", "tmdb_id": 3},
+    ]
+    ratings = [
+        {"title": "Film (Director's Cut)", "content_type": "movie", "tmdb_id": 1, "rating": "more"},
+        {"title": "Scary!", "content_type": "movie", "tmdb_id": 2, "rating": "less"},
+    ]
+    tracking = [{"tmdb_id": 3, "title": "Vera: Series 1", "state": "following"}]
+
+    scores = _profile_scores(events, {}, index, ratings, tracking)
+    assert scores == {"Film": 2.0, "Vera": 2.0, "Plain": 1.0}
+

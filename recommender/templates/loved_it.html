@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Loved It{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+
+<style>
+  /* The page is a run of quick taps, so the poster is the button and every
+     state lives in CSS (:checked), with no script needed. */
+  .lv-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 0.75rem 2rem; margin-bottom: 1.25rem; }
+  .lv-intro { max-width: 40rem; }
+  .lv-intro p { font-size: 0.88rem; color: var(--muted); margin-top: 0.4rem; }
+
+  .lv-progress { min-width: 12rem; flex: 0 1 16rem; }
+  .lv-progress-text { font-size: 0.66rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); text-align: right; }
+  .lv-progress-text b { color: var(--text); font-weight: 500; }
+  .lv-progress-track { height: 2px; background: var(--border); border-radius: 2px; overflow: hidden; margin-top: 0.45rem; }
+  .lv-progress-fill { height: 100%; background: var(--yours); opacity: 0.75; }
+
+  /* Source filter: plain links, so it needs no script and every choice is one tap. */
+  .lv-sources { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1.5rem; }
+  .lv-source {
+    display: inline-flex; align-items: baseline; gap: 0.45rem;
+    padding: 0.35rem 0.7rem; border: 1px solid var(--border); border-radius: 999px;
+    font-size: 0.64rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .lv-source:hover { border-color: var(--muted); color: var(--text); text-decoration: none; }
+  .lv-source:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .lv-source[aria-current="page"] { border-color: var(--text); color: var(--text); background: var(--surface2); }
+  .lv-source-n { color: var(--muted); font-size: 0.6rem; }
+  .lv-source[aria-current="page"] .lv-source-n { color: var(--body); }
+
+  .lv-note {
+    margin-bottom: 1.5rem; padding: 0.7rem 1rem; max-width: 46rem;
+    border-left: 2px solid var(--muted); background: var(--surface);
+    font-size: 0.84rem; color: var(--body); border-radius: 0 4px 4px 0;
+  }
+  .lv-note b { color: var(--text); font-weight: 500; }
+
+  .lv-form { counter-reset: loved nfm; }
+  /* A set is 24 posters, so only column counts that divide 24 are used and a
+     full set always ends on a whole row. Breakpoints follow the sidebar:
+     none below 840px, a 60px rail to 1039px, 208px from 1040px. Each band
+     keeps posters at roughly 110px or wider on phones, 150px or wider elsewhere. */
+  .lv-grid {
+    display: grid;
+    grid-template-columns: repeat(var(--lv-cols, 2), minmax(0, 1fr));
+    gap: 1.4rem 1.1rem;
+  }
+  @media (min-width: 360px)  { .lv-grid { --lv-cols: 3; } }
+  @media (min-width: 600px)  { .lv-grid { --lv-cols: 4; } }
+  @media (min-width: 1280px) { .lv-grid { --lv-cols: 6; } }
+  @media (min-width: 1600px) { .lv-grid { --lv-cols: 8; } }
+
+  .lv-item { position: relative; display: flex; flex-direction: column; }
+  /* Visually hidden, still in the tab order and still real checkboxes. */
+  .lv-check {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); border: 0; white-space: nowrap;
+  }
+
+  /* flex: 1 pins Not for me to the bottom of the row when a title wraps. */
+  .lv-card { flex: 1; display: flex; flex-direction: column; gap: 0.5rem; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .lv-poster {
+    position: relative; aspect-ratio: 2/3; border-radius: 6px; overflow: hidden;
+    background: var(--surface2);
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.04), 0 10px 24px -14px rgba(0,0,0,0.8);
+    transition: transform 0.18s cubic-bezier(0.2, 0.7, 0.3, 1), box-shadow 0.18s;
+  }
+  .lv-poster img { width: 100%; height: 100%; object-fit: cover; display: block; transition: filter 0.2s, opacity 0.2s; }
+  .lv-poster-blank {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    padding: 1rem; text-align: center; font-family: 'DM Serif Display', serif;
+    font-size: 1.05rem; line-height: 1.25; color: var(--muted);
+    background: linear-gradient(160deg, var(--surface2), var(--surface));
+  }
+  /* The ring is drawn over the image so it never shifts the layout. */
+  .lv-poster::after {
+    content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    box-shadow: inset 0 0 0 0 var(--yours);
+    transition: box-shadow 0.15s ease;
+  }
+
+  .lv-seal {
+    position: absolute; top: 0.5rem; right: 0.5rem; width: 1.9rem; height: 1.9rem;
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: rgba(20,17,24,0.55); border: 1px solid rgba(242,239,246,0.35);
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    opacity: 0; transform: scale(0.8);
+    transition: opacity 0.15s, transform 0.2s cubic-bezier(0.3, 1.6, 0.5, 1), background 0.15s, border-color 0.15s;
+  }
+  .lv-seal svg { width: 0.95rem; height: 0.95rem; fill: none; stroke: var(--bg); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; opacity: 0; }
+
+  .lv-meta { display: flex; flex-direction: column; gap: 0.1rem; }
+  .lv-title { font-size: 0.86rem; line-height: 1.3; color: var(--text); transition: color 0.15s; }
+  .lv-sub { font-size: 0.6rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .lv-type--tv { color: var(--teal); }
+  .lv-type--movie { color: var(--lavender); }
+
+  /* Not for me: a quiet second control under the title. */
+  .lv-nfm {
+    align-self: flex-start; margin-top: 0.3rem; padding: 0.3rem 0.55rem 0.3rem 0.45rem;
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    border: 1px solid transparent; border-radius: 4px; cursor: pointer;
+    font-size: 0.6rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted);
+    transition: border-color 0.15s, color 0.15s, background 0.15s, opacity 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .lv-nfm svg { width: 0.7rem; height: 0.7rem; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; }
+  .lv-nfm:hover { color: var(--body); border-color: var(--border); }
+
+  @media (hover: hover) {
+    .lv-card:hover .lv-poster { transform: translateY(-3px); box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 16px 30px -14px rgba(0,0,0,0.9); }
+    .lv-card:hover .lv-seal { opacity: 1; transform: scale(1); }
+  }
+  .lv-card:active .lv-poster { transform: scale(0.97); }
+
+  /* Not for me: the poster steps back, greyed, and the control reads as set. */
+  .lv-pick-nfm:checked ~ .lv-card .lv-poster img { filter: grayscale(1); opacity: 0.32; }
+  .lv-pick-nfm:checked ~ .lv-card .lv-poster-blank { opacity: 0.4; }
+  .lv-pick-nfm:checked ~ .lv-card .lv-title { color: var(--muted); }
+  .lv-pick-nfm:checked ~ .lv-nfm { counter-increment: nfm; color: var(--text); border-color: var(--muted); background: var(--surface2); }
+
+  /* Loved wins over Not for me, as it does on the server. */
+  .lv-pick-love:checked ~ .lv-card { counter-increment: loved; }
+  .lv-pick-love:checked ~ .lv-card .lv-poster img { filter: none; opacity: 1; }
+  .lv-pick-love:checked ~ .lv-card .lv-poster-blank { opacity: 1; }
+  .lv-pick-love:checked ~ .lv-card .lv-poster::after { box-shadow: inset 0 0 0 3px var(--yours); }
+  .lv-pick-love:checked ~ .lv-card .lv-seal { opacity: 1; transform: scale(1); background: var(--yours); border-color: var(--yours); }
+  .lv-pick-love:checked ~ .lv-card .lv-seal svg { opacity: 1; }
+  .lv-pick-love:checked ~ .lv-card .lv-title { color: var(--yours); }
+  .lv-pick-love:checked ~ .lv-nfm { counter-increment: none; opacity: 0.35; color: var(--muted); border-color: transparent; background: none; }
+
+  /* Keyboard: space toggles, the ring says where you are. */
+  .lv-pick-love:focus-visible ~ .lv-card .lv-poster { outline: 2px solid var(--focus); outline-offset: 3px; }
+  .lv-pick-nfm:focus-visible ~ .lv-nfm { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  /* The action bar follows the grid so the CSS counters have already counted
+     every checked card by the time it is drawn. */
+  .lv-bar {
+    position: sticky; bottom: 0; z-index: 5;
+    margin-top: 2rem; padding: 0.9rem 0 calc(0.9rem + env(safe-area-inset-bottom));
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.75rem 1.25rem;
+    background: linear-gradient(to bottom, rgba(20,17,24,0) 0%, var(--bg) 35%);
+  }
+  .lv-counts { margin-right: auto; display: flex; gap: 1.1rem; font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .lv-count-loved::before, .lv-count-nfm::before { font-weight: 500; font-size: 0.95rem; margin-right: 0.4rem; }
+  .lv-count-loved::before { content: counter(loved); color: var(--yours); }
+  .lv-count-nfm::before { content: counter(nfm); color: var(--text); }
+  .lv-save { padding: 0.7rem 1.4rem; background: var(--yours) !important; color: var(--bg) !important; }
+  .lv-save:hover { opacity: 0.92; }
+  .lv-save:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .lv-item { animation: lv-in 0.4s cubic-bezier(0.2, 0.7, 0.3, 1) both; animation-delay: calc(var(--i, 0) * 18ms); }
+  }
+  @keyframes lv-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  @media (max-width: 640px) {
+    .lv-progress { flex-basis: 100%; }
+    .lv-progress-text { text-align: left; }
+    .lv-grid { gap: 1rem 0.6rem; }
+    .lv-title { font-size: 0.76rem; }
+    .lv-seal { width: 1.6rem; height: 1.6rem; top: 0.35rem; right: 0.35rem; }
+    .lv-nfm { padding: 0.4rem 0.4rem 0.4rem 0.3rem; font-size: 0.56rem; }
+    .lv-save { flex: 1 1 auto; padding: 0.85rem 1rem; }
+  }
+</style>
+
+<div class="lv-head">
+  <div class="lv-intro">
+    <a href="/history" class="mono result-link">&larr; Archive</a>
+    <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.4rem;">Loved It</h1>
+    <p>Tap the ones you loved. Mark Not for me only for the ones you really don't want. Leave the rest: they come back once more, then stay unrated.</p>
+  </div>
+  {% if not error and total %}
+  <div class="lv-progress">
+    <div class="lv-progress-text mono"><b>{{ judged }} of {{ total }}</b> judged</div>
+    <div class="lv-progress-track"><div class="lv-progress-fill" style="width:{{ (judged * 100 / total) | round(1) }}%;"></div></div>
+  </div>
+  {% endif %}
+</div>
+
+{% if not error and sources %}
+<nav class="lv-sources mono" aria-label="Filter by source">
+  <a class="lv-source" href="/loved-it"{% if not source %} aria-current="page"{% endif %}>All</a>
+  {% for s in sources %}
+  <a class="lv-source" href="/loved-it?source={{ s.value | urlencode }}"{% if source == s.value %} aria-current="page"{% endif %}>{{ s.label }} <span class="lv-source-n">{{ s.open }}</span></a>
+  {% endfor %}
+</nav>
+{% endif %}
+
+{% if error %}
+<div style="padding:1rem 1.25rem; background:rgba(232,93,74,0.08); border:1px solid rgba(232,93,74,0.2); border-radius:6px; font-size:0.88rem; color:#e88;">{{ error }}</div>
+{% elif not titles %}
+<p class="mono" style="font-size:0.7rem; text-transform:uppercase; color:var(--muted);">You've been through them all.</p>
+{% else %}
+{% if second_pass %}
+<p class="lv-note"><b>Second look:</b> these you skipped the first time. Mark the ones you don't want; anything left untapped is done, with no rating.</p>
+{% endif %}
+<form method="post" action="/loved-it/save" class="lv-form">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="source" value="{{ source }}">
+  <div class="lv-grid">
+    {% for t in titles %}
+    {% set id = "lv-" ~ loop.index %}
+    {# Both checkboxes come before the labels so ~ can style the card from either. #}
+    <div class="lv-item" style="--i: {{ loop.index0 }};">
+      <input type="hidden" name="shown" value="{{ t.key }}">
+      <input type="checkbox" class="lv-check lv-pick-love" id="{{ id }}-love" name="loved" value="{{ t.key }}">
+      <input type="checkbox" class="lv-check lv-pick-nfm" id="{{ id }}-nfm" name="notforme" value="{{ t.key }}" aria-label="Not for me: {{ t.title }}">
+      <label class="lv-card" for="{{ id }}-love">
+        <span class="lv-poster">
+          {% if t.poster_path %}
+          <img src="https://image.tmdb.org/t/p/w342{{ t.poster_path }}" alt="" loading="lazy">
+          {% else %}
+          <span class="lv-poster-blank">{{ t.title }}</span>
+          {% endif %}
+          <span class="lv-seal" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+        </span>
+        <span class="lv-meta">
+          <span class="lv-title">{{ t.title }}</span>
+          <span class="lv-sub mono">{% if t.year %}{{ t.year }} &middot; {% endif %}<span class="lv-type--{{ t.content_type }}">{% if t.content_type == 'tv' %}TV{% else %}Film{% endif %}</span></span>
+        </span>
+      </label>
+      <label class="lv-nfm mono" for="{{ id }}-nfm" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>Not for me</label>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="lv-bar">
+    <span class="lv-counts mono" aria-hidden="true"><span class="lv-count-loved">loved</span><span class="lv-count-nfm">not for me</span></span>
+    <button type="submit" class="btn-yours lv-save">Save and next</button>
+  </div>
+</form>
+{% endif %}
+
+{% endblock %}

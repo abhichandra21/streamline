@@ -154,7 +154,7 @@ def test_build_structured_profile_sends_scores_and_negative_preferences():
     assert "Generic Action Movie" in prompt
     assert "ISO-639-1" in prompt
     assert "ISO-3166 alpha-2" in prompt
-    assert "not raw watch frequency" in prompt
+    assert "computed from members" in prompt
     assert "creator_affinities entries must include weight, traits, and clusters" in prompt
     assert "language_region_affinities entries must include weight, languages, regions, traits, and applies_to" in prompt
     assert "negative_preferences should include explicit dislikes first" in prompt
@@ -404,17 +404,82 @@ def test_structured_ties_keep_newest_titles_first(monkeypatch):
         WatchEvent(platform="netflix", title=f"T{i:03d}", content_type="movie", series_name=f"T{i:03d}",
                    watched_duration=timedelta(minutes=90), total_duration=None,
                    timestamp=datetime(2024, 1, 1) + timedelta(days=i), profile="p")
-        for i in range(200)
+        for i in range(400)
     ]
     scores = {e.title: 1.0 for e in events}
     prompt = _structured_prompt(monkeypatch, False, events, scores)
-    assert "T199" in prompt and "T040" in prompt
-    assert "T039" not in prompt and "T000" not in prompt
+    assert "T399" in prompt and "T080" in prompt
+    assert "T079" not in prompt and "T000" not in prompt
 
 
 def test_structured_prompt_wording_follows_setting(monkeypatch):
     off = _structured_prompt(monkeypatch, False, [], {"A": 1.0})
-    assert "equal baseline weight of 1.0" in off
+    assert "0.3 for titles known only from a downloads list" in off
     assert "engagement" not in off
     on = _structured_prompt(monkeypatch, True, [], {"A": 0.5})
     assert "engagement scores" in on
+
+
+def _cluster(label, members, co_viewing="personal"):
+    return {"label": label, "co_viewing": co_viewing, "members": members}
+
+
+def _parse(clusters, scored):
+    return parse_structured_profile_response(json.dumps({"version": 1, "clusters": clusters}), scored)
+
+
+SCORED = [("Line of Duty", 2.0), ("Vera", 2.0), ("Marvel (3 films)", 0.3), ("Cars", 1.0), ("Frozen", 1.0),
+          ("Moana", 1.0)]
+
+
+def test_member_scores_set_cluster_weight_and_order():
+    profile = _parse([_cluster("Spectacle", [3]), _cluster("British crime", [1, 2])], SCORED)
+    assert [(c["label"], c["weight"]) for c in profile["clusters"]] == [
+        ("British crime", 1.0), ("Spectacle", 0.075)]
+    assert profile["clusters"][0]["members"] == ["Line of Duty", "Vera"]
+
+
+def test_bad_member_numbers_are_ignored_and_empty_clusters_sort_last():
+    profile = _parse([_cluster("Odd", [0, 99, "x"]), _cluster("Crime", [1, 1]),
+                      _cluster("Repeat", [1])], SCORED)
+    assert [c["label"] for c in profile["clusters"]] == ["Crime", "Odd", "Repeat"]
+    assert profile["clusters"][1]["weight"] == 0.05
+
+
+def test_family_cluster_sorts_after_personal_even_when_larger():
+    profile = _parse([_cluster("Kids", [4, 5, 6], co_viewing="family"), _cluster("Crime", [1])], SCORED)
+    assert [c["label"] for c in profile["clusters"]] == ["Crime", "Kids"]
+
+
+def test_members_survive_save_and_load(tmp_path):
+    profile = _parse([_cluster("Crime", [1, 2])], SCORED)
+    path = tmp_path / "structured.json"
+    save_structured_profile(profile, path)
+    assert load_structured_profile(path)["clusters"][0]["members"] == ["Line of Duty", "Vera"]
+
+
+def test_structured_prompt_numbers_titles_and_asks_for_members(monkeypatch):
+    prompt = _structured_prompt(monkeypatch, False, [], {"A": 1.0, "B": 2.0})
+    assert "1. B (score: 2.00)" in prompt and "2. A (score: 1.00)" in prompt
+    assert "members lists the numbers" in prompt
+
+
+def test_structured_profile_text_lists_every_cluster_in_order():
+    from recommender.structured_profile import structured_profile_text
+    profile = _parse([_cluster("Spectacle", [3]), _cluster("British crime", [1, 2])], SCORED)
+    text = structured_profile_text(profile)
+    assert text.index("British crime") < text.index("Spectacle")
+    assert structured_profile_text(None) == ""
+
+
+def test_whole_profile_prefers_structured_and_falls_back_to_prose():
+    from types import SimpleNamespace
+    from recommender.query_engine import whole_profile
+    profile = _parse([_cluster("British crime", [1])], SCORED)
+    assert "British crime" in whole_profile(SimpleNamespace(structured_profile=profile, taste_profile="prose"))
+    assert whole_profile(SimpleNamespace(structured_profile=None, taste_profile="prose")) == "prose"
+
+
+def test_structured_prompt_gives_a_strong_country_or_language_its_own_cluster(monkeypatch):
+    prompt = _structured_prompt(monkeypatch, False, [], {"A": 1.0})
+    assert "British or Hindi series), give it its own cluster" in prompt

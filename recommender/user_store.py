@@ -440,16 +440,28 @@ def get_disliked_titles(db_path: str) -> list[str]:
         conn.close()
 
 
+def rating_score_key(entry: dict, key_for_tmdb: dict[tuple[str, int], str] | None) -> str:
+    """The score key a rating belongs to: by TMDB ID when known, else its stored title."""
+    if key_for_tmdb and entry.get("tmdb_id"):
+        key = key_for_tmdb.get((entry.get("content_type"), entry["tmdb_id"]))
+        if key:
+            return key
+    return entry["title"]
+
+
 def apply_rating_multipliers(scores: dict[str, float],
-                             ratings: list[dict]) -> dict[str, float]:
+                             ratings: list[dict],
+                             key_for_tmdb: dict[tuple[str, int], str] | None = None) -> dict[str, float]:
     """Apply liked/disliked multipliers to engagement scores.
 
     "More like this" gets a 1.3x boost; "less like this" gets a
-    0.5x penalty; "it was fine" is deliberately neutral.
+    0.5x penalty; "it was fine" is deliberately neutral. Ratings
+    match their title by TMDB ID through key_for_tmdb when given,
+    since a stored title can differ from the watch-index title.
     """
     modified = dict(scores)
     for entry in ratings:
-        title = entry["title"]
+        title = rating_score_key(entry, key_for_tmdb)
         rating = normalize_rating(entry["rating"])
         if title in modified:
             if rating == RATING_MORE:

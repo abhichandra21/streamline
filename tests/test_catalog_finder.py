@@ -594,7 +594,7 @@ def test_language_show_more_survives_a_title_marked_watched_between_clicks(tmp_p
     assert [r.title.tmdb_id for r in second.rows] == [11, 12, 13, 14, 15]
 
 
-# ── Have you seen these? ──────────────────────────────────────────────────────
+# ── Seen It ───────────────────────────────────────────────────────────────────
 
 def _classics_tmdb():
     """A movie and a show on every page; vote counts fall as the page number rises."""
