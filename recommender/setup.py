@@ -7,7 +7,7 @@ import shutil
 import sqlite3
 import sys
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -47,7 +47,7 @@ from recommender import user_store
 from recommender import overrides as ov
 from recommender import event_store
 from recommender.log import console
-from recommender.ingestion.base import SYNTHETIC_TIMESTAMP_PLATFORMS
+from recommender.ingestion.base import SYNTHETIC_TIMESTAMP_PLATFORMS, WatchEvent
 
 
 def _progress_bar(label: str, *, with_extra: str | None = None) -> Progress:
@@ -692,11 +692,18 @@ def _build_tmdb_id_hints(events: list) -> dict[tuple[str, str], int]:
     group with a different ID is logged, not used.
     """
     hints: dict[tuple[str, str], int] = {}
+    # An archive ID must not rewrite the match of a title that has real history.
+    history_keys = {
+        (e.series_name if e.content_type == 'tv' else e.title, e.content_type)
+        for e in events if e.platform != 'archive'
+    }
     for e in events:
         tmdb_id = getattr(e, 'tmdb_id_hint', None)
         if not tmdb_id:
             continue
         key = (e.series_name if e.content_type == 'tv' else e.title, e.content_type)
+        if e.platform == 'archive' and key in history_keys:
+            continue
         if key not in hints:
             hints[key] = tmdb_id
         elif hints[key] != tmdb_id:
@@ -1032,6 +1039,52 @@ def _import_manual_events() -> list | None:
     return events
 
 
+def _archive_events() -> list[WatchEvent]:
+    """Turn "Seen it" archive entries into watch events for this run only.
+
+    They live in their own table, so they are loaded fresh each setup and never
+    stored as provider events. Their date is when the owner tapped, which is why
+    the 'archive' platform is in SYNTHETIC_TIMESTAMP_PLATFORMS.
+    """
+    user_store.ensure_user_store(config.EVENT_DB_PATH, config.FEEDBACK_PATH)
+    events = []
+    for row in user_store.list_manual_archive(config.EVENT_DB_PATH):
+        is_tv = row["content_type"] == "tv"
+        duration = timedelta(minutes=config.MANUAL_TV_DURATION_MINUTES if is_tv
+                             else config.MANUAL_MOVIE_DURATION_MINUTES)
+        try:
+            timestamp = datetime.fromisoformat(row["watched_at"]).replace(tzinfo=None)
+        except ValueError:
+            timestamp = datetime.now()
+        events.append(WatchEvent(
+            platform="archive",
+            title=row["title"],
+            content_type=row["content_type"],
+            series_name=row["title"],
+            watched_duration=duration,
+            total_duration=duration,
+            timestamp=timestamp,
+            profile="",
+            tmdb_id_hint=row["tmdb_id"] or None,
+        ))
+    return events
+
+
+def _drop_archive_duplicates(archive: list[WatchEvent], events: list[WatchEvent]) -> list[WatchEvent]:
+    """Drop archive entries whose TMDB ID already belongs to provider or manual history.
+
+    History IDs come from source hints (Plex) and from the last watch index, where
+    entries with a non-archive platform are real history.
+    """
+    seen = {(e.content_type, e.tmdb_id_hint) for e in events if e.tmdb_id_hint}
+    index_path = Path(config.WATCH_INDEX_PATH)
+    if index_path.exists():
+        for entry in wi.load(str(index_path)).entries:
+            if entry.get("tmdb_id") and set(entry.get("platforms") or []) - {"archive"}:
+                seen.add((entry.get("content_type", "movie"), entry["tmdb_id"]))
+    return [e for e in archive if not (e.tmdb_id_hint and (e.content_type, e.tmdb_id_hint) in seen)]
+
+
 def ingest_providers(fail_on_error: bool = True) -> list:
     """Validate configured provider zips, persist to SQLite, and return normalized events."""
     from collections import defaultdict
@@ -1164,6 +1217,10 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
             console.print("[red]No watch events found. Add manual titles or provider exports with qualifying watch activity.[/red]")
             sys.exit(1)
 
+    archive_events = _drop_archive_duplicates(_archive_events(), events)
+    if archive_events:
+        console.print(f"  Plus {len(archive_events)} \"Seen it\" archive entries")
+        events = events + archive_events
 
     enrichments_index_path = Path(config.ENRICHMENT_CACHE_DIR) / "index.json"
     metadata: dict = {}
@@ -1183,6 +1240,20 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         console.print("\n[yellow]Overrides file changed since last build — triggering data + profile refresh.[/yellow]")
         refresh_data = True
         refresh_profile = True
+
+    if not refresh_data and index_path.exists() and archive_events:
+        # Archive entries added since the last build are not in the index, so they
+        # have no metadata or enrichment yet.
+        known = wi.load(config.WATCH_INDEX_PATH)
+        if any(
+            # Typed identity when the row has an ID; title only for rows without one.
+            ((e.content_type, e.tmdb_id_hint) not in known.tmdb_keys) if e.tmdb_id_hint
+            else ((wi._normalize(e.title), e.content_type) not in known.normalized_titles)
+            for e in archive_events
+        ):
+            console.print("\n[yellow]New \"Seen it\" archive entries — triggering data + profile refresh.[/yellow]")
+            refresh_data = True
+            refresh_profile = True
 
     if not refresh_data and index_path.exists():
         console.print("\nWatch index exists, skipping data fetch (use --refresh-data to rebuild).")

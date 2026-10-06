@@ -173,3 +173,98 @@ def test_batch_fingerprint_changes_with_mode(monkeypatch):
     off = _batch_fingerprint(scored)
     monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", True)
     assert _batch_fingerprint(scored) != off
+
+
+def _archive_event_for(db_path, title, tmdb_id=None, content_type="movie"):
+    from recommender import user_store
+    user_store.init_db(db_path)
+    user_store.add_to_archive(db_path, title, content_type, tmdb_id)
+
+
+def test_archive_entries_become_scored_titles_with_unknown_dates(tmp_path, monkeypatch):
+    import config
+    import recommender.setup as setup
+    from recommender.signals import compute_scores
+    from recommender.taste_profile_builder import sort_scored
+    db = str(tmp_path / "events.db")
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db)
+    _archive_event_for(db, "Casablanca")
+    _archive_event_for(db, "Zodiac")
+    archive = setup._archive_events()
+    assert {e.platform for e in archive} == {"archive"}
+    events = [_dated("Real", 5)] + archive
+    scores = compute_scores(events, {})
+    assert set(scores) == {"Real", "Casablanca", "Zodiac"}
+    enrichments = {t: "x" for t in scores}
+    # Tap dates are today, yet the real watch still comes first; archive ties sort by title.
+    assert [t for t, _ in sort_scored(events, scores, enrichments)] == ["Real", "Casablanca", "Zodiac"]
+
+
+def test_archive_title_also_watched_is_indexed_once(tmp_path, monkeypatch):
+    import config
+    import recommender.setup as setup
+    from recommender import watch_index as wi
+    from recommender.tmdb_client import TmdbMetadata
+    db = str(tmp_path / "events.db")
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db)
+    _archive_event_for(db, "Casablanca", tmdb_id=289)
+    watched = _dated("Casablanca", 5)
+    meta = {("Casablanca", "movie"): TmdbMetadata(
+        tmdb_id=289, content_type="movie", title="Casablanca",
+        runtime_minutes=100, vote_average=8.0, vote_count=1000)}
+    index = wi.build([watched] + setup._archive_events(), meta)
+    assert [e["title"] for e in index.entries] == ["Casablanca"]
+
+
+def test_batch_prompts_ask_for_cluster_counts():
+    single = make_mock_llm("profile")
+    build([make_event("A")], {"A": 1.0}, {"A": "x"}, single)
+    assert "exactly one cluster" in single.generate.call_args[0][0]
+
+    from recommender.taste_profile_builder import _build_batch_profile
+    batch = make_mock_llm("profile")
+    _build_batch_profile([("A", 1.0)], {"A": "x"}, 1, 2, batch)
+    assert "exactly one cluster" in batch.generate.call_args[0][0]
+
+
+def test_merge_prompt_orders_by_summed_share():
+    client = make_mock_llm_sequence(["1. Hindi (~90 titles)\n2. Blockbusters (~80 titles)", "## 1. Hindi\ntext"])
+    _merge_profiles(["batch one", "batch two"], client)
+    cluster_prompt = client.generate.call_args_list[0][0][0]
+    assert "sum" in cluster_prompt and "total share, largest first" in cluster_prompt
+    assert "importance" not in cluster_prompt
+    write_prompt = client.generate.call_args_list[1][0][0]
+    assert "in the order given" in write_prompt
+
+
+def test_batch_fingerprint_includes_prompt_version(monkeypatch):
+    import recommender.taste_profile_builder as tpb
+    before = tpb._batch_fingerprint([("A", 1.0)])
+    monkeypatch.setattr(tpb, "_PROMPT_VERSION", "counts-v2")
+    assert tpb._batch_fingerprint([("A", 1.0)]) != before
+
+
+def test_archive_entry_with_history_tmdb_id_is_dropped(tmp_path, monkeypatch):
+    import json
+    import config
+    import recommender.setup as setup
+    db = str(tmp_path / "events.db")
+    index = tmp_path / "watch_index.json"
+    index.write_text(json.dumps([{"tmdb_id": 289, "title": "Casablanca", "content_type": "movie",
+                                  "platforms": ["netflix"], "last_watched": ""}]))
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db)
+    monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(index))
+    _archive_event_for(db, "Casablanca (1942)", tmdb_id=289)
+    _archive_event_for(db, "Zodiac", tmdb_id=1949)
+    kept = setup._drop_archive_duplicates(setup._archive_events(), [])
+    assert [e.title for e in kept] == ["Zodiac"]
+
+
+def test_archive_id_does_not_rewrite_provider_title_hint():
+    import recommender.setup as setup
+    watched = _dated("Casablanca", 5)
+    archive = _dated("Casablanca", 6)
+    archive.platform = "archive"
+    archive.tmdb_id_hint = 999
+    assert setup._build_tmdb_id_hints([watched, archive]) == {}
+    assert setup._build_tmdb_id_hints([archive]) == {("Casablanca", "movie"): 999}
