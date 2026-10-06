@@ -3218,25 +3218,80 @@ def test_history_items_without_tmdb_id_are_not_links(client, tmp_path, monkeypat
 
 class TestClassicsAndNotInterested:
 
-    def test_classics_page_lists_unseen_titles_with_both_actions(self, client, monkeypatch):
+    @staticmethod
+    def _title(i):
         from recommender.tmdb_client import CatalogTitle
+        return CatalogTitle(tmdb_id=i, content_type="movie", title=f"T{i}", year=2000,
+                            poster_path=None, overview="", vote_average=8.0, vote_count=1000)
+
+    @pytest.fixture
+    def classics_env(self, tmp_path, monkeypatch):
+        from recommender.user_store import init_db
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
         monkeypatch.setattr("config.TMDB_API_KEY", "key")
-        monkeypatch.setattr(web.wi, "load", lambda path: MagicMock())
-        monkeypatch.setattr(web, "_load_user_state", lambda: MagicMock())
-        title = CatalogTitle(tmdb_id=155, content_type="movie", title="The Dark Knight", year=2008,
-                             poster_path="/p.jpg", overview="", vote_average=8.5, vote_count=30000)
-        monkeypatch.setattr(web, "unseen_classics", lambda *a, **k: [title])
+        monkeypatch.setattr(web.wi, "load", lambda path: MagicMock(is_watched=lambda t: False))
+        monkeypatch.setattr(web, "_load_user_state", lambda: MagicMock(
+            is_manually_watched=lambda t: False, is_dismissed=lambda t: False))
+        draws = []
 
-        resp = client.get("/classics")
+        def fake_next(tmdb, wi_, us, cache_dir, shown, **k):
+            draws.append(set(shown))
+            n = len(draws)
+            return [self._title(n * 100 + i) for i in range(3)]
+        monkeypatch.setattr(web, "next_classics_set", fake_next)
+        return db, draws
 
-        body = resp.get_data(as_text=True)
-        assert resp.status_code == 200
-        assert "The Dark Knight" in body
+    def test_page_shows_a_set_with_both_actions_and_new_set(self, client, classics_env):
+        body = client.get("/classics").get_data(as_text=True)
+
+        assert "Have you seen these?" in body
+        assert "T100" in body
         assert 'hx-post="/classics/seen"' in body
         assert 'hx-post="/watchlist/dismiss"' in body
+        assert "New set" in body
         assert "Show more" not in body
 
-    def test_classics_seen_archives_without_a_rating_prompt(self, client, tmp_path, monkeypatch):
+    def test_reloading_shows_the_same_set_without_drawing_again(self, client, classics_env):
+        _, draws = classics_env
+        first = client.get("/classics").get_data(as_text=True)
+        second = client.get("/classics").get_data(as_text=True)
+
+        assert len(draws) == 1
+        assert "T100" in first and "T100" in second
+
+    def test_new_set_marks_the_current_titles_shown_not_dismissed(self, client, classics_env):
+        from recommender.user_store import list_saved_titles
+        db, draws = classics_env
+        client.get("/classics")
+
+        resp = client.post("/classics/new", data=_csrf_form())
+        assert resp.status_code == 302
+        body = client.get("/classics").get_data(as_text=True)
+
+        assert "T200" in body and "T100" not in body
+        assert draws[1] == {("movie", 100), ("movie", 101), ("movie", 102)}
+        assert list_saved_titles(db, status="dismissed") == []
+
+    def test_a_fully_answered_set_is_recorded_shown_before_the_next_draw(self, client, classics_env, monkeypatch):
+        _, draws = classics_env
+        client.get("/classics")
+        monkeypatch.setattr(web, "_load_user_state", lambda: MagicMock(
+            is_manually_watched=lambda t: True, is_dismissed=lambda t: False))
+
+        client.get("/classics")
+
+        assert draws[1] == {("movie", 100), ("movie", 101), ("movie", 102)}
+
+    def test_empty_draw_says_everything_is_done(self, client, classics_env, monkeypatch):
+        monkeypatch.setattr(web, "next_classics_set", lambda *a, **k: [])
+
+        body = client.get("/classics").get_data(as_text=True)
+
+        assert "been through them all" in body
+
+    def test_classics_seen_archives_and_removes_the_card(self, client, tmp_path, monkeypatch):
         from recommender.user_store import init_db, list_manual_archive
 
         db = str(tmp_path / "test.db")
@@ -3248,26 +3303,9 @@ class TestClassicsAndNotInterested:
             **_csrf_form(), "title": "The Dark Knight", "content_type": "movie", "tmdb_id": "155",
         })
 
-        body = resp.get_data(as_text=True)
         assert resp.status_code == 200
-        assert "Marked seen" in body
-        assert "More like this" not in body
+        assert resp.get_data(as_text=True) == ""
         assert len(list_manual_archive(db)) == 1
-
-    def test_classics_page_offers_more_when_titles_remain(self, client, monkeypatch):
-        from recommender.tmdb_client import CatalogTitle
-        monkeypatch.setattr("config.TMDB_API_KEY", "key")
-        monkeypatch.setattr(web.wi, "load", lambda path: MagicMock())
-        monkeypatch.setattr(web, "_load_user_state", lambda: MagicMock())
-        titles = [CatalogTitle(tmdb_id=i, content_type="movie", title=f"T{i}", year=2000,
-                               poster_path=None, overview="", vote_average=8.0, vote_count=1000)
-                  for i in range(web.CLASSICS_PAGE_SIZE + 5)]
-        monkeypatch.setattr(web, "unseen_classics", lambda *a, **k: titles)
-
-        body = client.get("/classics").get_data(as_text=True)
-
-        assert "T29" in body and "T30" not in body
-        assert f"/classics?limit={web.CLASSICS_PAGE_SIZE * 2}" in body
 
     def test_result_cards_offer_not_interested_next_to_seen_it(self, client):
         item = {

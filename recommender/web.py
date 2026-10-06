@@ -42,11 +42,13 @@ from recommender.query_engine import RecommendContext, ask, attach_imdb_ratings,
 from recommender import wizard
 from recommender import wizard_flow
 from recommender.structured_profile import load_structured_profile
-from recommender.tmdb_client import MOVIE_GENRE_IDS, TV_GENRE_IDS, TmdbClient, TmdbRateLimitError
+from recommender.tmdb_client import (
+    MOVIE_GENRE_IDS, TV_GENRE_IDS, CatalogTitle, TmdbClient, TmdbRateLimitError,
+)
 from recommender.language_catalog import LANGUAGE_OPTIONS, LANGUAGES
 from recommender.catalog_finder import (
     LANGUAGE_MIN_IMDB_VOTES, FindCriteria, PERIOD_OPTIONS, RATING_OPTIONS, SORT_OPTIONS,
-    find_unwatched_titles, unseen_classics,
+    find_unwatched_titles, next_classics_set,
 )
 
 def _events_loader_fallback() -> list:
@@ -1544,19 +1546,40 @@ def find_page() -> str:
     return _find_response(cursor, page)
 
 
-CLASSICS_PAGE_SIZE = 30
+_CLASSICS_CURRENT_KEY = "classics_current"
+_CLASSICS_SHOWN_KEY = "classics_shown"
+
+
+def _meta_json(key: str) -> list:
+    try:
+        value = json.loads(user_store.get_meta(config.EVENT_DB_PATH, key) or "[]")
+    except json.JSONDecodeError:
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _retire_classics_set() -> None:
+    """Record the current set as shown, so none of it is offered again, and clear it."""
+    shown = _meta_json(_CLASSICS_SHOWN_KEY)
+    shown += [f"{row['content_type']}:{row['tmdb_id']}" for row in _meta_json(_CLASSICS_CURRENT_KEY)]
+    user_store.set_meta(config.EVENT_DB_PATH, _CLASSICS_SHOWN_KEY, json.dumps(sorted(set(shown))))
+    user_store.set_meta(config.EVENT_DB_PATH, _CLASSICS_CURRENT_KEY, "[]")
+
+
+def _classics_shown() -> set[tuple[str, int]]:
+    return {(ct, int(tid)) for ct, _, tid in (k.partition(":") for k in _meta_json(_CLASSICS_SHOWN_KEY))}
 
 
 @app.route("/classics")
 def classics_page() -> str:
-    """Poster grid of famous titles not yet in the history, archive, or dismissed list.
+    """"Have you seen these?": a set of famous titles to mark as seen or not interested.
 
-    A one-time catch-up pass: "Seen it" adds a title to the manual archive and
-    "Not interested" dismisses it. Talks only to TMDB. Showing more just raises
-    the limit, so titles marked off the page never shift the count.
+    The current set is saved, so reloading shows the same titles. Titles answered
+    here drop out of it; once none are left, or after "New set", a fresh random
+    set is drawn from famous titles that are unanswered and never shown before.
+    Talks only to TMDB.
     """
-    limit = min(max(request.args.get("limit", CLASSICS_PAGE_SIZE, type=int), CLASSICS_PAGE_SIZE), 300)
-    page = {"titles": [], "has_more": False, "next_limit": limit + CLASSICS_PAGE_SIZE, "error": None}
+    page = {"titles": [], "error": None}
 
     if not config.TMDB_API_KEY:
         page["error"] = "TMDB_API_KEY is not set. Add it to the environment (or .env) and restart the web UI."
@@ -1568,18 +1591,39 @@ def classics_page() -> str:
         page["error"] = "Watch index is missing or unreadable. Run ./recommend setup, then reload this page."
         return render_template("classics.html", **page)
 
-    tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+    _ensure_user_store_once()
+    user_state = _load_user_state()
     try:
-        remaining = unseen_classics(tmdb, watch_index, _load_user_state(), config.FIND_CACHE_DIR)
-        page["titles"] = remaining[:limit]
-        page["has_more"] = len(remaining) > limit
-    except TmdbRateLimitError:
-        page["error"] = "TMDB rate limit reached while reading the catalogue. Try again in a moment."
-    except (requests.RequestException, ValueError, KeyError) as exc:
-        # Never echo the exception text: request errors can carry the full URL.
-        log.warning("Classics: TMDB request failed: %s", type(exc).__name__)
-        page["error"] = f"TMDB request failed ({type(exc).__name__}). Check the network and try again."
+        current = [CatalogTitle(**row) for row in _meta_json(_CLASSICS_CURRENT_KEY)]
+    except TypeError:
+        current = []
+    titles = [t for t in current
+              if not (watch_index.is_watched(t) or user_state.is_manually_watched(t)
+                      or user_state.is_dismissed(t))]
+    if not titles:
+        _retire_classics_set()
+        tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+        try:
+            titles = next_classics_set(tmdb, watch_index, user_state, config.FIND_CACHE_DIR,
+                                       _classics_shown())
+            user_store.set_meta(config.EVENT_DB_PATH, _CLASSICS_CURRENT_KEY,
+                                json.dumps([asdict(t) for t in titles]))
+        except TmdbRateLimitError:
+            page["error"] = "TMDB rate limit reached while reading the catalogue. Try again in a moment."
+        except (requests.RequestException, ValueError, KeyError) as exc:
+            # Never echo the exception text: request errors can carry the full URL.
+            log.warning("Classics: TMDB request failed: %s", type(exc).__name__)
+            page["error"] = f"TMDB request failed ({type(exc).__name__}). Check the network and try again."
+    page["titles"] = titles
     return render_template("classics.html", **page)
+
+
+@app.route("/classics/new", methods=["POST"])
+def classics_new_set():
+    """Retire the current set (it is never shown again, but not dismissed) and draw a new one."""
+    _ensure_user_store_once()
+    _retire_classics_set()
+    return redirect(url_for("classics_page"))
 
 
 def _find_response(cursor: str | None, page: dict) -> str:
@@ -2280,9 +2324,12 @@ def archive_add() -> str:
 
 @app.route("/classics/seen", methods=["POST"])
 def classics_seen() -> str:
-    """Seen it on the Classics page: same archive add, but no rating prompt."""
+    """Seen it on the Have you seen these? page: same archive add, no rating prompt.
+
+    Returns nothing, so the card is removed from the page.
+    """
     archive_add()
-    return '<span class="mono" style="font-size:0.58rem; color:var(--teal);">Marked seen</span>'
+    return ""
 
 
 @app.route("/archive/resolve", methods=["POST"])

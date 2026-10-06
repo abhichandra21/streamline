@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Streamline — Classics catch-up{% endblock %}
+{% block title %}Streamline — Have you seen these?{% endblock %}
 {% block content %}
 
 <style>
@@ -13,34 +13,32 @@
 
 <div style="margin-bottom:1.5rem;">
   <a href="/history" class="mono result-link">&larr; Archive</a>
-  <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.4rem;">Classics catch-up</h1>
+  <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.4rem;">Have you seen these?</h1>
   <p style="font-size:0.88rem; color:var(--muted); margin-top:0.4rem;">
-    The most-voted movies and shows on TMDB that are not in your history. Tap "Seen it" for the ones you have watched, "Not interested" for the rest.
+    Famous movies and shows that are not in your history, such as ones you saw in theaters or before streaming. Tap "Seen it" for the ones you have watched, "Not interested" for the ones you will skip. "New set" retires anything you leave untouched; it will not come back here, and it stays available in search.
   </p>
 </div>
 
 {% if error %}
 <div style="padding:1rem 1.25rem; background:rgba(232,93,74,0.08); border:1px solid rgba(232,93,74,0.2); border-radius:6px; font-size:0.88rem; color:#e88;">{{ error }}</div>
 {% elif not titles %}
-<p class="mono" style="font-size:0.7rem; text-transform:uppercase; color:var(--muted);">Nothing left to catch up on.</p>
+<p class="mono" style="font-size:0.7rem; text-transform:uppercase; color:var(--muted);">You've been through them all.</p>
 {% else %}
 <div class="classics-grid">
   {% for t in titles %}
-  <div class="classic-card">
+  <div class="classic-card" id="cl-card-{{ t.content_type }}-{{ t.tmdb_id }}">
     <a class="classic-poster" href="https://www.themoviedb.org/{{ t.content_type }}/{{ t.tmdb_id }}" target="_blank" rel="noopener">
       {% if t.poster_path %}<img src="https://image.tmdb.org/t/p/w342{{ t.poster_path }}" alt="{{ t.title }}" loading="lazy">{% endif %}
     </a>
     <div class="classic-title">{{ t.title }}{% if t.year %} <span class="mono" style="font-size:0.62rem; color:var(--muted);">{{ t.year }}</span>{% endif %}</div>
     <div class="classic-actions">
-      <span id="cl-seen-{{ t.content_type }}-{{ t.tmdb_id }}">
-        <form hx-post="/classics/seen" hx-target="#cl-seen-{{ t.content_type }}-{{ t.tmdb_id }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+      <form hx-post="/classics/seen" hx-target="closest .classic-card" hx-swap="outerHTML" style="margin:0; display:inline;">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="title" value="{{ t.title }}">
           <input type="hidden" name="content_type" value="{{ t.content_type }}">
           <input type="hidden" name="tmdb_id" value="{{ t.tmdb_id }}">
           <button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;">Seen it</button>
-        </form>
-      </span>
+      </form>
       <form hx-post="/watchlist/dismiss" hx-target="closest .classic-card" hx-swap="outerHTML" style="margin:0; display:inline;">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="title" value="{{ t.title }}">
@@ -52,11 +50,10 @@
   </div>
   {% endfor %}
 </div>
-{% if has_more %}
-<div style="margin-top:1.5rem; text-align:center;">
-  <a href="/classics?limit={{ next_limit }}" class="btn-ghost" style="padding:0.6rem 1.2rem;">Show more</a>
-</div>
-{% endif %}
+<form method="post" action="/classics/new" style="margin-top:1.5rem; text-align:center;">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+  <button type="submit" class="btn-ghost" style="padding:0.6rem 1.2rem; cursor:pointer;">New set</button>
+</form>
 {% endif %}
 
 {% endblock %}

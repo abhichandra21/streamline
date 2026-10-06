@@ -9,6 +9,7 @@ cached IMDb ID lookup per shown title, for its display-only IMDb rating.
 
 import json
 import logging
+import random
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
@@ -242,46 +243,71 @@ def find_unwatched_titles(
     )
 
 
-# The most-voted titles barely change, so a week-old list is fine.
+# The most-voted titles barely change, so a week-old page is fine.
 CLASSICS_TTL_SECONDS = 7 * 86400
-# TMDB returns 20 per page: about 200 movies and 100 shows.
-CLASSICS_PAGES = {"movie": 10, "tv": 5}
+# TMDB returns 20 per page. One step is about 200 movies and 100 shows; going
+# deeper adds a step at a time, up to the top 1000 movies and 500 shows.
+CLASSICS_PAGES_PER_STEP = {"movie": 10, "tv": 5}
+CLASSICS_MAX_STEPS = 5
+CLASSICS_SET_SIZE = 20
+CLASSICS_SAMPLE_POOL = 100
 
 
-def famous_titles(tmdb: TmdbClient, cache_dir: str, today: date | None = None) -> list[CatalogTitle]:
-    """The most-voted movies and shows on TMDB, most voted first (cached for a week).
-
-    A failed page raises, so a partial list is never saved.
-    """
-    cache_path = Path(cache_dir) / "classics.json"
-    cached = TmdbClient._read_fresh_cache(cache_path, CLASSICS_TTL_SECONDS)
+def _classics_page(tmdb: TmdbClient, cache_dir: str, content_type: str, page: int,
+                   end: date) -> list[CatalogTitle]:
+    """One most-voted Discover page, cached for a week. A failed page raises and saves nothing."""
+    path = Path(cache_dir) / "classics" / f"{content_type}_{page}.json"
+    cached = TmdbClient._read_fresh_cache(path, CLASSICS_TTL_SECONDS)
     if cached is not None:
         return [CatalogTitle(**row) for row in cached.get("titles", [])]
+    result = tmdb.discover_catalog_page(
+        content_type, date(1900, 1, 1), end, page=page, sort_by="vote_count.desc")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"titles": [asdict(t) for t in result.rows]}))
+    return list(result.rows)
 
+
+def famous_titles(tmdb: TmdbClient, cache_dir: str, steps: int = 1,
+                  today: date | None = None) -> list[CatalogTitle]:
+    """The most-voted movies and shows on TMDB, most voted first, `steps` steps deep."""
     end = today or chicago_today()
     titles: list[CatalogTitle] = []
-    for content_type, pages in CLASSICS_PAGES.items():
-        for page in range(1, pages + 1):
-            result = tmdb.discover_catalog_page(
-                content_type, date(1900, 1, 1), end, page=page, sort_by="vote_count.desc")
-            titles.extend(result.rows)
-            if page >= result.total_pages:
-                break
+    for content_type, per_step in CLASSICS_PAGES_PER_STEP.items():
+        for page in range(1, per_step * steps + 1):
+            titles.extend(_classics_page(tmdb, cache_dir, content_type, page, end))
     titles.sort(key=lambda t: t.vote_count, reverse=True)
-
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps({"titles": [asdict(t) for t in titles]}))
     return titles
 
 
-def unseen_classics(tmdb: TmdbClient, watch_index, user_state, cache_dir: str,
-                    today: date | None = None) -> list[CatalogTitle]:
-    """Famous titles that are not in the watch history, the manual archive, or the dismissed list."""
-    return [
-        t for t in famous_titles(tmdb, cache_dir, today)
-        if not (watch_index.is_watched(t) or user_state.is_manually_watched(t)
-                or user_state.is_dismissed(t))
-    ]
+def next_classics_set(
+    tmdb: TmdbClient,
+    watch_index,
+    user_state,
+    cache_dir: str,
+    shown: set[tuple[str, int]],
+    size: int = CLASSICS_SET_SIZE,
+    today: date | None = None,
+    rng: random.Random | None = None,
+) -> list[CatalogTitle]:
+    """A random set of famous titles that are unanswered and not shown before.
+
+    Answered means in the watch history, the manual archive, or the dismissed
+    list. The set is sampled from the most-voted few of what is left, and the
+    list is read deeper only when too few remain. Empty means all are used up.
+    """
+    rng = rng or random
+    for steps in range(1, CLASSICS_MAX_STEPS + 1):
+        # Pages are cached at different times, so a title can sit on two of them.
+        unique = {(t.content_type, t.tmdb_id): t for t in famous_titles(tmdb, cache_dir, steps, today)}
+        remaining = [
+            t for key, t in unique.items()
+            if key not in shown
+            and not (watch_index.is_watched(t) or user_state.is_manually_watched(t)
+                     or user_state.is_dismissed(t))
+        ][:CLASSICS_SAMPLE_POOL]
+        if len(remaining) >= size or steps == CLASSICS_MAX_STEPS:
+            return rng.sample(remaining, min(size, len(remaining)))
+    return []
 
 
 def _annotate_cinema(
