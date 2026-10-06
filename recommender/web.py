@@ -2019,7 +2019,7 @@ def _watchlist_saved_fragment(title: str, ct: str, tmdb_id: int | None, target_i
     tmdb_val = tmdb_id if tmdb_id is not None else ""
     return Markup(
         f'<span id="{tid}" style="display:inline-flex; align-items:center; gap:0.3rem;">'
-        f'<span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>'
+        f'<span class="mono" style="font-size:0.58rem; color:var(--yours);">Saved</span>'
         f'<form hx-post="/watchlist/unsave" hx-target="#{tid}" hx-swap="outerHTML" style="margin:0; display:inline;">'
         f'<input type="hidden" name="_csrf_token" value="{csrf}">'
         f'<input type="hidden" name="title" value="{t}">'
@@ -2231,7 +2231,7 @@ def watchlist_save():
         return redirect(back)
     if mode == "toggle" and target_id:
         return _watchlist_saved_fragment(title, ct, tmdb_id, target_id)
-    return '<span class="mono" style="font-size:0.58rem; color:var(--teal);">Saved</span>'
+    return '<span class="mono" style="font-size:0.58rem; color:var(--yours);">Saved</span>'
 
 
 @app.route("/watchlist/unsave", methods=["POST"])
@@ -2455,7 +2455,7 @@ def archive_rate() -> str:
     if not title:
         return "Missing title", 400
     if rating == "skip":
-        return "" if context == "watchlist" else '<span class="mono" style="font-size:0.58rem; color:var(--teal);">added</span>'
+        return "" if context == "watchlist" else '<span class="mono" style="font-size:0.58rem; color:var(--yours);">added</span>'
     _ensure_user_store_once()
     user_store.rate_title(config.EVENT_DB_PATH, title, ct, rating, tmdb_id=tmdb_id)
     if context == "watchlist":

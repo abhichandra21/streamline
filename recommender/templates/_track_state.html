@@ -11,7 +11,7 @@
         action="/shows/follow-title" method="post" style="margin:0; display:inline;">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="tmdb_id" value="{{ tmdb_id }}">
-    <button type="submit" class="mono" style="font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; background:none; border:none; cursor:pointer; padding:0; color:var(--teal); transition:opacity 0.15s;"
+    <button type="submit" class="mono" style="font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; background:none; border:none; cursor:pointer; padding:0; color:var(--yours); transition:opacity 0.15s;"
       onmouseover="this.style.opacity='0.7'" onmouseout="this.style.opacity='1'"
       title="Tell Streamline to watch for season {{ tracking.from_season }}"
     >+ Follow from S{{ tracking.from_season }}</button>
