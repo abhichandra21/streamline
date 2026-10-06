@@ -304,10 +304,27 @@ def next_classics_set(
             if key not in shown
             and not (watch_index.is_watched(t) or user_state.is_manually_watched(t)
                      or user_state.is_dismissed(t))
-        ][:CLASSICS_SAMPLE_POOL]
+        ]
         if len(remaining) >= size or steps == CLASSICS_MAX_STEPS:
-            return rng.sample(remaining, min(size, len(remaining)))
+            return _mixed_sample(remaining, size, rng)
     return []
+
+
+def _mixed_sample(titles: list[CatalogTitle], size: int, rng) -> list[CatalogTitle]:
+    """Half movies, half shows, each drawn from the most-voted of its kind.
+
+    Shows get far fewer votes than films, so one combined vote-count pool
+    would be all films. A short side is filled from the other.
+    """
+    pools = {ct: [t for t in titles if t.content_type == ct][:CLASSICS_SAMPLE_POOL // 2]
+             for ct in ("movie", "tv")}
+    picked = rng.sample(pools["tv"], min(size // 2, len(pools["tv"])))
+    picked += rng.sample(pools["movie"], min(size - len(picked), len(pools["movie"])))
+    if len(picked) < size:
+        rest = [t for t in pools["tv"] if t not in picked]
+        picked += rng.sample(rest, min(size - len(picked), len(rest)))
+    rng.shuffle(picked)
+    return picked
 
 
 def _annotate_cinema(

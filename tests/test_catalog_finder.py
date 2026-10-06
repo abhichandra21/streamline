@@ -705,3 +705,11 @@ def test_next_set_never_repeats_a_title_listed_on_two_pages(tmp_path):
 
     keys = [(t.content_type, t.tmdb_id) for t in got]
     assert len(keys) == len(set(keys))
+
+
+def test_next_set_mixes_movies_and_shows_even_when_films_have_more_votes(tmp_path):
+    got = cf.next_classics_set(_classics_tmdb(), FakeWatchIndex(), FakeUserState(), str(tmp_path),
+                               set(), today=TODAY)
+
+    kinds = [t.content_type for t in got]
+    assert kinds.count("movie") == kinds.count("tv") == cf.CLASSICS_SET_SIZE // 2
