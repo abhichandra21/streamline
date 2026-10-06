@@ -9,7 +9,7 @@ from typing import Callable
 
 import config
 
-from . import imdb_ratings
+from . import imdb_ratings, user_store
 from .enricher import enrich, enrich_batch, enrichment_key
 from .ingestion.base import WatchEvent
 from .llm import LLMClient
@@ -270,6 +270,40 @@ def parse_intent(
         )
 
 
+def build_feedback_block(max_more: int = 30, max_less: int = 10) -> str:
+    """The owner's current More/Less ratings as a prompt block, read fresh each call.
+
+    Returns "" when there is nothing to say or the ratings cannot be read.
+    """
+    try:
+        ratings = user_store.load_ratings(config.EVENT_DB_PATH)
+        # Newest edit first, so a just-changed rating always makes the cap.
+        ratings.sort(key=lambda r: r.get("updated_at") or "", reverse=True)
+    except Exception as exc:
+        log.warning("Could not read ratings for the prompt: %s", exc)
+        return ""
+
+    def names(kind: str, limit: int) -> str:
+        # The cap keeps the most recently changed.
+        picked = [r for r in ratings if r["rating"] == kind][:limit]
+        return ", ".join(
+            f'{r["title"]} ({"TV" if r["content_type"] == "tv" else "film"})' for r in picked
+        )
+
+    more = names(user_store.RATING_MORE, max_more)
+    less = names(user_store.RATING_LESS, max_less)
+    if not more and not less:
+        return ""
+    lines = ["OWNER'S EXPLICIT FEEDBACK (current, overrides the taste profile where they conflict):"]
+    if more:
+        lines.append(f"More like this: {more}")
+    if less:
+        lines.append(f"Less like this: {less}")
+    lines.append("Treat a Less title as a dislike of that title's specific qualities, "
+                 "not of its whole genre.")
+    return "\n".join(lines)
+
+
 def rank_candidates(
     query: str,
     taste_profile: str,
@@ -278,6 +312,7 @@ def rank_candidates(
     client: LLMClient,
     top_n: int = 1,
     context_note: str | None = None,
+    feedback_block: str = "",
 ) -> list[Recommendation]:
     """Rank candidates against taste profile."""
     log.debug("Ranking %d candidates for query: %r (top_n=%d)", len(candidates), query, top_n)
@@ -298,7 +333,8 @@ def rank_candidates(
         + (f'TONIGHT\'S CONTEXT (use to nudge ordering, not as a hard filter):\n{context_note}\n\n'
            if context_note else '')
         + f'TASTE PROFILE:\n{taste_profile}\n\n'
-        f'CANDIDATES (title, year, type, rating, votes, description):\n{cands_str}\n\n'
+        + (f'{feedback_block}\n\n' if feedback_block else '')
+        + f'CANDIDATES (title, year, type, rating, votes, description):\n{cands_str}\n\n'
         'Rules:\n'
         '- Match the type asked for. "Movies" means feature films, not TV movies, specials, or episodes.\n'
         '- This person prefers popular, well-made, well-known titles they would actually sit down '
@@ -727,6 +763,7 @@ def ask(
         return _handle_abandoned(query, intent, ctx)
 
     profile_for_prompt = _profile_for_prompt(ctx, intent)
+    feedback_block = build_feedback_block()
 
     content_types = ['tv', 'movie'] if intent.content_type == 'both' else [intent.content_type]
     seen_ids: set[tuple[str, int]] = set()
@@ -805,7 +842,8 @@ def ask(
         suggestions = _generate_suggestions(query, profile_for_prompt, ctx.llm,
                                              similar_to=intent.similar_to,
                                              already_seen=already_seen,
-                                             context_note=context_note)
+                                             context_note=context_note,
+                                             feedback_block=feedback_block)
         log.debug("LLM suggested %d titles: %s", len(suggestions), suggestions)
         suggested_titles.update(suggestions)
         suggestion_count = 0
@@ -905,7 +943,8 @@ def ask(
             # enough candidates after discarding titles not on the requested service.
             rank_size = max(intent.top_n * 3, 15) if requested_platforms else intent.top_n
             results = rank_candidates(query, profile_for_prompt, candidates, enrichments,
-                                      ctx.llm, rank_size, context_note=context_note)
+                                      ctx.llm, rank_size, context_note=context_note,
+                                      feedback_block=feedback_block)
 
             annotated = []
             unfiltered = []
@@ -934,7 +973,8 @@ def ask(
             return annotated
 
         results = rank_candidates(query, profile_for_prompt, candidates, enrichments,
-                                  ctx.llm, intent.top_n, context_note=context_note)
+                                  ctx.llm, intent.top_n, context_note=context_note,
+                                  feedback_block=feedback_block)
         return results
 
     results = _rank_pool(candidates, context_note)
@@ -976,6 +1016,7 @@ def _generate_suggestions(
     similar_to: list[str] | None = None,
     already_seen: list[str] | None = None,
     context_note: str | None = None,
+    feedback_block: str = "",
 ) -> list[str]:
     """Ask LLM to suggest specific titles based on query and taste profile."""
     seen_ctx = ""
@@ -991,7 +1032,8 @@ def _generate_suggestions(
         f'A user asked for: "{query}"\n'
         f'{similar_ctx}{note_ctx}\n'
         f'Taste profile (background only; the query comes first):\n{taste_profile}\n\n'
-        'Name 40 real titles that clearly fit the request. This person prefers popular, '
+        + (f'{feedback_block}\n\n' if feedback_block else '')
+        + 'Name 40 real titles that clearly fit the request. This person prefers popular, '
         'well-known, widely liked films and shows over obscure or arthouse ones, unless the '
         'request asks for lesser-known picks; a strong '
         'rating and lots of votes are good signs. Feature films and full series only: no TV '
