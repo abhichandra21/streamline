@@ -1453,3 +1453,150 @@ def test_refill_prompt_names_suggestions_that_were_filtered_out():
         ask("q", ctx, intent_override=_request_intent())
 
     assert "Gone Film" in llm.generate.call_args_list[1].args[0]
+
+
+# --- Owner feedback block (#115) ---
+
+@pytest.fixture
+def ratings_db(tmp_path, monkeypatch):
+    import config
+    db = str(tmp_path / "events.db")
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db)
+    from recommender import user_store
+    user_store.init_db(db)
+    return db
+
+
+def _rate(db, title, ct, rating):
+    from recommender import user_store
+    user_store.rate_title(db, title, ct, rating)
+
+
+def test_feedback_block_empty_without_ratings(ratings_db):
+    from recommender.query_engine import build_feedback_block
+    assert build_feedback_block() == ""
+
+
+def test_feedback_block_more_less_only_with_types(ratings_db):
+    from recommender.query_engine import build_feedback_block
+    _rate(ratings_db, "Alpha", "movie", "more")
+    _rate(ratings_db, "Beta", "tv", "more")
+    _rate(ratings_db, "Gamma", "movie", "less")
+    _rate(ratings_db, "Fine One", "movie", "neutral")
+    block = build_feedback_block()
+    assert "More like this: " in block and "Alpha (film)" in block and "Beta (TV)" in block
+    assert "Less like this: Gamma (film)" in block
+    assert "Fine One" not in block
+
+
+def test_feedback_block_same_title_film_and_tv_stay_distinct(ratings_db):
+    from recommender.query_engine import build_feedback_block
+    _rate(ratings_db, "Dune", "movie", "more")
+    _rate(ratings_db, "Dune", "tv", "less")
+    block = build_feedback_block()
+    assert "More like this: Dune (film)" in block
+    assert "Less like this: Dune (TV)" in block
+
+
+def test_feedback_block_follows_changes_and_clears(ratings_db):
+    from recommender.query_engine import build_feedback_block
+    _rate(ratings_db, "Alpha", "movie", "more")
+    assert "More like this: Alpha (film)" in build_feedback_block()
+    _rate(ratings_db, "Alpha", "movie", "less")
+    block = build_feedback_block()
+    assert "Less like this: Alpha (film)" in block and "More like this" not in block
+    _rate(ratings_db, "Alpha", "movie", "clear")
+    assert build_feedback_block() == ""
+
+
+def test_feedback_block_caps_at_40(ratings_db):
+    from recommender.query_engine import build_feedback_block
+    for i in range(35):
+        _rate(ratings_db, f"More{i}", "movie", "more")
+    for i in range(15):
+        _rate(ratings_db, f"Less{i}", "movie", "less")
+    block = build_feedback_block()
+    assert block.count("(film)") == 40
+    more_line = next(l for l in block.splitlines() if l.startswith("More like this"))
+    less_line = next(l for l in block.splitlines() if l.startswith("Less like this"))
+    assert more_line.count("(film)") == 30
+    assert less_line.count("(film)") == 10
+
+
+def test_feedback_block_read_error_gives_empty(ratings_db, monkeypatch):
+    from recommender import user_store
+    from recommender.query_engine import build_feedback_block
+
+    def boom(path):
+        raise RuntimeError("db locked")
+    monkeypatch.setattr(user_store, "load_ratings", boom)
+    assert build_feedback_block() == ""
+
+
+def _run_ask_capturing_prompts(cache_dir):
+    import recommender.query_engine as qe
+    cand = make_meta("Cand", tmdb_id=1, content_type="movie")
+    prompts = []
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return [cand]
+        def get_metadata(self, title, ct):
+            return None
+        def get_watch_providers(self, *a, **k):
+            return []
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, prompt, *a, **k):
+            prompts.append(prompt)
+            return "[]"
+
+    ctx = qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir=cache_dir, events=[],
+    )
+    intent = qe.QueryIntent(
+        genres=["drama"], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=[], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent=None, content_type="movie",
+        top_n=5, platforms=[],
+    )
+    qe.ask("q", ctx, intent_override=intent)
+    return prompts
+
+
+def test_feedback_reaches_suggestion_and_ranking_prompts(ratings_db, tmp_path):
+    _rate(ratings_db, "Alpha", "movie", "more")
+    prompts = _run_ask_capturing_prompts(str(tmp_path))
+    suggest = [p for p in prompts if "Name 40 real titles" in p]
+    rank = [p for p in prompts if "Pick the best picks" in p]
+    assert suggest and rank
+    assert all("OWNER'S EXPLICIT FEEDBACK" in p and "Alpha (film)" in p for p in suggest + rank)
+
+
+def test_no_ratings_leaves_prompts_untouched(ratings_db, tmp_path):
+    prompts = _run_ask_capturing_prompts(str(tmp_path))
+    assert prompts
+    assert not any("OWNER'S EXPLICIT FEEDBACK" in p for p in prompts)
+
+
+def test_feedback_cap_keeps_just_changed_rating(ratings_db):
+    import sqlite3
+    from recommender.query_engine import build_feedback_block
+    _rate(ratings_db, "Old One", "movie", "more")
+    for i in range(30):
+        _rate(ratings_db, f"More{i}", "movie", "more")
+    conn = sqlite3.connect(ratings_db)
+    conn.execute("UPDATE title_ratings SET rated_at='2020-01-01T00:00:00', "
+                 "updated_at='2020-01-01T00:00:00'")
+    # Old One was rated first but edited last: updated_at is newest, rated_at is oldest.
+    conn.execute("UPDATE title_ratings SET updated_at='2030-01-01T00:00:00' "
+                 "WHERE title='Old One'")
+    conn.commit()
+    conn.close()
+    assert "Old One (film)" in build_feedback_block()
