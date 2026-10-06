@@ -47,6 +47,7 @@ from recommender import user_store
 from recommender import overrides as ov
 from recommender import event_store
 from recommender.log import console
+from recommender.ingestion.base import SYNTHETIC_TIMESTAMP_PLATFORMS
 
 
 def _progress_bar(label: str, *, with_extra: str | None = None) -> Progress:
@@ -274,8 +275,6 @@ _EDITION_SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Platforms whose events carry an import-time timestamp, not a watch time.
-SYNTHETIC_TIMESTAMP_PLATFORMS = frozenset({'manual', 'hbo'})
 
 
 def _strip_edition_suffix(title: str) -> str:

@@ -118,3 +118,58 @@ def test_merge_profiles_reorders_family_sections_after_personal_before_capping()
     cluster_block = final_prompt.split("CONSOLIDATED CLUSTERS:\n", 1)[1]
     cluster_block = cluster_block.split("\n\nWrite the final", 1)[0]
     assert cluster_block.splitlines()[0] == "1. British Crime & Police Drama"
+
+
+def _dated(title, day):
+    e = make_event(title)
+    e.timestamp = datetime(2024, 1, day)
+    return e
+
+
+def test_sort_scored_ties_go_to_most_recent():
+    from recommender.taste_profile_builder import sort_scored
+    events = [_dated("Old", 1), _dated("Newest", 20), _dated("Mid", 10), _dated("Liked", 2)]
+    scores = {"Old": 1.0, "Newest": 1.0, "Mid": 1.0, "Liked": 1.3}
+    enrichments = {t: "x" for t in scores}
+    assert [t for t, _ in sort_scored(events, scores, enrichments)] == ["Liked", "Newest", "Mid", "Old"]
+
+
+def test_equal_weight_prompt_when_signals_off(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    client = make_mock_llm("profile")
+    build([make_event("A")], {"A": 1.0}, {"A": "x"}, client)
+    prompt = client.generate.call_args[0][0]
+    assert "equal baseline weight of 1.0" in prompt
+    assert "engagement" not in prompt
+    assert "finish" not in prompt
+
+
+def test_engagement_prompt_when_signals_on(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", True)
+    client = make_mock_llm("profile")
+    build([make_event("A")], {"A": 0.5}, {"A": "x"}, client)
+    prompt = client.generate.call_args[0][0]
+    assert "sorted by engagement score" in prompt
+    assert "consistently finish" in prompt
+
+
+def test_sort_scored_ignores_synthetic_timestamps():
+    from recommender.taste_profile_builder import sort_scored
+    manual = _dated("Manual", 28)
+    manual.platform = "manual"
+    events = [_dated("Real", 5), manual]
+    scores = {"Real": 1.0, "Manual": 1.0}
+    enrichments = {t: "x" for t in scores}
+    assert [t for t, _ in sort_scored(events, scores, enrichments)] == ["Real", "Manual"]
+
+
+def test_batch_fingerprint_changes_with_mode(monkeypatch):
+    import config
+    from recommender.taste_profile_builder import _batch_fingerprint
+    scored = [("A", 1.0)]
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    off = _batch_fingerprint(scored)
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", True)
+    assert _batch_fingerprint(scored) != off

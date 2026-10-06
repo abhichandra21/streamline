@@ -1,3 +1,5 @@
+import pytest
+import config
 import math
 from datetime import datetime, timedelta
 from recommender.ingestion.base import WatchEvent
@@ -105,3 +107,58 @@ def test_default_runtime_used_when_no_metadata():
     events = [make_event("Unknown: Season 1: Ep1 (Episode 1)", "Unknown", "tv", 20, 5)]
     scores = compute_scores(events, {})
     assert "Unknown" in scores
+
+
+@pytest.fixture(autouse=True)
+def _viewing_signals_on(request, monkeypatch):
+    """The formula tests need the optional engagement scoring switched on."""
+    if "equal" not in request.node.name:
+        monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", True)
+    else:
+        monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+
+
+def test_equal_scores_by_default():
+    events = [
+        make_event("Movie A", "Movie A", "movie", 90, 1),
+        make_event("Movie B", "Movie B", "movie", 5, 900),
+    ]
+    assert compute_scores(events, {}) == {"Movie A": 1.0, "Movie B": 1.0}
+
+
+def test_equal_repeat_rows_add_no_weight():
+    once = [make_event("Movie", "Movie", "movie", 90, 5)]
+    thrice = [make_event("Movie", "Movie", "movie", 90, d) for d in (5, 4, 3)]
+    assert compute_scores(thrice, {})["Movie"] == compute_scores(once, {})["Movie"] == 1.0
+
+
+def test_equal_long_series_matches_film():
+    episodes = [
+        make_event(f"Show: Season 1: Ep{i} (Episode {i})", "Show", "tv", 40, i)
+        for i in range(1, 30)
+    ]
+    film = [make_event("Film", "Film", "movie", 100, 2)]
+    scores = compute_scores(episodes + film, {})
+    assert scores["Show"] == scores["Film"]
+
+
+def test_equal_scores_still_move_with_ratings():
+    from recommender import user_store
+    scores = compute_scores([
+        make_event("Up", "Up", "movie", 90, 1),
+        make_event("Down", "Down", "movie", 90, 1),
+        make_event("Plain", "Plain", "movie", 90, 1),
+    ], {})
+    ratings = [
+        {"title": "Up", "rating": "more"}, {"title": "Down", "rating": "less"},
+    ]
+    adjusted = user_store.apply_rating_multipliers(scores, ratings)
+    assert adjusted["Up"] > adjusted["Plain"] > adjusted["Down"]
+
+
+def test_formula_unchanged_when_signals_on(monkeypatch):
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", True)
+    events = [make_event("Movie", "Movie", "movie", 90, 0)]
+    meta = {"Movie": make_movie_meta("Movie", runtime=90)}
+    expected = config.WEIGHT_COMPLETION + config.WEIGHT_RECENCY  # full watch, no rewatch, today
+    assert compute_scores(events, meta)["Movie"] == pytest.approx(expected)

@@ -2618,6 +2618,7 @@ _SETTINGS_DEFAULTS = {
         "profile_batch_size": 200, "rate_limit_wait": 65,
     },
     "scoring": {
+        "use_viewing_signals": False,
         "weight_completion": 0.5, "weight_rewatch": 0.3, "weight_recency": 0.2,
         "default_tv_runtime": 45, "default_movie_runtime": 90, "rewatch_saturation": 5,
     },
@@ -2633,6 +2634,7 @@ _PROFILE_REBUILD_LLM_KEYS = (
     "profile_batch_size", "rate_limit_wait",
 )
 _PROFILE_REBUILD_SCORING_KEYS = (
+    "use_viewing_signals",
     "weight_completion", "weight_rewatch", "weight_recency",
     "default_tv_runtime", "default_movie_runtime", "rewatch_saturation",
 )
@@ -2805,6 +2807,7 @@ def settings_save() -> str:
             )
         }
         scoring_values = {
+            "use_viewing_signals": form.get("use_viewing_signals") == "on",
             "weight_completion": _parse_float_field(form, "weight_completion", current_cfg["scoring"]["weight_completion"]),
             "weight_rewatch": _parse_float_field(form, "weight_rewatch", current_cfg["scoring"]["weight_rewatch"]),
             "weight_recency": _parse_float_field(form, "weight_recency", current_cfg["scoring"]["weight_recency"]),

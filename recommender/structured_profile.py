@@ -13,6 +13,7 @@ from typing import Any
 import config
 from .ingestion.base import WatchEvent
 from .llm import LLMClient
+from .taste_profile_builder import _EQUAL_WEIGHT_NOTE, history_label, sort_scored
 
 log = logging.getLogger("recommender.structured_profile")
 
@@ -198,10 +199,7 @@ def build_structured_profile(
     client: LLMClient,
     negative_prefs: list[str] | None = None,
 ) -> dict[str, Any]:
-    scored = sorted(
-        [(title, score) for title, score in scores.items() if title in enrichments],
-        key=lambda item: -item[1],
-    )
+    scored = sort_scored(events, scores, enrichments)
     if not scored:
         log.warning("No enriched titles found for structured profile build; returning empty profile")
         return validate_structured_profile({})
@@ -213,7 +211,10 @@ def build_structured_profile(
     less_like = ", ".join(f'"{title}"' for title in (negative_prefs or [])) or "none"
     prompt = (
         "Create a compact structured JSON taste profile for a personal streaming recommender.\n"
-        "Use the engagement scores to separate strong taste signals from incidental watches.\n"
+        + (
+            "Use the engagement scores to separate strong taste signals from incidental watches.\n"
+            if config.USE_VIEWING_SIGNALS else _EQUAL_WEIGHT_NOTE
+        ) +
         "Capture specific taste clusters, positive traits, negative traits, co-viewing context, "
         "mood states, creator affinities, language or region affinities, and explicit dislikes.\n"
         "Return ONLY valid JSON with keys: version, clusters, mood_states, creator_affinities, "
@@ -229,13 +230,17 @@ def build_structured_profile(
         "language_region_affinities entries must include weight, languages, regions, traits, and applies_to. "
         "For example, use languages ['hi'] and regions ['IN'] for a Hindi and Indian cinema affinity.\n"
         "negative_preferences should include explicit dislikes first. "
-        "Only infer cautious anti-patterns when repeated low-engagement evidence supports them; otherwise return an empty list.\n"
+        + (
+            "Only infer cautious anti-patterns when repeated low-engagement evidence supports them; otherwise return an empty list.\n"
+            if config.USE_VIEWING_SIGNALS else
+            "Do not infer anti-patterns beyond explicit dislikes and \"Less like this\" feedback; otherwise return an empty list.\n"
+        ) +
         "Use co_viewing only as one of: personal, family, mixed, unknown.\n"
         "Use weights from 0.0 to 1.0. Do not invent titles that are not in the history.\n\n"
         # Watched-to-the-end titles the user wants less of, which is a weaker
         # signal than dislike and should not be read as one.
         f"Titles the user asked to see less like: {less_like}\n\n"
-        "Watch history sorted by engagement score:\n"
+        f"Watch history sorted by {history_label()}:\n"
         + "\n".join(lines)
     )
     response_text = client.generate(

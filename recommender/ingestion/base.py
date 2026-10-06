@@ -72,6 +72,10 @@ def is_bonus_content(*parts: str) -> bool:
     return False
 
 
+# Platforms whose events carry an import-time timestamp, not a watch time.
+SYNTHETIC_TIMESTAMP_PLATFORMS = frozenset({'manual', 'hbo'})
+
+
 @dataclass
 class WatchEvent:
     platform: str           # "netflix", "prime", "disney", "hbo"

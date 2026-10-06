@@ -16,6 +16,7 @@ def compute_scores(
     Returns {series_name_or_title: implicit_score (0.0-1.0)}.
     Groups TV events by series_name; movies by title.
     Weights from config.yaml: completion, rewatch, recency.
+    Unless scoring.use_viewing_signals is on, every watched title scores 1.0.
     """
     today = datetime.now()
 
@@ -26,6 +27,10 @@ def compute_scores(
 
     scores: dict[str, float] = {}
     for key, evts in grouped.items():
+        if not config.USE_VIEWING_SIGNALS:
+            scores[key] = 1.0
+            continue
+
         content_type = evts[0].content_type
         meta = metadata.get((key, content_type)) or metadata.get(key)
 

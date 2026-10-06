@@ -48,6 +48,7 @@ wizard:
   min_questions: 4
   max_tokens: 2000
 scoring:
+  use_viewing_signals: false
   weight_completion: 0.5
   weight_rewatch: 0.3
   weight_recency: 0.2
