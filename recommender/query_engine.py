@@ -302,7 +302,6 @@ def rank_candidates(
         f'- title: string (exact title from candidates)\n'
         f'- explanation: string (1-2 sentences why this fits the query and this user)\n'
         f'- score: float 0-1 (how well it matches the QUERY, boosted slightly by taste fit)\n\n'
-        f'{_KNOWS_THE_CANON} Favor less obvious picks when they fit the query equally well.\n'
         f'Return up to {top_n} ranked candidates, no more. '
         f'Omit any candidate that does not genuinely match the query. '
         f'Never include weak matches just to fill the requested count.'
@@ -583,10 +582,6 @@ def attach_imdb_ratings(
         if rating:
             c.imdb_rating, c.imdb_votes = rating.rating, rating.votes
 
-
-# The person has seen the famous titles; leaning on that keeps picks fresh.
-_KNOWS_THE_CANON = ("This person has watched about 2,000 titles and already knows "
-                    "the mainstream canon.")
 
 _DISCOVER_SIZE = 30
 _MAX_REFILL_ROUNDS = 2
@@ -982,7 +977,6 @@ def _generate_suggestions(
         f'Their taste profile:\n{taste_profile}\n\n'
         'Suggest 20 specific titles that fit the query. '
         'Prioritize query relevance over general taste match. '
-        f'{_KNOWS_THE_CANON} Prefer less obvious picks that still fit the query. '
         f'{seen_ctx}'
         'Return ONLY a JSON array of title strings. Be precise with names.'
     )

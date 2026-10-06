@@ -3310,3 +3310,21 @@ def test_clear_searches_deletes_all_and_redirects(client, monkeypatch):
     assert resp.status_code == 200
     assert resp.headers["HX-Redirect"] == "/searches"
     assert calls == [1]
+
+
+def test_searches_page_results_offer_seen_it_and_not_interested(client, monkeypatch):
+    entry = {"timestamp": "2026-10-05T23:00:00+00:00", "query": "spy thriller", "provider": "anthropic",
+             "results": [{"title": "Deutschland", "content_type": "tv", "tmdb_id": 62681,
+                          "score": 0.9, "vote_average": 8.0, "explanation": "x", "streaming_providers": []}]}
+    us = MagicMock()
+    us.is_manually_watched.return_value = False
+    us.is_in_watchlist.return_value = False
+    us.is_dismissed.return_value = False
+    us.get_rating.return_value = None
+    monkeypatch.setattr(web.query_history, "load", lambda: [entry])
+    monkeypatch.setattr(web, "_load_user_state", lambda: us)
+
+    html = client.get("/searches").get_data(as_text=True)
+
+    assert 'hx-post="/archive/add"' in html and "Seen it" in html
+    assert 'hx-post="/watchlist/dismiss"' in html and "Not interested" in html

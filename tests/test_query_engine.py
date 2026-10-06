@@ -1376,12 +1376,3 @@ def test_ask_llm_suggestions_respect_requested_years():
     assert results == []
     enrich.assert_not_called()
 
-
-def test_suggestion_and_rank_prompts_say_the_mainstream_canon_is_known():
-    llm = make_mock_llm("[]")
-    _generate_suggestions("q", "P", llm)
-    assert "about 2,000 titles" in llm.generate.call_args.args[0]
-
-    llm = make_mock_llm("[]")
-    rank_candidates("q", "P", [make_meta("X")], {}, llm, 1)
-    assert "about 2,000 titles" in llm.generate.call_args.args[0]
