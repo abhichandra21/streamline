@@ -42,11 +42,13 @@ from recommender.query_engine import RecommendContext, ask, attach_imdb_ratings,
 from recommender import wizard
 from recommender import wizard_flow
 from recommender.structured_profile import load_structured_profile
-from recommender.tmdb_client import MOVIE_GENRE_IDS, TV_GENRE_IDS, TmdbClient, TmdbRateLimitError
+from recommender.tmdb_client import (
+    MOVIE_GENRE_IDS, TV_GENRE_IDS, CatalogTitle, TmdbClient, TmdbRateLimitError,
+)
 from recommender.language_catalog import LANGUAGE_OPTIONS, LANGUAGES
 from recommender.catalog_finder import (
     LANGUAGE_MIN_IMDB_VOTES, FindCriteria, PERIOD_OPTIONS, RATING_OPTIONS, SORT_OPTIONS,
-    find_unwatched_titles,
+    find_unwatched_titles, next_classics_set,
 )
 
 def _events_loader_fallback() -> list:
@@ -150,9 +152,18 @@ def _get_job_context() -> RecommendContext:
 
 # ── Background job: recommendation query ─────────────────────────────────────
 
+def _recent_search_titles(query: str) -> set[str]:
+    """Titles from recent searches, to keep out of this one. Never blocks a search."""
+    try:
+        return query_history.recent_titles(query)
+    except Exception as exc:
+        log.warning("Could not read recent searches: %s", exc)
+        return set()
+
+
 def _run_recommend_job(query: str) -> dict:
     ctx = _get_job_context()
-    results = ask(query, ctx)
+    results = ask(query, ctx, exclude_titles=_recent_search_titles(query))
     items = _build_result_items(results, ctx)
     try:
         query_history.record(query, items, ctx.llm.provider, ctx.llm.usage.summary())
@@ -172,7 +183,7 @@ def _run_wizard_recommend_job(intent_dict: dict, context_note: str, summary: str
     # Use the human-readable recap as the query so semantic suggestions and the
     # ranker stay tied to the wizard answers rather than an empty string.
     results = ask(summary, ctx, intent_override=intent, context_note=context_note,
-                  exclude_titles=set(exclude) if exclude else None)
+                  exclude_titles=set(exclude or ()) | _recent_search_titles(summary))
     items = _build_result_items(results, ctx)
     label = _wizard_label(summary)
     try:
@@ -1284,6 +1295,12 @@ def delete_search():
     return "", 200, {"HX-Redirect": "/searches"}
 
 
+@app.route("/searches/clear", methods=["DELETE"])
+def clear_searches():
+    query_history.clear()
+    return "", 200, {"HX-Redirect": "/searches"}
+
+
 @app.route("/recommend", methods=["GET"])
 def recommend_page() -> str:
     return render_template("recommend.html", query="")
@@ -1307,7 +1324,7 @@ def recommend_post() -> str:
     # Non-HTMX: run synchronously and return full page
     try:
         ctx = _get_job_context()
-        results = ask(query, ctx)
+        results = ask(query, ctx, exclude_titles=_recent_search_titles(query))
         items = _build_result_items(results, ctx)
         try:
             query_history.record(query, items, ctx.llm.provider, ctx.llm.usage.summary())
@@ -1527,6 +1544,86 @@ def find_page() -> str:
         page["error"] = f"TMDB request failed ({type(exc).__name__}). Check the network and try again."
 
     return _find_response(cursor, page)
+
+
+_CLASSICS_CURRENT_KEY = "classics_current"
+_CLASSICS_SHOWN_KEY = "classics_shown"
+
+
+def _meta_json(key: str) -> list:
+    try:
+        value = json.loads(user_store.get_meta(config.EVENT_DB_PATH, key) or "[]")
+    except json.JSONDecodeError:
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _retire_classics_set() -> None:
+    """Record the current set as shown, so none of it is offered again, and clear it."""
+    shown = _meta_json(_CLASSICS_SHOWN_KEY)
+    shown += [f"{row['content_type']}:{row['tmdb_id']}" for row in _meta_json(_CLASSICS_CURRENT_KEY)]
+    user_store.set_meta(config.EVENT_DB_PATH, _CLASSICS_SHOWN_KEY, json.dumps(sorted(set(shown))))
+    user_store.set_meta(config.EVENT_DB_PATH, _CLASSICS_CURRENT_KEY, "[]")
+
+
+def _classics_shown() -> set[tuple[str, int]]:
+    return {(ct, int(tid)) for ct, _, tid in (k.partition(":") for k in _meta_json(_CLASSICS_SHOWN_KEY))}
+
+
+@app.route("/classics")
+def classics_page() -> str:
+    """"Have you seen these?": a set of famous titles to mark as seen or not interested.
+
+    The current set is saved, so reloading shows the same titles. Titles answered
+    here drop out of it; once none are left, or after "New set", a fresh random
+    set is drawn from famous titles that are unanswered and never shown before.
+    Talks only to TMDB.
+    """
+    page = {"titles": [], "error": None}
+
+    if not config.TMDB_API_KEY:
+        page["error"] = "TMDB_API_KEY is not set. Add it to the environment (or .env) and restart the web UI."
+        return render_template("classics.html", **page)
+    try:
+        watch_index = wi.load(config.WATCH_INDEX_PATH)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        log.warning("Classics: watch index unavailable at %s: %s", config.WATCH_INDEX_PATH, exc)
+        page["error"] = "Watch index is missing or unreadable. Run ./recommend setup, then reload this page."
+        return render_template("classics.html", **page)
+
+    _ensure_user_store_once()
+    user_state = _load_user_state()
+    try:
+        current = [CatalogTitle(**row) for row in _meta_json(_CLASSICS_CURRENT_KEY)]
+    except TypeError:
+        current = []
+    titles = [t for t in current
+              if not (watch_index.is_watched(t) or user_state.is_manually_watched(t)
+                      or user_state.is_dismissed(t))]
+    if not titles:
+        _retire_classics_set()
+        tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+        try:
+            titles = next_classics_set(tmdb, watch_index, user_state, config.FIND_CACHE_DIR,
+                                       _classics_shown())
+            user_store.set_meta(config.EVENT_DB_PATH, _CLASSICS_CURRENT_KEY,
+                                json.dumps([asdict(t) for t in titles]))
+        except TmdbRateLimitError:
+            page["error"] = "TMDB rate limit reached while reading the catalogue. Try again in a moment."
+        except (requests.RequestException, ValueError, KeyError) as exc:
+            # Never echo the exception text: request errors can carry the full URL.
+            log.warning("Classics: TMDB request failed: %s", type(exc).__name__)
+            page["error"] = f"TMDB request failed ({type(exc).__name__}). Check the network and try again."
+    page["titles"] = titles
+    return render_template("classics.html", **page)
+
+
+@app.route("/classics/new", methods=["POST"])
+def classics_new_set():
+    """Retire the current set (it is never shown again, but not dismissed) and draw a new one."""
+    _ensure_user_store_once()
+    _retire_classics_set()
+    return redirect(url_for("classics_page"))
 
 
 def _find_response(cursor: str | None, page: dict) -> str:
@@ -2225,6 +2322,24 @@ def archive_add() -> str:
                            tmdb_id=tmdb_id, uid=uid)
 
 
+@app.route("/classics/seen", methods=["POST"])
+def classics_seen() -> str:
+    """Seen it on the Have you seen these? page: same archive add, no rating prompt.
+
+    Returns nothing, so the card is removed from the page. A saved title also
+    leaves the watchlist, like the other Seen it controls.
+    """
+    title = (request.form.get("title") or "").strip()
+    ct = request.form.get("content_type", "tv")
+    tmdb_id = request.form.get("tmdb_id", type=int)
+    if title and _title_state(title, ct, _load_user_state(), tmdb_id)["in_watchlist"]:
+        user_store.mark_watched_from_watchlist(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+        Path(config.PROFILE_STALE_FLAG).touch()
+    else:
+        archive_add()
+    return ""
+
+
 @app.route("/archive/resolve", methods=["POST"])
 def archive_resolve() -> str:
     title = (request.form.get("title") or "").strip()
@@ -2498,7 +2613,7 @@ _SETTINGS_DEFAULTS = {
         "timeout_fast": 30, "timeout_reason": 60,
         "timeout_profile_batch": 60, "timeout_profile_merge": 300,
         "tokens_fast": 200, "tokens_intent": 650, "tokens_ranking": 2000,
-        "tokens_suggestions": 700, "tokens_profile_batch": 13000,
+        "tokens_suggestions": 1000, "tokens_profile_batch": 13000,
         "tokens_profile_merge": 26000, "tokens_abandoned": 500,
         "profile_batch_size": 200, "rate_limit_wait": 65,
     },

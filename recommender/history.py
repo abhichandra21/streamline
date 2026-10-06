@@ -21,6 +21,12 @@ log = logging.getLogger("recommender.history")
 LEGACY_HISTORY_PATH = Path(config.ENRICHMENT_CACHE_DIR).parent / "query_history.json"
 MAX_ENTRIES = 100
 _MIGRATION_KEY = "json_history_migrated"
+# Deleting or clearing a search hides it from the page but keeps the row.
+# CASE keeps an unreadable row from failing the whole query: load() still
+# selects it so the decoder can skip it, and hiding just leaves it alone.
+_VISIBLE = "CASE WHEN json_valid(entry) THEN json_extract(entry, '$.hidden') IS NOT 1 ELSE {} END"
+_SHOWN = _VISIBLE.format(1)
+_HIDEABLE = _VISIBLE.format(0)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS query_history (
@@ -330,23 +336,47 @@ def record(
 
 
 def delete(timestamp: str, db_path: str | None = None) -> bool:
-    """Delete a history entry by its timestamp. Returns True if found and removed."""
+    """Hide a history entry by its timestamp. Returns True if a visible entry was hidden.
+
+    The row stays, so its results still keep later searches from repeating them.
+    """
     conn = _open(db_path)
     try:
         with conn:
             cur = conn.execute(
-                "DELETE FROM query_history WHERE timestamp = ?", (timestamp,)
+                f"UPDATE query_history SET entry = json_set(entry, '$.hidden', json('true')) "
+                f"WHERE timestamp = ? AND {_HIDEABLE}", (timestamp,)
             )
         return cur.rowcount > 0
     finally:
         conn.close()
 
 
-def load(limit: int | None = None, db_path: str | None = None) -> list[dict]:
-    """Load history entries, most recent first."""
+def clear(db_path: str | None = None) -> int:
+    """Hide every visible history entry. Returns how many were hidden.
+
+    Clearing tidies the Searches page only; the rows stay so their results
+    still keep later searches from repeating them.
+    """
     conn = _open(db_path)
     try:
-        sql = "SELECT entry FROM query_history ORDER BY id DESC"
+        with conn:
+            cur = conn.execute(
+                f"UPDATE query_history SET entry = json_set(entry, '$.hidden', json('true')) "
+                f"WHERE {_HIDEABLE}"
+            )
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def load(limit: int | None = None, db_path: str | None = None,
+         include_hidden: bool = False) -> list[dict]:
+    """Load history entries, most recent first. Hidden (deleted or cleared) entries are skipped unless asked for."""
+    conn = _open(db_path)
+    try:
+        where = "" if include_hidden else f" WHERE {_SHOWN}"
+        sql = f"SELECT entry FROM query_history{where} ORDER BY id DESC"
         params: tuple = ()
         if limit:
             sql += " LIMIT ?"
@@ -362,3 +392,19 @@ def load(limit: int | None = None, db_path: str | None = None) -> list[dict]:
         except json.JSONDecodeError:
             log.warning("Skipping unreadable query history row")
     return entries
+
+
+def recent_titles(query: str, limit: int = 20, db_path: str | None = None) -> set[str]:
+    """Titles shown by the last `limit` searches, so a new search does not repeat them.
+
+    A title the query names itself is left out of the set, since the person
+    may well be asking for it again.
+    """
+    wanted = query.lower()
+    titles = set()
+    for entry in load(limit=limit, db_path=db_path, include_hidden=True):
+        for result in entry.get("results") or []:
+            title = result.get("title")
+            if title and title.lower() not in wanted:
+                titles.add(title)
+    return titles

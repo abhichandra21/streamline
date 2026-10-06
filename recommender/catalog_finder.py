@@ -7,11 +7,14 @@ now-playing list, for a display-only "In theaters" badge on Movies, and one
 cached IMDb ID lookup per shown title, for its display-only IMDb rating.
 """
 
+import json
 import logging
+import random
 import re
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
@@ -238,6 +241,90 @@ def find_unwatched_titles(
         catalog_exhausted=exhausted,
         next_cursor=next_cursor,
     )
+
+
+# The most-voted titles barely change, so a week-old page is fine.
+CLASSICS_TTL_SECONDS = 7 * 86400
+# TMDB returns 20 per page. One step is about 200 movies and 100 shows; going
+# deeper adds a step at a time, up to the top 1000 movies and 500 shows.
+CLASSICS_PAGES_PER_STEP = {"movie": 10, "tv": 5}
+CLASSICS_MAX_STEPS = 5
+CLASSICS_SET_SIZE = 20
+CLASSICS_SAMPLE_POOL = 100
+
+
+def _classics_page(tmdb: TmdbClient, cache_dir: str, content_type: str, page: int,
+                   end: date) -> list[CatalogTitle]:
+    """One most-voted Discover page, cached for a week. A failed page raises and saves nothing."""
+    path = Path(cache_dir) / "classics" / f"{content_type}_{page}.json"
+    cached = TmdbClient._read_fresh_cache(path, CLASSICS_TTL_SECONDS)
+    if cached is not None:
+        return [CatalogTitle(**row) for row in cached.get("titles", [])]
+    result = tmdb.discover_catalog_page(
+        content_type, date(1900, 1, 1), end, page=page, sort_by="vote_count.desc")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"titles": [asdict(t) for t in result.rows]}))
+    return list(result.rows)
+
+
+def famous_titles(tmdb: TmdbClient, cache_dir: str, steps: int = 1,
+                  today: date | None = None) -> list[CatalogTitle]:
+    """The most-voted movies and shows on TMDB, most voted first, `steps` steps deep."""
+    end = today or chicago_today()
+    titles: list[CatalogTitle] = []
+    for content_type, per_step in CLASSICS_PAGES_PER_STEP.items():
+        for page in range(1, per_step * steps + 1):
+            titles.extend(_classics_page(tmdb, cache_dir, content_type, page, end))
+    titles.sort(key=lambda t: t.vote_count, reverse=True)
+    return titles
+
+
+def next_classics_set(
+    tmdb: TmdbClient,
+    watch_index,
+    user_state,
+    cache_dir: str,
+    shown: set[tuple[str, int]],
+    size: int = CLASSICS_SET_SIZE,
+    today: date | None = None,
+    rng: random.Random | None = None,
+) -> list[CatalogTitle]:
+    """A random set of famous titles that are unanswered and not shown before.
+
+    Answered means in the watch history, the manual archive, or the dismissed
+    list. The set is sampled from the most-voted few of what is left, and the
+    list is read deeper only when too few remain. Empty means all are used up.
+    """
+    rng = rng or random
+    for steps in range(1, CLASSICS_MAX_STEPS + 1):
+        # Pages are cached at different times, so a title can sit on two of them.
+        unique = {(t.content_type, t.tmdb_id): t for t in famous_titles(tmdb, cache_dir, steps, today)}
+        remaining = [
+            t for key, t in unique.items()
+            if key not in shown
+            and not (watch_index.is_watched(t) or user_state.is_manually_watched(t)
+                     or user_state.is_dismissed(t))
+        ]
+        if len(remaining) >= size or steps == CLASSICS_MAX_STEPS:
+            return _mixed_sample(remaining, size, rng)
+    return []
+
+
+def _mixed_sample(titles: list[CatalogTitle], size: int, rng) -> list[CatalogTitle]:
+    """Half movies, half shows, each drawn from the most-voted of its kind.
+
+    Shows get far fewer votes than films, so one combined vote-count pool
+    would be all films. A short side is filled from the other.
+    """
+    pools = {ct: [t for t in titles if t.content_type == ct][:CLASSICS_SAMPLE_POOL // 2]
+             for ct in ("movie", "tv")}
+    picked = rng.sample(pools["tv"], min(size // 2, len(pools["tv"])))
+    picked += rng.sample(pools["movie"], min(size - len(picked), len(pools["movie"])))
+    if len(picked) < size:
+        rest = [t for t in pools["tv"] if t not in picked]
+        picked += rng.sample(rest, min(size - len(picked), len(rest)))
+    rng.shuffle(picked)
+    return picked
 
 
 def _annotate_cinema(

@@ -592,3 +592,124 @@ def test_language_show_more_survives_a_title_marked_watched_between_clicks(tmp_p
                            watch_index=FakeWatchIndex({1}))
 
     assert [r.title.tmdb_id for r in second.rows] == [11, 12, 13, 14, 15]
+
+
+# ── Have you seen these? ──────────────────────────────────────────────────────
+
+def _classics_tmdb():
+    """A movie and a show on every page; vote counts fall as the page number rises."""
+    class Tmdb(FakeTmdb):
+        def discover_catalog_page(self, content_type, release_start, release_end, page=1, sort_by=None, **kw):
+            self.discover_calls.append({"content_type": content_type, "page": page, "sort_by": sort_by})
+            base = 1000 if content_type == "movie" else 2000
+            row = _title(base + page, content_type)
+            row = CatalogTitle(**{**row.__dict__, "vote_count": 1_000_000 - base - page})
+            return CatalogPage(rows=(row,), page=page, total_pages=99)
+    return Tmdb({})
+
+
+def test_famous_titles_reads_most_voted_pages_and_caches_each_page(tmp_path):
+    tmdb = _classics_tmdb()
+
+    first = cf.famous_titles(tmdb, str(tmp_path), today=TODAY)
+    again = cf.famous_titles(tmdb, str(tmp_path), today=TODAY)
+
+    assert len(tmdb.discover_calls) == 15      # 10 movie pages + 5 show pages, once
+    assert {c["sort_by"] for c in tmdb.discover_calls} == {"vote_count.desc"}
+    assert [t.vote_count for t in first] == sorted((t.vote_count for t in first), reverse=True)
+    assert again == first
+
+
+def test_famous_titles_going_deeper_only_fetches_the_new_pages(tmp_path):
+    tmdb = _classics_tmdb()
+    cf.famous_titles(tmdb, str(tmp_path), steps=1, today=TODAY)
+
+    deeper = cf.famous_titles(tmdb, str(tmp_path), steps=2, today=TODAY)
+
+    assert len(tmdb.discover_calls) == 30
+    assert len(deeper) == 30
+
+
+def test_famous_titles_failed_page_is_not_cached(tmp_path):
+    tmdb = _classics_tmdb()
+    good = tmdb.discover_catalog_page
+
+    def flaky(content_type, *a, page=1, **k):
+        if content_type == "tv" and page == 2:
+            raise TmdbRateLimitError(None)
+        return good(content_type, *a, page=page, **k)
+    tmdb.discover_catalog_page = flaky
+
+    with pytest.raises(TmdbRateLimitError):
+        cf.famous_titles(tmdb, str(tmp_path), today=TODAY)
+    assert not (tmp_path / "classics" / "tv_2.json").exists()
+
+
+def test_next_set_skips_answered_and_shown_titles(tmp_path):
+    left = cf.next_classics_set(
+        _classics_tmdb(), FakeWatchIndex(watched_ids={1001}),
+        FakeUserState(archived_ids={1002}, dismissed_ids={1003}),
+        str(tmp_path), shown={("movie", 1004)}, size=5, today=TODAY)
+
+    ids = {t.tmdb_id for t in left}
+    assert len(left) == 5
+    assert not ids & {1001, 1002, 1003, 1004}
+
+
+def test_next_set_is_a_random_sample_of_the_most_famous_remaining(tmp_path):
+    import random
+    tmdb = _classics_tmdb()
+    a = cf.next_classics_set(tmdb, FakeWatchIndex(), FakeUserState(), str(tmp_path), set(),
+                             today=TODAY, rng=random.Random(1))
+    b = cf.next_classics_set(tmdb, FakeWatchIndex(), FakeUserState(), str(tmp_path), set(),
+                             today=TODAY, rng=random.Random(2))
+
+    assert len(a) == len(b) == cf.CLASSICS_SET_SIZE
+    assert a != b
+    assert {t.content_type for t in a + b} == {"movie", "tv"}
+
+
+def test_next_set_reads_deeper_when_too_few_remain(tmp_path):
+    tmdb = _classics_tmdb()
+    first_step = {("movie", 1000 + p) for p in range(1, 11)} | {("tv", 2000 + p) for p in range(1, 6)}
+    first_step -= {("movie", 1001), ("tv", 2001)}      # leave only two unshown in step one
+
+    got = cf.next_classics_set(tmdb, FakeWatchIndex(), FakeUserState(), str(tmp_path),
+                               shown=first_step, today=TODAY)
+
+    assert len(got) == cf.CLASSICS_SET_SIZE
+    assert max(c["page"] for c in tmdb.discover_calls) > 10
+
+
+def test_next_set_is_empty_when_everything_is_used_up(tmp_path):
+    tmdb = _classics_tmdb()
+    everything = {(t.content_type, t.tmdb_id)
+                  for t in cf.famous_titles(tmdb, str(tmp_path), steps=cf.CLASSICS_MAX_STEPS, today=TODAY)}
+
+    got = cf.next_classics_set(tmdb, FakeWatchIndex(), FakeUserState(), str(tmp_path),
+                               shown=everything, today=TODAY)
+
+    assert got == []
+    assert max(c["page"] for c in tmdb.discover_calls) == 50     # stopped at the 1000-movie cap
+
+
+def test_next_set_never_repeats_a_title_listed_on_two_pages(tmp_path):
+    tmdb = _classics_tmdb()
+    good = tmdb.discover_catalog_page
+
+    def overlapping(content_type, *a, page=1, **k):
+        return good(content_type, *a, page=1 if page == 2 else page, **k)
+    tmdb.discover_catalog_page = overlapping
+
+    got = cf.next_classics_set(tmdb, FakeWatchIndex(), FakeUserState(), str(tmp_path), set(), today=TODAY)
+
+    keys = [(t.content_type, t.tmdb_id) for t in got]
+    assert len(keys) == len(set(keys))
+
+
+def test_next_set_mixes_movies_and_shows_even_when_films_have_more_votes(tmp_path):
+    got = cf.next_classics_set(_classics_tmdb(), FakeWatchIndex(), FakeUserState(), str(tmp_path),
+                               set(), today=TODAY)
+
+    kinds = [t.content_type for t in got]
+    assert kinds.count("movie") == kinds.count("tv") == cf.CLASSICS_SET_SIZE // 2

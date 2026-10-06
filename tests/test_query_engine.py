@@ -5,7 +5,7 @@ import pytest
 
 from recommender.query_engine import (
     QueryIntent, parse_intent, RecommendContext, ask, rank_candidates,
-    _parse_json_response,
+    _parse_json_response, _generate_suggestions,
 )
 from recommender.tmdb_client import TmdbMetadata
 from recommender.watch_index import WatchIndex
@@ -333,8 +333,8 @@ def test_rank_candidates_prompt_allows_fewer_than_top_n():
     rank_candidates("movies like Sherlock Holmes", "profile", candidates, enrichments, client, top_n=10)
 
     prompt = client.generate.call_args.args[0]
-    assert "Return up to 10 ranked candidates" in prompt
-    assert "Never include weak matches just to fill the requested count." in prompt
+    assert "Return the 10 best. If fewer truly fit, return fewer." in prompt
+    assert "Never include weak matches just to fill the count." in prompt
     assert "Return EXACTLY" not in prompt
 
 
@@ -514,7 +514,7 @@ def test_ask_similar_to_only_uses_related_candidates_not_generic_discover():
         "mood_descriptors": [], "similar_to": ["Sherlock Holmes"],
         "max_runtime_minutes": None, "year_from": None, "year_to": None,
         "unwatched_only": True, "special_intent": None,
-        "content_type": "movie", "top_n": 10, "platforms": [],
+        "content_type": "movie", "top_n": 1, "platforms": [],
     })
     suggestions_json = json.dumps([])
     ranked_json = json.dumps([
@@ -561,7 +561,7 @@ def test_ask_both_content_types_keeps_tv_and_movie_with_same_tmdb_id():
         "mood_descriptors": [], "similar_to": [],
         "max_runtime_minutes": None, "year_from": None, "year_to": None,
         "unwatched_only": True, "special_intent": None,
-        "content_type": "both", "top_n": 10, "platforms": [],
+        "content_type": "both", "top_n": 2, "platforms": [],
     })
     suggestions_json = json.dumps([])
     ranked_json = json.dumps([
@@ -1082,8 +1082,8 @@ def test_rank_prompt_names_rating_source():
 
     results = qe.rank_candidates("q", "P", [rated, plain], {}, FakeLLM(), top_n=2)
 
-    assert "Rated (rating: IMDb 8.2 from 151,638 votes)" in prompts[0]
-    assert "Plain (rating: TMDB 7.1 from 500 votes)" in prompts[0]
+    assert "Rated, year unknown, TV series, IMDb 8.2 from 151,638 votes" in prompts[0]
+    assert "Plain, year unknown, TV series, TMDB 7.1 from 500 votes" in prompts[0]
     assert (results[0].vote_average, results[0].rating_source) == (8.2, "imdb")
 
 
@@ -1249,3 +1249,207 @@ def test_abandoned_result_reports_imdb_rating(monkeypatch, tmp_path):
     [rec] = qe._handle_abandoned("q", intent, ctx)
 
     assert (rec.vote_average, rec.rating_source) == (5.0, "imdb")
+
+
+# ── Refill, request limits, and fresher picks (#118) ────────────────────────
+
+def _request_intent(**overrides):
+    fields = dict(
+        genres=["drama"], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=[], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent=None, content_type="movie",
+        top_n=3, platforms=[],
+    )
+    fields.update(overrides)
+    return QueryIntent(**fields)
+
+
+def _request_ctx(tmdb, llm):
+    return RecommendContext(
+        taste_profile="P",
+        watch_index=WatchIndex(tmdb_ids=set(), tmdb_keys=set(), normalized_titles=set(), entries=[]),
+        events=[], tmdb_client=tmdb, llm=llm, cache_dir="/tmp/test_cache",
+    )
+
+
+def _ranked(*titles):
+    return json.dumps([{"title": t, "explanation": "fits", "score": 0.9} for t in titles])
+
+
+def test_ask_refills_when_ranking_leaves_too_few():
+    movies = [make_meta(f"Movie {i}", tmdb_id=i, content_type="movie") for i in (1, 2, 3)]
+    tmdb = MagicMock()
+    tmdb.search_by_filters.side_effect = [movies[:1], movies]   # second call reaches further down
+    tmdb.get_metadata.return_value = None
+    # suggestions, rank, refill suggestions, rank of the new candidates only
+    llm = make_mock_llm_sequence(["[]", _ranked("Movie 1"), "[]", _ranked("Movie 2", "Movie 3")])
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        results = ask("q", _request_ctx(tmdb, llm), intent_override=_request_intent())
+
+    assert {r.title for r in results} == {"Movie 1", "Movie 2", "Movie 3"}
+    sizes = [c.kwargs["size"] for c in tmdb.search_by_filters.call_args_list]
+    assert sizes == [30, 60]
+    calls = llm.generate.call_args_list
+    assert "Do not suggest any of these" in calls[2].args[0]
+    assert "Movie 1" in calls[2].args[0]
+    assert "Movie 1" not in calls[3].args[0]     # already tried, not ranked again
+
+
+def test_ask_refill_is_capped_at_two_extra_rounds():
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = []
+    ids = {"A": 1, "B": 2, "C": 3, "D": 4}
+    tmdb.get_metadata.side_effect = lambda t, ct: make_meta(t, tmdb_id=ids[t], content_type="movie")
+    # Each pass finds one new title that the ranker rejects: three suggest + rank pairs.
+    llm = make_mock_llm_sequence(['["A"]', "[]", '["B"]', "[]", '["C"]', "[]"])
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        ask("q", _request_ctx(tmdb, llm), intent_override=_request_intent(top_n=10))
+
+    assert tmdb.search_by_filters.call_count == 3
+    assert llm.generate.call_count == 6
+
+
+def test_ask_empty_refill_round_does_not_end_the_loop():
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = []
+    ids = {"A": 1, "B": 2}
+    tmdb.get_metadata.side_effect = lambda t, ct: make_meta(t, tmdb_id=ids[t], content_type="movie")
+    # Round 1 only re-suggests A (already tried, nothing new); round 2 still runs and finds B.
+    llm = make_mock_llm_sequence(['["A"]', "[]", '["A"]', '["B"]', "[]"])
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        ask("q", _request_ctx(tmdb, llm), intent_override=_request_intent(top_n=10))
+
+    assert llm.generate.call_count == 5
+
+
+def test_ask_stops_refilling_when_sources_are_exhausted():
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = []
+    tmdb.get_metadata.return_value = None
+    llm = make_mock_llm("[]")
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        ask("q", _request_ctx(tmdb, llm), intent_override=_request_intent(top_n=10))
+
+    assert llm.generate.call_count == 2          # first suggestions, one empty refill, then stop
+
+
+def test_ask_related_titles_respect_requested_type_and_years():
+    seed = make_meta("Seed", tmdb_id=10, content_type="movie")
+    tv = make_meta("A Show", tmdb_id=20, content_type="tv")
+    old = make_meta("Old Film", tmdb_id=30, content_type="movie")
+    old.release_year = 1980
+    good = make_meta("Good Film", tmdb_id=40, content_type="movie")
+    good.release_year = 2005
+    tmdb = MagicMock()
+    tmdb.get_metadata.side_effect = lambda title, ct: seed if title == "Seed" else None
+    tmdb.get_related_titles.return_value = [tv, old, good]
+    llm = make_mock_llm_sequence(["[]", "[]", "[]", "[]"])
+    captured = {}
+
+    def fake_enrich(meta_dict, *a, **k):
+        captured.update(meta_dict)
+        return {}
+
+    with patch("recommender.query_engine.enrich_batch", side_effect=fake_enrich):
+        ask("q", _request_ctx(tmdb, llm),
+            intent_override=_request_intent(similar_to=["Seed"], year_from=1990, year_to=2010, top_n=1))
+
+    assert list(captured) == ["Good Film"]
+
+
+def test_ask_llm_suggestions_respect_requested_years():
+    outside = make_meta("Too New", tmdb_id=50, content_type="movie")
+    outside.release_year = 2022
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = []
+    tmdb.get_metadata.return_value = outside
+    llm = make_mock_llm(json.dumps(["Too New"]))
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}) as enrich:
+        results = ask("q", _request_ctx(tmdb, llm),
+                      intent_override=_request_intent(year_to=2010, top_n=1))
+
+    assert results == []
+    enrich.assert_not_called()
+
+
+
+def test_rank_prompt_shows_year_and_type_so_films_differ_from_series():
+    film = make_meta("Big Film", tmdb_id=1, content_type="movie")
+    film.release_year = 2008
+    llm = make_mock_llm("[]")
+
+    rank_candidates("movies", "P", [film], {}, llm, 1)
+
+    prompt = llm.generate.call_args.args[0]
+    assert "Big Film, 2008, film," in prompt
+    assert "feature films, not TV movies" in prompt
+
+
+def test_suggestion_prompt_asks_for_forty_well_known_titles():
+    llm = make_mock_llm("[]")
+    _generate_suggestions("spy movies", "P", llm)
+    prompt = llm.generate.call_args.args[0]
+    assert "Name 40 real titles" in prompt
+    assert "no TV movies, specials" in prompt
+
+
+def test_suggestion_prompt_carries_refinement_notes():
+    llm = make_mock_llm("[]")
+    _generate_suggestions("q", "P", llm, context_note="Prefer lesser-known picks.")
+    assert "Prefer lesser-known picks." in llm.generate.call_args.args[0]
+
+
+def test_refill_never_relaxes_the_runtime_limit():
+    long_a = make_meta("Long A", tmdb_id=1, content_type="movie")
+    long_b = make_meta("Long B", tmdb_id=2, content_type="movie")
+    long_a.runtime_minutes = long_b.runtime_minutes = 120
+    tmdb = MagicMock()
+    tmdb.search_by_filters.side_effect = [[long_a], [long_a, long_b], [long_a, long_b]]
+    tmdb.get_metadata.return_value = None
+    # Only the first round may relax the 60-minute ceiling; Long B must not be ranked.
+    llm = make_mock_llm_sequence(["[]", _ranked("Long A"), "[]", "[]"])
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        results = ask("q", _request_ctx(tmdb, llm),
+                      intent_override=_request_intent(top_n=2, max_runtime_minutes=60))
+
+    assert [r.title for r in results] == ["Long A"]
+    assert llm.generate.call_count == 4     # no rank call for the refill batch
+
+
+def test_refill_never_falls_back_to_off_platform_titles():
+    a = make_meta("Off A", tmdb_id=1, content_type="movie")
+    b = make_meta("Off B", tmdb_id=2, content_type="movie")
+    tmdb = MagicMock()
+    tmdb.search_by_filters.side_effect = [[a], [a, b], [a, b]]
+    tmdb.get_metadata.return_value = None
+    tmdb.get_watch_providers.return_value = []
+    llm = make_mock_llm_sequence(["[]", _ranked("Off A"), "[]", _ranked("Off B"), "[]"])
+    ctx = _request_ctx(tmdb, llm)
+    ctx.providers_cache_dir = "/tmp/test_providers"
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        results = ask("q", ctx, intent_override=_request_intent(top_n=2, platforms=["Netflix"]))
+
+    # The first round falls back to unfiltered; the refill round keeps nothing off-platform.
+    assert [r.title for r in results] == ["Off A"]
+
+
+def test_refill_prompt_names_suggestions_that_were_filtered_out():
+    gone = make_meta("Gone Film", tmdb_id=7, content_type="movie")
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = []
+    tmdb.get_metadata.return_value = gone
+    llm = make_mock_llm_sequence(['["Gone Film"]', "[]"])
+    ctx = _request_ctx(tmdb, llm)
+    ctx.watch_index = WatchIndex(tmdb_ids={7}, tmdb_keys={("movie", 7)}, normalized_titles=set(), entries=[])
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        ask("q", ctx, intent_override=_request_intent())
+
+    assert "Gone Film" in llm.generate.call_args_list[1].args[0]

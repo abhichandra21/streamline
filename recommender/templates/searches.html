@@ -5,7 +5,29 @@
 <div style="margin-bottom:2rem;">
   <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">History</span>
   <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:0.5rem;">Searches</h1>
-  <p style="color:var(--muted); font-size:0.85rem;">{{ entries|length }} recent {% if entries|length == 1 %}query{% else %}queries{% endif %}</p>
+  <div style="display:flex; align-items:center; gap:0.6rem;">
+    <p style="color:var(--muted); font-size:0.85rem; margin:0;">{{ entries|length }} recent {% if entries|length == 1 %}query{% else %}queries{% endif %}</p>
+    {% if entries %}
+    <button
+      class="btn-ghost clear-trigger"
+      style="padding:4px 10px; font-size:0.55rem; cursor:pointer; color:var(--muted);"
+      onclick="this.parentElement.querySelector('.clear-confirm').style.display='flex'; this.style.display='none';"
+    >Clear all</button>
+    <div class="clear-confirm" style="display:none; align-items:center; gap:0.35rem;">
+      <span style="font-size:0.6rem; color:var(--muted);">Clear all {{ entries|length }} from this page?</span>
+      <button
+        class="btn-ghost"
+        style="padding:3px 8px; font-size:0.5rem; cursor:pointer; color:var(--accent); border-color:var(--accent);"
+        hx-delete="/searches/clear"
+      >Yes</button>
+      <button
+        class="btn-ghost"
+        style="padding:3px 8px; font-size:0.5rem; cursor:pointer;"
+        onclick="this.parentElement.style.display='none'; this.parentElement.parentElement.querySelector('.clear-trigger').style.display='';"
+      >No</button>
+    </div>
+    {% endif %}
+  </div>
 </div>
 
 {% if not entries %}
@@ -178,6 +200,29 @@
                 <button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;">+ Save</button>
               </form>
             </span>
+            {% endif %}
+            {% if not r.user_state.in_archive %}
+            <span id="seen-{{ entry_idx }}-{{ loop.index }}">
+              <form hx-post="{{ '/watchlist/watched' if r.user_state.in_watchlist else '/archive/add' }}"
+                    hx-target="#seen-{{ entry_idx }}-{{ loop.index }}" hx-swap="outerHTML" style="margin:0; display:inline;">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="title" value="{{ r.title }}">
+                <input type="hidden" name="content_type" value="{{ r.content_type }}">
+                {% if r.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ r.tmdb_id }}">{% endif %}
+                <button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;" title="Mark as already watched">Seen it</button>
+              </form>
+            </span>
+            {% if r.user_state.is_dismissed %}
+            <span class="mono" style="font-size:0.55rem; color:var(--muted);">Not interested</span>
+            {% else %}
+            <form hx-post="/watchlist/dismiss" hx-target="closest .sh-result" hx-swap="outerHTML" style="margin:0; display:inline;">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="title" value="{{ r.title }}">
+              <input type="hidden" name="content_type" value="{{ r.content_type }}">
+              {% if r.tmdb_id %}<input type="hidden" name="tmdb_id" value="{{ r.tmdb_id }}">{% endif %}
+              <button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;" title="Hide this and keep it out of future results">Not interested</button>
+            </form>
+            {% endif %}
             {% endif %}
           </div>
         </div>

@@ -3214,3 +3214,173 @@ def test_history_items_without_tmdb_id_are_not_links(client, tmp_path, monkeypat
     # Bonus Clip still appears in every view, just without a link.
     assert html.count("Bonus Clip") >= 3
     assert "/title/0" not in html
+
+
+class TestClassicsAndNotInterested:
+
+    @staticmethod
+    def _title(i):
+        from recommender.tmdb_client import CatalogTitle
+        return CatalogTitle(tmdb_id=i, content_type="movie", title=f"T{i}", year=2000,
+                            poster_path=None, overview="", vote_average=8.0, vote_count=1000)
+
+    @pytest.fixture
+    def classics_env(self, tmp_path, monkeypatch):
+        from recommender.user_store import init_db
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "key")
+        monkeypatch.setattr(web.wi, "load", lambda path: MagicMock(is_watched=lambda t: False))
+        monkeypatch.setattr(web, "_load_user_state", lambda: MagicMock(
+            is_manually_watched=lambda t: False, is_dismissed=lambda t: False))
+        draws = []
+
+        def fake_next(tmdb, wi_, us, cache_dir, shown, **k):
+            draws.append(set(shown))
+            n = len(draws)
+            return [self._title(n * 100 + i) for i in range(3)]
+        monkeypatch.setattr(web, "next_classics_set", fake_next)
+        return db, draws
+
+    def test_page_shows_a_set_with_both_actions_and_new_set(self, client, classics_env):
+        body = client.get("/classics").get_data(as_text=True)
+
+        assert "Have you seen these?" in body
+        assert "T100" in body
+        assert 'hx-post="/classics/seen"' in body
+        assert 'hx-post="/watchlist/dismiss"' in body
+        assert "New set" in body
+        assert "Show more" not in body
+
+    def test_reloading_shows_the_same_set_without_drawing_again(self, client, classics_env):
+        _, draws = classics_env
+        first = client.get("/classics").get_data(as_text=True)
+        second = client.get("/classics").get_data(as_text=True)
+
+        assert len(draws) == 1
+        assert "T100" in first and "T100" in second
+
+    def test_new_set_marks_the_current_titles_shown_not_dismissed(self, client, classics_env):
+        from recommender.user_store import list_saved_titles
+        db, draws = classics_env
+        client.get("/classics")
+
+        resp = client.post("/classics/new", data=_csrf_form())
+        assert resp.status_code == 302
+        body = client.get("/classics").get_data(as_text=True)
+
+        assert "T200" in body and "T100" not in body
+        assert draws[1] == {("movie", 100), ("movie", 101), ("movie", 102)}
+        assert list_saved_titles(db, status="dismissed") == []
+
+    def test_a_fully_answered_set_is_recorded_shown_before_the_next_draw(self, client, classics_env, monkeypatch):
+        _, draws = classics_env
+        client.get("/classics")
+        monkeypatch.setattr(web, "_load_user_state", lambda: MagicMock(
+            is_manually_watched=lambda t: True, is_dismissed=lambda t: False))
+
+        client.get("/classics")
+
+        assert draws[1] == {("movie", 100), ("movie", 101), ("movie", 102)}
+
+    def test_empty_draw_says_everything_is_done(self, client, classics_env, monkeypatch):
+        monkeypatch.setattr(web, "next_classics_set", lambda *a, **k: [])
+
+        body = client.get("/classics").get_data(as_text=True)
+
+        assert "been through them all" in body
+
+    def test_classics_seen_takes_a_saved_title_off_the_watchlist(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, save_title, list_saved_titles, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        save_title(db, "The Dark Knight", "movie", tmdb_id=155)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "")
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / "stale"))
+
+        resp = client.post("/classics/seen", data={
+            **_csrf_form(), "title": "The Dark Knight", "content_type": "movie", "tmdb_id": "155",
+        })
+
+        assert resp.get_data(as_text=True) == ""
+        assert list_saved_titles(db, status="watchlist") == []
+        assert len(list_manual_archive(db)) == 1
+
+    def test_classics_seen_archives_and_removes_the_card(self, client, tmp_path, monkeypatch):
+        from recommender.user_store import init_db, list_manual_archive
+
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.TMDB_API_KEY", "")
+
+        resp = client.post("/classics/seen", data={
+            **_csrf_form(), "title": "The Dark Knight", "content_type": "movie", "tmdb_id": "155",
+        })
+
+        assert resp.status_code == 200
+        assert resp.get_data(as_text=True) == ""
+        assert len(list_manual_archive(db)) == 1
+
+    def test_result_cards_offer_not_interested_next_to_seen_it(self, client):
+        item = {
+            "title": "Slow Horses", "content_type": "tv", "score": 0.9, "vote_average": 8.0,
+            "rating_source": "tmdb", "genres": [], "explanation": "Spies.", "streaming_providers": [],
+            "poster": None, "tmdb_url": "", "imdb_url": "", "tmdb_id": 95480,
+            "user_state": {"in_archive": False, "in_watchlist": False, "is_dismissed": False, "rating": None},
+        }
+        with app.test_request_context():
+            html = web.render_template("_results.html", results=[item], query="spies")
+
+        assert "Seen it" in html
+        assert 'hx-post="/watchlist/dismiss"' in html
+        assert "Not interested" in html
+
+    def test_recommend_job_keeps_recent_search_titles_out(self, monkeypatch):
+        seen = {}
+
+        def fake_ask(query, ctx, **kwargs):
+            seen.update(kwargs)
+            return []
+
+        monkeypatch.setattr(web, "_get_job_context", lambda: MagicMock())
+        monkeypatch.setattr(web, "ask", fake_ask)
+        monkeypatch.setattr(web, "_build_result_items", lambda results, ctx: [])
+        monkeypatch.setattr(web.query_history, "record", lambda *a, **k: None)
+        monkeypatch.setattr(web.query_history, "recent_titles", lambda query: {"Slow Horses"})
+
+        web._run_recommend_job("spy thriller")
+
+        assert seen["exclude_titles"] == {"Slow Horses"}
+
+
+def test_clear_searches_deletes_all_and_redirects(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(web.query_history, "clear", lambda: calls.append(1) or 3)
+
+    resp = client.delete("/searches/clear", headers={**_csrf_headers(), "HX-Request": "true"})
+
+    assert resp.status_code == 200
+    assert resp.headers["HX-Redirect"] == "/searches"
+    assert calls == [1]
+
+
+def test_searches_page_results_offer_seen_it_and_not_interested(client, monkeypatch):
+    entry = {"timestamp": "2026-10-05T23:00:00+00:00", "query": "spy thriller", "provider": "anthropic",
+             "results": [{"title": "Deutschland", "content_type": "tv", "tmdb_id": 62681,
+                          "score": 0.9, "vote_average": 8.0, "explanation": "x", "streaming_providers": []}]}
+    us = MagicMock()
+    us.is_manually_watched.return_value = False
+    us.is_in_watchlist.return_value = False
+    us.is_dismissed.return_value = False
+    us.get_rating.return_value = None
+    monkeypatch.setattr(web.query_history, "load", lambda: [entry])
+    monkeypatch.setattr(web, "_load_user_state", lambda: us)
+
+    html = client.get("/searches").get_data(as_text=True)
+
+    assert 'hx-post="/archive/add"' in html and "Seen it" in html
+    assert 'hx-post="/watchlist/dismiss"' in html and "Not interested" in html

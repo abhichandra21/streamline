@@ -284,27 +284,32 @@ def rank_candidates(
     meta_by_title = {c.title: c for c in candidates}
 
     cands_str = '\n'.join(
-        f"{i+1}. {c.title} (rating: {_rating_label(c)}): {enrichments.get(enrichment_key(c), ' '.join(c.genres))}"
+        f"{i+1}. {c.title}, {c.release_year or 'year unknown'}, "
+        f"{'TV series' if c.content_type == 'tv' else 'film'}, "
+        f"{_rating_label(c)}: {enrichments.get(enrichment_key(c), ' '.join(c.genres))}"
         for i, c in enumerate(candidates)
     )
     log.debug("Candidate list sent to ranker:\n%s", cands_str)
 
     prompt = (
-        f'Rank these candidates for a user. IMPORTANT: the query is the primary filter — '
-        f'a candidate must match what the user asked for. The taste profile is secondary, '
-        f'used to break ties between candidates that all fit the query.\n\n'
+        'Pick the best picks for this user. The query decides what belongs; '
+        'the taste profile only orders titles that fit equally well.\n\n'
         f'QUERY: "{query}"\n\n'
         + (f'TONIGHT\'S CONTEXT (use to nudge ordering, not as a hard filter):\n{context_note}\n\n'
            if context_note else '')
         + f'TASTE PROFILE:\n{taste_profile}\n\n'
-        f'CANDIDATES:\n{cands_str}\n\n'
-        f'Return ONLY valid JSON: a list of objects with fields:\n'
-        f'- title: string (exact title from candidates)\n'
-        f'- explanation: string (1-2 sentences why this fits the query and this user)\n'
-        f'- score: float 0-1 (how well it matches the QUERY, boosted slightly by taste fit)\n\n'
-        f'Return up to {top_n} ranked candidates, no more. '
-        f'Omit any candidate that does not genuinely match the query. '
-        f'Never include weak matches just to fill the requested count.'
+        f'CANDIDATES (title, year, type, rating, votes, description):\n{cands_str}\n\n'
+        'Rules:\n'
+        '- Match the type asked for. "Movies" means feature films, not TV movies, specials, or episodes.\n'
+        '- This person prefers popular, well-made, well-known titles they would actually sit down '
+        'for tonight over niche or obscure ones, unless the query or notes ask for lesser-known picks.\n'
+        '- Score 0-1 on query fit, nudged by taste fit.\n'
+        f'- Return the {top_n} best. If fewer truly fit, return fewer. '
+        'Never include weak matches just to fill the count.\n\n'
+        'Return ONLY valid JSON: a list of objects with fields:\n'
+        '- title: string (exact title from candidates)\n'
+        '- explanation: string (1-2 sentences why this fits the query and this user)\n'
+        '- score: float 0-1\n'
     )
     # Scale output tokens based on result count
     rank_tokens = max(config.TOKENS_RANKING, top_n * 200 + 200)
@@ -583,6 +588,11 @@ def attach_imdb_ratings(
             c.imdb_rating, c.imdb_votes = rating.rating, rating.votes
 
 
+_DISCOVER_SIZE = 30
+_MAX_REFILL_ROUNDS = 2
+_REFILL_SEEN_MAX = 80       # cap on titles named in a refill prompt
+
+
 def _has_discover_filters(intent: "QueryIntent") -> bool:
     """Return True when TMDB Discover has user-specified narrowing filters."""
     return bool(
@@ -594,11 +604,31 @@ def _has_discover_filters(intent: "QueryIntent") -> bool:
     )
 
 
+def _matches_request(candidate: TmdbMetadata, intent: "QueryIntent") -> bool:
+    """True if the candidate has the requested content type and falls in the requested years.
+
+    Every candidate source goes through this, because related-title lookups and
+    LLM suggestions do not honor the request on their own. An unknown release
+    year passes, like an unknown runtime.
+    """
+    if intent.content_type in ("tv", "movie") and candidate.content_type != intent.content_type:
+        return False
+    year = candidate.release_year
+    if year and intent.year_from and year < intent.year_from:
+        return False
+    if year and intent.year_to and year > intent.year_to:
+        return False
+    return True
+
+
 def _candidate_allowed(
     candidate: TmdbMetadata,
     ctx: "RecommendContext",
     extra_excludes: set[str],
+    intent: "QueryIntent | None" = None,
 ) -> bool:
+    if intent is not None and not _matches_request(candidate, intent):
+        return False
     if ctx.watch_index.is_watched(candidate):
         return False
     if candidate.title in extra_excludes:
@@ -634,11 +664,12 @@ def _append_candidate(
     candidate: TmdbMetadata,
     ctx: "RecommendContext",
     extra_excludes: set[str],
+    intent: "QueryIntent | None" = None,
 ) -> bool:
     key = (candidate.content_type, candidate.tmdb_id)
     if key in seen_ids:
         return False
-    if not _candidate_allowed(candidate, ctx, extra_excludes):
+    if not _candidate_allowed(candidate, ctx, extra_excludes, intent):
         return False
     candidates.append(candidate)
     seen_ids.add(key)
@@ -713,32 +744,38 @@ def ask(
 
     discover_cts = list(content_types) if run_discover else []
 
-    def _discover(ct):
-        log.debug("TMDB discover: type=%s genres=%s countries=%s languages=%s years=%s-%s",
-                   ct, intent.genres, intent.origin_countries, intent.languages,
-                   intent.year_from, intent.year_to)
-        return ctx.tmdb_client.search_by_filters(
-            content_type=ct,
-            genres=intent.genres,
-            origin_countries=intent.origin_countries,
-            languages=intent.languages,
-            year_from=effective_year_from,
-            year_to=intent.year_to,
-            size=30,
-        )
+    def _add_discover(size: int) -> bool:
+        """Add Discover candidates. A bigger size reaches further down the same list.
 
-    for ct, batch in zip(discover_cts, _parallel_fetch(_discover, discover_cts)):
-        batch = batch or []
-        log.debug("TMDB returned %d candidates for %s", len(batch), ct)
-        candidates.extend(batch)
+        Returns True if Discover filled the size asked for, i.e. may have more.
+        """
+        def _discover(ct):
+            log.debug("TMDB discover: type=%s genres=%s countries=%s languages=%s years=%s-%s",
+                       ct, intent.genres, intent.origin_countries, intent.languages,
+                       intent.year_from, intent.year_to)
+            return ctx.tmdb_client.search_by_filters(
+                content_type=ct,
+                genres=intent.genres,
+                origin_countries=intent.origin_countries,
+                languages=intent.languages,
+                year_from=effective_year_from,
+                year_to=intent.year_to,
+                size=size,
+            )
 
-    pre_filter = len(candidates)
-    filtered_candidates: list[TmdbMetadata] = []
-    for candidate in candidates:
-        _append_candidate(filtered_candidates, seen_ids, candidate, ctx, extra_excludes)
-    candidates = filtered_candidates
-    log.debug("Candidate filters: %d -> %d candidates (%d excluded)",
-              pre_filter, len(candidates), pre_filter - len(candidates))
+        pre_filter = len(candidates)
+        may_have_more = False
+        for ct, batch in zip(discover_cts, _parallel_fetch(_discover, discover_cts)):
+            batch = batch or []
+            may_have_more = may_have_more or len(batch) >= size
+            log.debug("TMDB returned %d candidates for %s", len(batch), ct)
+            for candidate in batch:
+                _append_candidate(candidates, seen_ids, candidate, ctx, extra_excludes, intent)
+        log.debug("Candidate filters: %d -> %d candidates",
+                  pre_filter, len(candidates))
+        return may_have_more
+
+    _add_discover(_DISCOVER_SIZE)
 
     if intent.similar_to:
         related_added = 0
@@ -754,33 +791,43 @@ def ask(
 
         for related in _parallel_fetch(_related, seed_tasks):
             for candidate in (related or []):
-                if _append_candidate(candidates, seen_ids, candidate, ctx, extra_excludes):
+                if _append_candidate(candidates, seen_ids, candidate, ctx, extra_excludes, intent):
                     related_added += 1
         log.debug("TMDB related titles added %d new candidates", related_added)
 
     # Source 2: LLM suggestions (semantic, taste-aware — always runs)
-    log.debug("Fetching LLM suggestions for semantic coverage (similar_to=%s)", intent.similar_to)
-    suggestions = _generate_suggestions(query, profile_for_prompt, ctx.llm,
-                                         similar_to=intent.similar_to)
-    log.debug("LLM suggested %d titles: %s", len(suggestions), suggestions)
-    suggestion_count = 0
     suggestion_keys: set[tuple[str, int]] = set()   # taste-aware picks to protect from the trim
-    suggestion_tasks = [(title, ct) for title in suggestions for ct in content_types]
+    suggested_titles: set[str] = set()   # every title the LLM named, kept or filtered out
 
-    def _resolve(task):
-        title, ct = task
-        return ct, ctx.tmdb_client.get_metadata(title, ct)
+    def _add_suggestions(already_seen: list[str] | None = None) -> bool:
+        """Add LLM suggestions. Returns True if the LLM named any title."""
+        log.debug("Fetching LLM suggestions for semantic coverage (similar_to=%s)", intent.similar_to)
+        suggestions = _generate_suggestions(query, profile_for_prompt, ctx.llm,
+                                             similar_to=intent.similar_to,
+                                             already_seen=already_seen,
+                                             context_note=context_note)
+        log.debug("LLM suggested %d titles: %s", len(suggestions), suggestions)
+        suggested_titles.update(suggestions)
+        suggestion_count = 0
+        suggestion_tasks = [(title, ct) for title in suggestions for ct in content_types]
 
-    for resolved in _parallel_fetch(_resolve, suggestion_tasks):
-        if not resolved:
-            continue
-        ct, meta = resolved
-        if meta and meta.content_type == ct and _append_candidate(
-                candidates, seen_ids, meta, ctx, extra_excludes):
-            suggestion_count += 1
-            if meta.tmdb_id is not None:
-                suggestion_keys.add((meta.content_type, meta.tmdb_id))
-    log.debug("LLM suggestions added %d new candidates", suggestion_count)
+        def _resolve(task):
+            title, ct = task
+            return ct, ctx.tmdb_client.get_metadata(title, ct)
+
+        for resolved in _parallel_fetch(_resolve, suggestion_tasks):
+            if not resolved:
+                continue
+            ct, meta = resolved
+            if meta and meta.content_type == ct and _append_candidate(
+                    candidates, seen_ids, meta, ctx, extra_excludes, intent):
+                suggestion_count += 1
+                if meta.tmdb_id is not None:
+                    suggestion_keys.add((meta.content_type, meta.tmdb_id))
+        log.debug("LLM suggestions added %d new candidates", suggestion_count)
+        return bool(suggestions)
+
+    _add_suggestions()
 
     # The rating floor runs before the runtime check, so a below-floor short
     # title cannot satisfy the runtime filter and then be removed, emptying the
@@ -789,100 +836,134 @@ def ask(
     if config.MIN_RATING > 0:
         candidates = [c for c in candidates if c.rating >= config.MIN_RATING]
 
-    # Runtime is a hard filter when known, applied once over the whole pool so a
-    # fallback is possible. If every candidate with a known runtime exceeds the
-    # ceiling (e.g. "movie under an hour" — feature films are rarely that short),
-    # a strict filter would empty the pool; instead keep it and downgrade runtime
-    # to a ranking signal so the user still sees the closest, shortest matches.
-    if intent.max_runtime_minutes and candidates:
-        within = [c for c in candidates if _within_runtime(c, intent.max_runtime_minutes)]
-        if within:
-            candidates = within
-        else:
-            log.debug("Runtime ceiling %d emptied the pool; relaxing to a ranking signal",
-                      intent.max_runtime_minutes)
-            context_note = (
-                (context_note or "")
-                + f"\nRuntime limit ({intent.max_runtime_minutes} min) was too restrictive; "
-                  "prefer the shortest strong matches and note if a pick runs longer."
-            ).strip()
+    def _rank_pool(candidates: list[TmdbMetadata], context_note: str | None,
+                   first_round: bool = True) -> list[Recommendation]:
+        """Runtime-filter, trim, enrich, rank, and platform-filter one pool of candidates.
 
-    if log.isEnabledFor(logging.DEBUG) and candidates:
-        log.debug("Final candidate pool (%d): %s",
-                   len(candidates),
-                   [f"{c.title} ({c.content_type}, {_rating_label(c)})" for c in candidates])
+        Only the first round may relax the runtime limit or the platform filter;
+        a refill must not sneak in titles the request rules out.
+        """
+        # Runtime is a hard filter when known, applied once over the whole pool so a
+        # fallback is possible. If every candidate with a known runtime exceeds the
+        # ceiling (e.g. "movie under an hour" — feature films are rarely that short),
+        # a strict filter would empty the pool; instead keep it and downgrade runtime
+        # to a ranking signal so the user still sees the closest, shortest matches.
+        if intent.max_runtime_minutes and candidates:
+            within = [c for c in candidates if _within_runtime(c, intent.max_runtime_minutes)]
+            if within or not first_round:
+                candidates = within
+            else:
+                log.debug("Runtime ceiling %d emptied the pool; relaxing to a ranking signal",
+                          intent.max_runtime_minutes)
+                context_note = (
+                    (context_note or "")
+                    + f"\nRuntime limit ({intent.max_runtime_minutes} min) was too restrictive; "
+                      "prefer the shortest strong matches and note if a pick runs longer."
+                ).strip()
 
-    if not candidates:
-        log.debug("No candidates after all sources, returning empty")
-        return []
+        if log.isEnabledFor(logging.DEBUG) and candidates:
+            log.debug("Final candidate pool (%d): %s",
+                       len(candidates),
+                       [f"{c.title} ({c.content_type}, {_rating_label(c)})" for c in candidates])
 
-    # Bound enrichment/ranking cost, but never let the popularity sort discard the
-    # taste-aware LLM suggestions: reserve their slots first, then fill the rest
-    # with the strongest remaining candidates by rating weighted by vote volume.
-    if len(candidates) > config.MAX_ENRICH_CANDIDATES:
-        def _weight(c):
-            return (c.rating or 0) * math.log10((c.rating_votes or 0) + 10)
+        if not candidates:
+            log.debug("No candidates after all sources, returning empty")
+            return []
 
-        suggested = [c for c in candidates
-                     if (c.content_type, c.tmdb_id) in suggestion_keys]
-        others = [c for c in candidates
-                  if (c.content_type, c.tmdb_id) not in suggestion_keys]
-        suggested.sort(key=_weight, reverse=True)
-        others.sort(key=_weight, reverse=True)
-        kept = (suggested + others)[:config.MAX_ENRICH_CANDIDATES]
-        log.debug("Trimming candidate pool %d -> %d before enrichment "
-                  "(%d/%d protected LLM suggestions kept)",
-                  len(candidates), config.MAX_ENRICH_CANDIDATES,
-                  min(len(suggested), config.MAX_ENRICH_CANDIDATES), len(suggested))
-        candidates = kept
+        # Bound enrichment/ranking cost, but never let the popularity sort discard the
+        # taste-aware LLM suggestions: reserve their slots first, then fill the rest
+        # with the strongest remaining candidates by rating weighted by vote volume.
+        if len(candidates) > config.MAX_ENRICH_CANDIDATES:
+            def _weight(c):
+                return (c.rating or 0) * math.log10((c.rating_votes or 0) + 10)
 
-    log.debug("Enriching %d candidates", len(candidates))
-    meta_dict = {c.title: c for c in candidates}
-    enrichments = enrich_batch(meta_dict, ctx.cache_dir, ctx.llm)
+            suggested = [c for c in candidates
+                         if (c.content_type, c.tmdb_id) in suggestion_keys]
+            others = [c for c in candidates
+                      if (c.content_type, c.tmdb_id) not in suggestion_keys]
+            suggested.sort(key=_weight, reverse=True)
+            others.sort(key=_weight, reverse=True)
+            kept = (suggested + others)[:config.MAX_ENRICH_CANDIDATES]
+            log.debug("Trimming candidate pool %d -> %d before enrichment "
+                      "(%d/%d protected LLM suggestions kept)",
+                      len(candidates), config.MAX_ENRICH_CANDIDATES,
+                      min(len(suggested), config.MAX_ENRICH_CANDIDATES), len(suggested))
+            candidates = kept
 
-    # Annotate results with streaming provider data (and optionally filter by platform).
-    if ctx.providers_cache_dir:
-        meta_by_title = {c.title: c for c in candidates}
-        requested_platforms = [
-            PLATFORM_ALIASES.get(p.lower(), p) for p in (intent.platforms or [])
-        ] or [PLATFORM_ALIASES.get(p.lower(), p) for p in config.STREAMING_PLATFORMS]
+        log.debug("Enriching %d candidates", len(candidates))
+        meta_dict = {c.title: c for c in candidates}
+        enrichments = enrich_batch(meta_dict, ctx.cache_dir, ctx.llm)
 
-        # Rank with a larger pool when platform filtering is active, so we have
-        # enough candidates after discarding titles not on the requested service.
-        rank_size = max(intent.top_n * 3, 15) if requested_platforms else intent.top_n
+        # Annotate results with streaming provider data (and optionally filter by platform).
+        if ctx.providers_cache_dir:
+            meta_by_title = {c.title: c for c in candidates}
+            requested_platforms = [
+                PLATFORM_ALIASES.get(p.lower(), p) for p in (intent.platforms or [])
+            ] or [PLATFORM_ALIASES.get(p.lower(), p) for p in config.STREAMING_PLATFORMS]
+
+            # Rank with a larger pool when platform filtering is active, so we have
+            # enough candidates after discarding titles not on the requested service.
+            rank_size = max(intent.top_n * 3, 15) if requested_platforms else intent.top_n
+            results = rank_candidates(query, profile_for_prompt, candidates, enrichments,
+                                      ctx.llm, rank_size, context_note=context_note)
+
+            annotated = []
+            unfiltered = []
+            for rec in results:
+                meta = meta_by_title.get(rec.title)
+                if meta and meta.content_type:
+                    providers = ctx.tmdb_client.get_watch_providers(
+                        meta.tmdb_id, meta.content_type,
+                        ctx.watch_region, ctx.providers_cache_dir,
+                    )
+                    rec.streaming_providers = providers
+                unfiltered.append(rec)
+                if requested_platforms:
+                    if not any(p in rec.streaming_providers for p in requested_platforms):
+                        log.debug("Filtering out %r — not on requested platforms %s", rec.title, requested_platforms)
+                        continue
+                annotated.append(rec)
+                if len(annotated) == intent.top_n:
+                    break
+
+            # If platform filter removed everything, fall back to unfiltered results
+            if first_round and not annotated and unfiltered and requested_platforms:
+                log.debug("Platform filter removed all results — returning unfiltered top %d", intent.top_n)
+                annotated = unfiltered[:intent.top_n]
+
+            return annotated
+
         results = rank_candidates(query, profile_for_prompt, candidates, enrichments,
-                                  ctx.llm, rank_size, context_note=context_note)
+                                  ctx.llm, intent.top_n, context_note=context_note)
+        return results
 
-        annotated = []
-        unfiltered = []
-        for rec in results:
-            meta = meta_by_title.get(rec.title)
-            if meta and meta.content_type:
-                providers = ctx.tmdb_client.get_watch_providers(
-                    meta.tmdb_id, meta.content_type,
-                    ctx.watch_region, ctx.providers_cache_dir,
-                )
-                rec.streaming_providers = providers
-            unfiltered.append(rec)
-            if requested_platforms:
-                if not any(p in rec.streaming_providers for p in requested_platforms):
-                    log.debug("Filtering out %r — not on requested platforms %s", rec.title, requested_platforms)
-                    continue
-            annotated.append(rec)
-            if len(annotated) == intent.top_n:
-                break
+    results = _rank_pool(candidates, context_note)
 
-        # If platform filter removed everything, fall back to unfiltered results
-        if not annotated and unfiltered and requested_platforms:
-            log.debug("Platform filter removed all results — returning unfiltered top %d", intent.top_n)
-            annotated = unfiltered[:intent.top_n]
+    # Ranking, the runtime filter, and the score cutoff can all leave fewer than
+    # asked for. Go back for more, a hard-capped couple of times: reach further
+    # down Discover and ask the LLM for other titles, telling it what has been
+    # tried. Only the new candidates are ranked, then merged in by score.
+    for round_no in range(1, _MAX_REFILL_ROUNDS + 1):
+        if len(results) >= intent.top_n:
+            break
+        log.debug("Only %d results for %d wanted; refill round %d",
+                  len(results), intent.top_n, round_no)
+        before = len(candidates)
+        discover_full = _add_discover(_DISCOVER_SIZE * (round_no + 1)) if discover_cts else False
+        suggested_any = _add_suggestions(
+            sorted({c.title for c in candidates} | extra_excludes | suggested_titles)[:_REFILL_SEEN_MAX])
+        fresh = candidates[before:]
+        attach_imdb_ratings(fresh, ctx.tmdb_client)
+        if config.MIN_RATING > 0:
+            fresh = [c for c in fresh if c.rating >= config.MIN_RATING]
+        if fresh:
+            seen_titles = {r.title for r in results}
+            results += [r for r in _rank_pool(fresh, context_note, first_round=False) if r.title not in seen_titles]
+            results.sort(key=lambda r: r.score, reverse=True)
+            results = results[:intent.top_n]
+        elif not discover_full and not suggested_any:
+            break   # both sources are out of titles; another round would find nothing
 
-        if conv_ctx is not None:
-            conv_ctx.last_intent = intent
-        return annotated
-
-    results = rank_candidates(query, profile_for_prompt, candidates, enrichments,
-                              ctx.llm, intent.top_n, context_note=context_note)
     if conv_ctx is not None:
         conv_ctx.last_intent = intent
     return results
@@ -893,19 +974,32 @@ def _generate_suggestions(
     taste_profile: str,
     client: LLMClient,
     similar_to: list[str] | None = None,
+    already_seen: list[str] | None = None,
+    context_note: str | None = None,
 ) -> list[str]:
     """Ask LLM to suggest specific titles based on query and taste profile."""
+    seen_ctx = ""
+    if already_seen:
+        seen_ctx = f'Do not suggest any of these: {", ".join(already_seen)}. '
     similar_ctx = ""
     if similar_to:
         similar_ctx = f'\nThe user specifically wants something like: {", ".join(similar_to)}.\n'
+    # Refinements such as "more obscure" arrive here, so the request can override the defaults below.
+    note_ctx = f'Notes on the request: {context_note}\n' if context_note else ''
 
     prompt = (
-        f'A user is looking for: "{query}"\n'
-        f'{similar_ctx}\n'
-        f'Their taste profile:\n{taste_profile}\n\n'
-        'Suggest 20 specific titles that fit the query. '
-        'Prioritize query relevance over general taste match. '
-        'Return ONLY a JSON array of title strings. Be precise with names.'
+        f'A user asked for: "{query}"\n'
+        f'{similar_ctx}{note_ctx}\n'
+        f'Taste profile (background only; the query comes first):\n{taste_profile}\n\n'
+        'Name 40 real titles that clearly fit the request. This person prefers popular, '
+        'well-known, widely liked films and shows over obscure or arthouse ones, unless the '
+        'request asks for lesser-known picks; a strong '
+        'rating and lots of votes are good signs. Feature films and full series only: no TV '
+        'movies, specials, episodes, documentaries about the subject, or anime unless asked. '
+        'The user has seen about 2,000 titles including most famous classics, so list more '
+        'than you think is needed; anything already seen is removed automatically. '
+        f'{seen_ctx}\n'
+        'Return ONLY a JSON array of exact title strings.'
     )
     response_text = client.generate(prompt, role="reason", max_tokens=config.TOKENS_SUGGESTIONS,
                                      timeout=config.TIMEOUT_REASON)
