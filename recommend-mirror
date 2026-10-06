@@ -1,0 +1,64 @@
+#!/bin/bash
+# Make local an exact copy of the home server's state (database, overrides, cache).
+# Downloads to a staging folder first, backs up local, then swaps. Server -> local only.
+#
+#   ./recommend-mirror             mirror
+#   ./recommend-mirror --dry-run   print the steps, do nothing
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+HOST="${STREAMLINE_MIRROR_HOST:-abhishek@192.168.1.101}"
+REMOTE_ROOT="${STREAMLINE_MIRROR_REMOTE_ROOT:-~/streamline}"
+REMOTE_TMP="/tmp/streamline.db.mirror"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+STAGING="data/mirror-staging-$STAMP"
+BACKUP="data/mirror-backups/$STAMP"
+
+DRY_RUN=0
+case "${1:-}" in
+    "") ;;
+    --dry-run) DRY_RUN=1 ;;
+    *) echo "Usage: $0 [--dry-run]" >&2; exit 1 ;;
+esac
+
+run() {
+    echo "+ $*"
+    [ "$DRY_RUN" -eq 1 ] || "$@"
+}
+
+echo "Mirroring $HOST:$REMOTE_ROOT -> $SCRIPT_DIR"
+[ "$DRY_RUN" -eq 1 ] && echo "(dry run: nothing will change)"
+
+# Refuse before touching anything if the server has no database.
+run ssh "$HOST" "test -f $REMOTE_ROOT/data/streamline.db"
+
+run ./recommend-web stop
+# Always bring the web app back, even if a step below fails.
+[ "$DRY_RUN" -eq 1 ] || trap './recommend-web start || true' EXIT
+
+echo "Downloading to $STAGING"
+run mkdir -p "$STAGING/cache"
+run ssh "$HOST" "sqlite3 -readonly $REMOTE_ROOT/data/streamline.db '.backup $REMOTE_TMP'"
+run scp "$HOST:$REMOTE_TMP" "$STAGING/streamline.db"
+run ssh "$HOST" "rm -f $REMOTE_TMP"
+run scp "$HOST:$REMOTE_ROOT/data/overrides.json" "$STAGING/overrides.json"
+run rsync -a "$HOST:${REMOTE_ROOT#\~/}/recommender/cache/" "$STAGING/cache/"
+
+echo "Backing up local to $BACKUP"
+run mkdir -p "$BACKUP"
+if [ -f data/streamline.db ]; then
+    run sqlite3 data/streamline.db ".backup $BACKUP/streamline.db"
+fi
+[ -f data/overrides.json ] && run cp data/overrides.json "$BACKUP/overrides.json"
+[ -d recommender/cache ] && run mv recommender/cache "$BACKUP/cache"
+
+echo "Swapping in the server's state"
+run rm -f data/streamline.db data/streamline.db-wal data/streamline.db-shm
+run mv "$STAGING/streamline.db" data/streamline.db
+run mv "$STAGING/overrides.json" data/overrides.json
+run mv "$STAGING/cache" recommender/cache
+run rmdir "$STAGING"
+
+echo "Done. Backups in $BACKUP"
