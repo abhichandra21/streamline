@@ -1266,3 +1266,33 @@ def test_exact_title_type_check_ignores_exact_match_released_after_first_watch(t
     hints = MatchHints(first_watch_date=date(2020, 1, 1))
     with patch.object(client, "_search_candidates_or_error", side_effect=fake):
         assert client._type_with_exact_title("24: Live Another Day", "movie", hints) == "tv"
+
+
+def test_search_by_filters_matches_any_of_several_genres():
+    client = TmdbClient(api_key="test-key", cache_dir="/tmp/unused")
+    with patch.object(client, "_get", return_value={"results": []}) as mock_get:
+        client.search_by_filters("movie", genres=["mystery", "crime", "adventure"], size=5)
+
+    assert mock_get.call_args.kwargs["params"]["with_genres"] == "9648|80|12"
+
+
+def test_search_by_filters_sorts_by_vote_count_with_a_vote_floor():
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, '_get', return_value={"results": []}) as mock_get:
+            client.search_by_filters(content_type="movie", size=1)
+
+        params = mock_get.call_args_list[0][1]['params']
+        assert params["sort_by"] == "vote_count.desc"
+        assert params["vote_count.gte"] == 100
+
+
+def test_tv_thriller_is_not_forced_to_mystery():
+    from recommender.tmdb_client import TV_GENRE_IDS
+    assert "thriller" not in TV_GENRE_IDS
+    with tempfile.TemporaryDirectory() as tmp:
+        client = make_client(tmp)
+        with patch.object(client, '_get', return_value={"results": []}) as mock_get:
+            client.search_by_filters(content_type="tv", genres=["thriller"], size=1)
+
+        assert "with_genres" not in mock_get.call_args_list[0][1]['params']

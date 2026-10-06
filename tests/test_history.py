@@ -122,6 +122,14 @@ def test_delete_by_timestamp(store):
     assert [e["query"] for e in history.load(db_path=store)] == ["keep"]
 
 
+def test_clear_removes_every_entry(store):
+    history.record("one", [], "anthropic", "", db_path=store)
+    history.record("two", [], "anthropic", "", db_path=store)
+
+    assert history.clear(db_path=store) == 2
+    assert history.load(db_path=store) == []
+
+
 def test_delete_unknown_timestamp(store):
     history.record("keep", [], "anthropic", "", db_path=store)
 
@@ -451,3 +459,46 @@ def test_legacy_entry_keeps_an_odd_results_payload_verbatim(tmp_path, monkeypatc
     db = str(tmp_path / "streamline.db")
 
     assert history.load(db_path=db) == [odd]
+
+
+def test_recent_titles_collects_the_last_searches(store):
+    history.record("old", [_rec("Too Old")], "anthropic", "", db_path=store)
+    history.record("one", [_rec("Slow Horses")], "anthropic", "", db_path=store)
+    history.record("two", [_rec("Broadchurch")], "anthropic", "", db_path=store)
+
+    assert history.recent_titles("anything", limit=2, db_path=store) == {"Slow Horses", "Broadchurch"}
+
+
+def test_recent_titles_leaves_out_a_title_the_query_names(store):
+    history.record("one", [_rec("Slow Horses"), _rec("Broadchurch")], "anthropic", "", db_path=store)
+
+    assert history.recent_titles("more like slow horses", db_path=store) == {"Broadchurch"}
+
+
+def test_cleared_and_deleted_searches_still_stop_repeats(store):
+    history.record("one", [_rec("Slow Horses")], "anthropic", "", db_path=store)
+    history.record("two", [_rec("Broadchurch")], "anthropic", "", db_path=store)
+    history.delete(history.load(db_path=store)[0]["timestamp"], db_path=store)
+    history.clear(db_path=store)
+
+    assert history.load(db_path=store) == []
+    assert history.recent_titles("anything", db_path=store) == {"Slow Horses", "Broadchurch"}
+
+
+def test_clear_does_not_count_already_hidden_entries(store):
+    history.record("one", [], "anthropic", "", db_path=store)
+    history.clear(db_path=store)
+
+    assert history.clear(db_path=store) == 0
+
+
+def test_an_unreadable_row_does_not_break_loading_or_clearing(store):
+    history.record("good", [], "anthropic", "", db_path=store)
+    conn = sqlite3.connect(store)
+    with conn:
+        conn.execute("INSERT INTO query_history (timestamp, entry) VALUES ('2026-01-01T00:00:00+00:00', 'not json')")
+    conn.close()
+
+    assert [e["query"] for e in history.load(db_path=store)] == ["good"]
+    assert history.clear(db_path=store) == 1
+    assert history.load(db_path=store) == []

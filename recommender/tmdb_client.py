@@ -34,7 +34,7 @@ MOVIE_GENRE_IDS: dict[str, int] = {
 TV_GENRE_IDS: dict[str, int] = {
     'action': 10759, 'adventure': 10759, 'animation': 16, 'comedy': 35,
     'crime': 80, 'documentary': 99, 'drama': 18, 'family': 10751,
-    'kids': 10762, 'mystery': 9648, 'sci-fi': 10765, 'thriller': 9648,
+    'kids': 10762, 'mystery': 9648, 'sci-fi': 10765,   # no TV thriller genre
     'war': 10768, 'western': 37,
 }
 
@@ -928,7 +928,7 @@ class TmdbClient:
         genre_map = TV_GENRE_IDS if content_type == "tv" else MOVIE_GENRE_IDS
         date_field = "first_air_date" if content_type == "tv" else "primary_release_date"
 
-        params: dict = {"sort_by": "vote_average.desc", "vote_count.gte": 100}
+        params: dict = {"sort_by": "vote_count.desc", "vote_count.gte": 100}
 
         if genres:
             ids = [str(genre_map[g.lower()]) for g in genres if g.lower() in genre_map]
@@ -936,7 +936,9 @@ class TmdbClient:
             if unmapped:
                 log.debug("Unmapped genres (not in TMDB genre map): %s", unmapped)
             if ids:
-                params["with_genres"] = ",".join(ids)
+                # Any of the genres, not all: "mystery, crime, adventure" as an AND
+                # leaves only a handful of films, too few to fill a request.
+                params["with_genres"] = "|".join(ids)
                 log.debug("Genre filter: %s -> TMDB IDs %s", genres, ids)
 
         if origin_countries:
