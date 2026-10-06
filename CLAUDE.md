@@ -72,7 +72,7 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 
 ### Key Modules
 - `recommender/llm.py` — LLM provider abstraction. ABC-based `LLMClient` with `AnthropicClient` and `GeminiClient`. Role-based model dispatch, token usage tracking, rate limit retry.
-- `recommender/ingestion/` — Platform parsers. Manual titles use `datetime.now()` for competitive scoring.
+- `recommender/ingestion/` — Platform parsers. Manual titles use `datetime.now()` for competitive scoring; setup stores them in SQLite as provider `manual` (replaced on each setup, kept if the files are missing).
 - `recommender/tmdb_client.py` — Metadata lookup with guessit title classification, title cleanup fallback (strips suffixes, tries alternate content type), discover endpoint (page-limited), watch providers. `get_imdb_id()` maps a TMDB title to its IMDb ID.
 - `recommender/imdb_ratings.py` — Local copy of IMDb's daily `title.ratings.tsv.gz` in SQLite. TMDB stays the catalogue and identity; IMDb only supplies rating and vote count. Every displayed, filtered, or ranked rating prefers IMDb and falls back to TMDB (`TmdbMetadata.rating` / `rating_source`). Refreshed by setup and, in the web UI, by a background job once the copy is a day old.
 - `recommender/language_catalog.py` — Find's original-language lists (Hindi). A background build reads every TMDB Discover page for the language over 10 years with no TMDB vote floor, attaches IMDb ratings, and saves the list; Find then filters (period, genre, `LANGUAGE_MIN_IMDB_VOTES`, IMDb rating) and sorts it locally. Built on first use from the Find page or by `--refresh-imdb`, then rebuilt daily.

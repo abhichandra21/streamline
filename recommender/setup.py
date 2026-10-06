@@ -1008,6 +1008,30 @@ def load_platform_events_from_exports(fail_on_error: bool = True) -> list:
     return all_events
 
 
+def _import_manual_events() -> list | None:
+    """Parse the manual files and replace the stored "manual" snapshot.
+
+    Returns the parsed events, or None when the files are missing. Missing
+    files leave the stored events alone; existing files that parse to zero
+    events replace them with nothing.
+    """
+    if not (config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH):
+        return None
+    try:
+        events = parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH)
+    except FileNotFoundError:
+        console.print("  manual: [yellow]skipped[/yellow] (files not found, keeping stored events)")
+        return None
+    event_store.init_db(config.EVENT_DB_PATH)
+    manifest, snapshot_sha = _build_source_manifest(
+        [config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH])
+    persisted, _total_raw = event_store.replace_provider_events(
+        config.EVENT_DB_PATH, "manual", events, manifest, snapshot_sha,
+    )
+    console.print(f"  manual: {persisted:,} events persisted to SQLite")
+    return events
+
+
 def ingest_providers(fail_on_error: bool = True) -> list:
     """Validate configured provider zips, persist to SQLite, and return normalized events."""
     from collections import defaultdict
@@ -1021,15 +1045,6 @@ def ingest_providers(fail_on_error: bool = True) -> list:
     all_events = []
     for pevents, _path in platform_events_by_provider.values():
         all_events.extend(pevents)
-
-    # Parse manual events
-    manual_events = []
-    if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
-        try:
-            manual_events = parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH)
-            console.print(f"  manual: [green]ok[/green] {len(manual_events)} events")
-        except FileNotFoundError:
-            console.print("  manual: [yellow]skipped[/yellow] (files not found)")
 
     # Persist to SQLite
     event_store.init_db(config.EVENT_DB_PATH)
@@ -1045,9 +1060,12 @@ def ingest_providers(fail_on_error: bool = True) -> list:
         )
         console.print(f"  {platform}: {persisted:,} events persisted to SQLite")
 
+    manual_events = _import_manual_events()
+    if manual_events is not None:
+        all_events.extend(manual_events)
+
     all_events_from_db = event_store.load_events(config.EVENT_DB_PATH)
-    all_events_from_db.extend(manual_events)
-    
+
     console.print(f"\n  Total: {len(all_events_from_db)} events")
     
     if all_events:
@@ -1128,22 +1146,16 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
         console.print("Loading watch history from SQLite...")
         # Refresh flows: load platform events from SQLite, not from zips
         event_store.init_db(config.EVENT_DB_PATH)
+        # Installs from before manual events were stored have none yet: import once.
+        if not event_store.load_events(config.EVENT_DB_PATH, provider="manual"):
+            _import_manual_events()
         events = event_store.load_events(config.EVENT_DB_PATH)
 
-        manual_events = []
-        if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
-            try:
-                manual_events = parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH)
-                console.print(f"  manual: [green]ok[/green] {len(manual_events)} events")
-            except FileNotFoundError:
-                console.print("  manual: [yellow]skipped[/yellow] (files not found)")
-
-        events.extend(manual_events)
         if not events:
-            console.print("[red]No persisted platform imports found and no manual events available. "
+            console.print("[red]No persisted watch events found. "
                           "Run ./recommend setup or ./recommend setup --ingest-only first.[/red]")
             sys.exit(1)
-        console.print(f"  Total: {len(events)} events (from SQLite + manual)")
+        console.print(f"  Total: {len(events)} events (from SQLite)")
 
     else:
         # Default flow / refresh_data flow: parse zips, persist to SQLite, load back
