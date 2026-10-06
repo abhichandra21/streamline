@@ -698,3 +698,89 @@ def test_setup_stops_without_saving_when_index_backup_fails(monkeypatch, tmp_pat
     assert exc.value.code == 1
     assert index_path.read_text() == old_text
     assert not list(tmp_path.glob("watch_index_*.json"))
+
+
+# ---------------------------------------------------------------------------
+# Manual events are stored in SQLite like any provider
+# ---------------------------------------------------------------------------
+
+def _manual_setup(monkeypatch, tmp_path):
+    import config
+    import recommender.setup as setup
+
+    tv = tmp_path / "tv.csv"
+    movies = tmp_path / "movies.csv"
+    tv.write_text("Show One\nShow Two\n", encoding="utf-8")
+    movies.write_text("Movie One 2019\nMovie Two\n", encoding="utf-8")
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": [], "prime": [], "apple_tv": []})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", str(tv))
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", str(movies))
+    monkeypatch.setattr(config, "MANUAL_TIMESTAMP", "2026-01-01")
+    monkeypatch.setattr(config, "EVENT_DB_PATH", str(tmp_path / "streamline.db"))
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [])
+    return setup, tv, movies
+
+
+def test_manual_events_are_stored_and_match_parsed(monkeypatch, tmp_path):
+    import config
+    from recommender.event_store import load_events
+    from recommender.ingestion.manual import parse
+
+    setup, tv, movies = _manual_setup(monkeypatch, tmp_path)
+    loaded = setup.ingest_providers(fail_on_error=False)
+
+    assert len(loaded) == 4
+    stored = load_events(config.EVENT_DB_PATH, provider="manual")
+    parsed = parse(str(tv), str(movies))
+    key = lambda e: (e.content_type, e.title)
+    assert sorted(stored, key=key) == sorted(parsed, key=key)
+
+
+def test_manual_rerun_makes_no_duplicates(monkeypatch, tmp_path):
+    import config
+    from recommender.event_store import load_events
+
+    setup, _tv, _movies = _manual_setup(monkeypatch, tmp_path)
+    setup.ingest_providers(fail_on_error=False)
+    loaded = setup.ingest_providers(fail_on_error=False)
+
+    assert len(loaded) == 4
+    assert len(load_events(config.EVENT_DB_PATH, provider="manual")) == 4
+
+
+def test_manual_missing_file_keeps_stored_events(monkeypatch, tmp_path):
+    import config
+    from recommender.event_store import load_events
+
+    setup, tv, _movies = _manual_setup(monkeypatch, tmp_path)
+    setup.ingest_providers(fail_on_error=False)
+    tv.unlink()
+    loaded = setup.ingest_providers(fail_on_error=False)
+
+    assert len(loaded) == 4
+    assert len(load_events(config.EVENT_DB_PATH, provider="manual")) == 4
+
+
+def test_manual_empty_files_replace_stored_events(monkeypatch, tmp_path):
+    import config
+    from recommender.event_store import load_events
+
+    setup, tv, movies = _manual_setup(monkeypatch, tmp_path)
+    setup.ingest_providers(fail_on_error=False)
+    tv.write_text("", encoding="utf-8")
+    movies.write_text("", encoding="utf-8")
+    setup.ingest_providers(fail_on_error=False)
+
+    assert load_events(config.EVENT_DB_PATH, provider="manual") == []
+
+
+def test_refresh_profile_imports_manual_once_when_none_stored(monkeypatch, tmp_path):
+    import config
+    from recommender.event_store import load_events
+
+    setup, _tv, _movies = _manual_setup(monkeypatch, tmp_path)
+    setup.event_store.init_db(config.EVENT_DB_PATH)
+    assert load_events(config.EVENT_DB_PATH, provider="manual") == []
+
+    setup._import_manual_events()  # what the --refresh-profile branch calls when none are stored
+    assert len(load_events(config.EVENT_DB_PATH, provider="manual")) == 4

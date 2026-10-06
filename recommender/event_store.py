@@ -47,10 +47,10 @@ _WATCH_EVENT_HINT_COLUMNS = (
     ("tmdb_id_hint", "INTEGER"),
 )
 
-# Providers whose events have no source file to rebuild them from. Plex plays
-# arrive one webhook at a time and exist only in this database, so setup must
-# never treat them as a disabled provider and delete them.
-PRESERVED_PROVIDERS = ("plex",)
+# Providers setup must never treat as disabled and delete. Plex plays arrive
+# one webhook at a time and exist only in this database. Manual events come
+# from data/manual files that can go missing; the stored copy is kept then.
+PRESERVED_PROVIDERS = ("plex", "manual")
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
