@@ -284,27 +284,32 @@ def rank_candidates(
     meta_by_title = {c.title: c for c in candidates}
 
     cands_str = '\n'.join(
-        f"{i+1}. {c.title} (rating: {_rating_label(c)}): {enrichments.get(enrichment_key(c), ' '.join(c.genres))}"
+        f"{i+1}. {c.title}, {c.release_year or 'year unknown'}, "
+        f"{'TV series' if c.content_type == 'tv' else 'film'}, "
+        f"{_rating_label(c)}: {enrichments.get(enrichment_key(c), ' '.join(c.genres))}"
         for i, c in enumerate(candidates)
     )
     log.debug("Candidate list sent to ranker:\n%s", cands_str)
 
     prompt = (
-        f'Rank these candidates for a user. IMPORTANT: the query is the primary filter — '
-        f'a candidate must match what the user asked for. The taste profile is secondary, '
-        f'used to break ties between candidates that all fit the query.\n\n'
+        'Pick the best picks for this user. The query decides what belongs; '
+        'the taste profile only orders titles that fit equally well.\n\n'
         f'QUERY: "{query}"\n\n'
         + (f'TONIGHT\'S CONTEXT (use to nudge ordering, not as a hard filter):\n{context_note}\n\n'
            if context_note else '')
         + f'TASTE PROFILE:\n{taste_profile}\n\n'
-        f'CANDIDATES:\n{cands_str}\n\n'
-        f'Return ONLY valid JSON: a list of objects with fields:\n'
-        f'- title: string (exact title from candidates)\n'
-        f'- explanation: string (1-2 sentences why this fits the query and this user)\n'
-        f'- score: float 0-1 (how well it matches the QUERY, boosted slightly by taste fit)\n\n'
-        f'Return up to {top_n} ranked candidates, no more. '
-        f'Omit any candidate that does not genuinely match the query. '
-        f'Never include weak matches just to fill the requested count.'
+        f'CANDIDATES (title, year, type, rating, votes, description):\n{cands_str}\n\n'
+        'Rules:\n'
+        '- Match the type asked for. "Movies" means feature films, not TV movies, specials, or episodes.\n'
+        '- This person prefers popular, well-made, well-known titles they would actually sit down '
+        'for tonight over niche or obscure ones, unless the query or notes ask for lesser-known picks.\n'
+        '- Score 0-1 on query fit, nudged by taste fit.\n'
+        f'- Return the {top_n} best. If fewer truly fit, return fewer. '
+        'Never include weak matches just to fill the count.\n\n'
+        'Return ONLY valid JSON: a list of objects with fields:\n'
+        '- title: string (exact title from candidates)\n'
+        '- explanation: string (1-2 sentences why this fits the query and this user)\n'
+        '- score: float 0-1\n'
     )
     # Scale output tokens based on result count
     rank_tokens = max(config.TOKENS_RANKING, top_n * 200 + 200)
@@ -798,7 +803,8 @@ def ask(
         log.debug("Fetching LLM suggestions for semantic coverage (similar_to=%s)", intent.similar_to)
         suggestions = _generate_suggestions(query, profile_for_prompt, ctx.llm,
                                              similar_to=intent.similar_to,
-                                             already_seen=already_seen)
+                                             already_seen=already_seen,
+                                             context_note=context_note)
         log.debug("LLM suggested %d titles: %s", len(suggestions), suggestions)
         suggestion_count = 0
         suggestion_tasks = [(title, ct) for title in suggestions for ct in content_types]
@@ -962,6 +968,7 @@ def _generate_suggestions(
     client: LLMClient,
     similar_to: list[str] | None = None,
     already_seen: list[str] | None = None,
+    context_note: str | None = None,
 ) -> list[str]:
     """Ask LLM to suggest specific titles based on query and taste profile."""
     seen_ctx = ""
@@ -970,15 +977,22 @@ def _generate_suggestions(
     similar_ctx = ""
     if similar_to:
         similar_ctx = f'\nThe user specifically wants something like: {", ".join(similar_to)}.\n'
+    # Refinements such as "more obscure" arrive here, so the request can override the defaults below.
+    note_ctx = f'Notes on the request: {context_note}\n' if context_note else ''
 
     prompt = (
-        f'A user is looking for: "{query}"\n'
-        f'{similar_ctx}\n'
-        f'Their taste profile:\n{taste_profile}\n\n'
-        'Suggest 20 specific titles that fit the query. '
-        'Prioritize query relevance over general taste match. '
-        f'{seen_ctx}'
-        'Return ONLY a JSON array of title strings. Be precise with names.'
+        f'A user asked for: "{query}"\n'
+        f'{similar_ctx}{note_ctx}\n'
+        f'Taste profile (background only; the query comes first):\n{taste_profile}\n\n'
+        'Name 40 real titles that clearly fit the request. This person prefers popular, '
+        'well-known, widely liked films and shows over obscure or arthouse ones, unless the '
+        'request asks for lesser-known picks; a strong '
+        'rating and lots of votes are good signs. Feature films and full series only: no TV '
+        'movies, specials, episodes, documentaries about the subject, or anime unless asked. '
+        'The user has seen about 2,000 titles including most famous classics, so list more '
+        'than you think is needed; anything already seen is removed automatically. '
+        f'{seen_ctx}\n'
+        'Return ONLY a JSON array of exact title strings.'
     )
     response_text = client.generate(prompt, role="reason", max_tokens=config.TOKENS_SUGGESTIONS,
                                      timeout=config.TIMEOUT_REASON)

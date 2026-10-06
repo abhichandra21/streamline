@@ -333,8 +333,8 @@ def test_rank_candidates_prompt_allows_fewer_than_top_n():
     rank_candidates("movies like Sherlock Holmes", "profile", candidates, enrichments, client, top_n=10)
 
     prompt = client.generate.call_args.args[0]
-    assert "Return up to 10 ranked candidates" in prompt
-    assert "Never include weak matches just to fill the requested count." in prompt
+    assert "Return the 10 best. If fewer truly fit, return fewer." in prompt
+    assert "Never include weak matches just to fill the count." in prompt
     assert "Return EXACTLY" not in prompt
 
 
@@ -1082,8 +1082,8 @@ def test_rank_prompt_names_rating_source():
 
     results = qe.rank_candidates("q", "P", [rated, plain], {}, FakeLLM(), top_n=2)
 
-    assert "Rated (rating: IMDb 8.2 from 151,638 votes)" in prompts[0]
-    assert "Plain (rating: TMDB 7.1 from 500 votes)" in prompts[0]
+    assert "Rated, year unknown, TV series, IMDb 8.2 from 151,638 votes" in prompts[0]
+    assert "Plain, year unknown, TV series, TMDB 7.1 from 500 votes" in prompts[0]
     assert (results[0].vote_average, results[0].rating_source) == (8.2, "imdb")
 
 
@@ -1376,3 +1376,29 @@ def test_ask_llm_suggestions_respect_requested_years():
     assert results == []
     enrich.assert_not_called()
 
+
+
+def test_rank_prompt_shows_year_and_type_so_films_differ_from_series():
+    film = make_meta("Big Film", tmdb_id=1, content_type="movie")
+    film.release_year = 2008
+    llm = make_mock_llm("[]")
+
+    rank_candidates("movies", "P", [film], {}, llm, 1)
+
+    prompt = llm.generate.call_args.args[0]
+    assert "Big Film, 2008, film," in prompt
+    assert "feature films, not TV movies" in prompt
+
+
+def test_suggestion_prompt_asks_for_forty_well_known_titles():
+    llm = make_mock_llm("[]")
+    _generate_suggestions("spy movies", "P", llm)
+    prompt = llm.generate.call_args.args[0]
+    assert "Name 40 real titles" in prompt
+    assert "no TV movies, specials" in prompt
+
+
+def test_suggestion_prompt_carries_refinement_notes():
+    llm = make_mock_llm("[]")
+    _generate_suggestions("q", "P", llm, context_note="Prefer lesser-known picks.")
+    assert "Prefer lesser-known picks." in llm.generate.call_args.args[0]
