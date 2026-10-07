@@ -854,7 +854,7 @@ def _dashboard_clusters(taste_profile: str, structured_profile: dict | None) -> 
             if c.get("representative_titles"):
                 body += ("<p><em>For example:</em> "
                          + str(escape(", ".join(c["representative_titles"][:6]))) + "</p>")
-            clusters.append({"heading": c["label"], "body_html": Markup(body)})
+            clusters.append({"heading": c.get("name") or c["label"], "body_html": Markup(body)})
         return clusters
 
     clusters = []

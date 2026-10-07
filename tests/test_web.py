@@ -3593,3 +3593,10 @@ def test_history_loved_filter_includes_followed_shows(client, tmp_path, monkeypa
         unrated = client.get("/history?rating=unrated").get_data(as_text=True)
     assert "Vera" in loved and "Other" not in loved
     assert "Other" in unrated and ">Vera<" not in unrated
+
+
+def test_dashboard_clusters_head_with_the_name_and_fall_back_to_the_label():
+    from recommender.web import _dashboard_clusters
+    clusters = _dashboard_clusters("", {"clusters": [
+        {"label": "British cozy mysteries", "name": "Cosy British mysteries"}, {"label": "Docs"}]})
+    assert [c["heading"] for c in clusters] == ["Cosy British mysteries", "Docs"]

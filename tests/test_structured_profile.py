@@ -541,3 +541,40 @@ def test_dislikes_come_only_from_the_households_own_titles(monkeypatch):
 def test_clusters_keep_their_description():
     profile = _parse([{"label": "Crime", "description": "You love slow-burn detectives.", "members": [1]}], SCORED)
     assert profile["clusters"][0]["description"] == "You love slow-burn detectives."
+
+
+def test_clusters_keep_a_display_name_apart_from_the_search_label():
+    profile = validate_structured_profile({"clusters": [
+        {"label": "British cozy mysteries", "name": "Cosy British mysteries"}, {"label": "Docs"}]})
+    assert profile["clusters"][0]["label"] == "British cozy mysteries"
+    assert profile["clusters"][0]["name"] == "Cosy British mysteries"
+    assert profile["clusters"][1]["name"] == ""
+
+
+def test_merged_country_cluster_keeps_the_name_of_its_biggest_part():
+    from recommender.structured_profile import merge_region_clusters
+    part = {"co_viewing": "personal", "regions": ["GB"], "description": ""}
+    profile = merge_region_clusters({"clusters": [
+        {**part, "label": "British thrillers", "name": "Tense British thrillers", "members": ["A"]},
+        {**part, "label": "British mysteries", "name": "Cosy British mysteries", "members": ["B", "C"]},
+    ]})
+    assert len(profile["clusters"]) == 1
+    assert profile["clusters"][0]["name"] == "Cosy British mysteries"
+    assert "name_size" not in profile["clusters"][0]
+
+
+def test_prompt_asks_for_names_and_offers_last_names_back(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    client = make_mock_llm(ONE_CLUSTER)
+    build_structured_profile([], {"A": 2.0}, {"A": "x"}, client, previous_names=["Cosy British mysteries"])
+    prompt = client.generate.call_args[0][0]
+    assert "name is the headline the household sees" in prompt
+    assert 'Names used last time: "Cosy British mysteries"' in prompt
+    assert "Names used last time" not in _structured_prompt(monkeypatch, False, [], {"A": 2.0})
+
+
+def test_prompt_states_the_cluster_limit(monkeypatch):
+    from recommender.structured_profile import MAX_CLUSTERS
+    prompt = _structured_prompt(monkeypatch, False, [], {"A": 2.0})
+    assert f"using at most {MAX_CLUSTERS} clusters" in prompt

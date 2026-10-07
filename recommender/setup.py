@@ -41,7 +41,9 @@ from recommender.enricher import (
     is_identity_enrichment_index,
 )
 from recommender.taste_profile_builder import build as build_taste_profile
-from recommender.structured_profile import build_structured_profile, save_structured_profile
+from recommender.structured_profile import (
+    build_structured_profile, load_structured_profile, save_structured_profile,
+)
 from recommender.llm import create_client
 from recommender import watch_index as wi
 from recommender import user_store
@@ -1490,12 +1492,15 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
             structured_profile_skipped = False
             if not using_custom_path:
                 try:
+                    # Last build's names, so the weekly rebuild doesn't rename every row.
+                    previous = load_structured_profile(config.STRUCTURED_TASTE_PROFILE_PATH) or {}
                     structured_profile = build_structured_profile(
                         events,
                         scores,
                         enrichments,
                         llm,
                         negative_prefs=negative_prefs or None,
+                        previous_names=[c["name"] for c in previous.get("clusters", []) if c.get("name")],
                     )
                 except Exception as exc:
                     structured_profile_skipped = True

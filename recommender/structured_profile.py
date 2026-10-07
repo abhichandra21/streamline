@@ -22,6 +22,8 @@ ALLOWED_CO_VIEWING = {"personal", "family", "mixed", "unknown"}
 # Every loved or followed title is sent; this many more fill in from the rest.
 STRUCTURED_EXTRA_TITLES = 300
 # Descriptions are cut to about this many characters to keep the prompt small.
+# Clusters past this are dropped, with their titles, so the prompt asks for no more.
+MAX_CLUSTERS = 16
 STRUCTURED_DESCRIPTION_CHARS = 400
 # Weight for a cluster whose member numbers were all unusable.
 EMPTY_CLUSTER_WEIGHT = 0.05
@@ -154,6 +156,7 @@ def validate_structured_profile(data: dict[str, Any]) -> dict[str, Any]:
         clusters.append({
             "id": _clean_string(raw.get("id")) or _slug(label, f"cluster-{index + 1}"),
             "label": label,
+            "name": _clean_string(raw.get("name")),
             "weight": _clamp_weight(raw.get("weight")),
             "description": _clean_string(raw.get("description")),
             "positive_traits": _clean_string_list(raw.get("positive_traits")),
@@ -165,7 +168,7 @@ def validate_structured_profile(data: dict[str, Any]) -> dict[str, Any]:
             "representative_titles": representative_titles,
             "members": _clean_string_list(raw.get("members"), limit=400),
         })
-        if len(clusters) == 16:
+        if len(clusters) == MAX_CLUSTERS:
             break
 
     profile["clusters"] = clusters
@@ -235,17 +238,21 @@ def merge_region_clusters(profile: dict[str, Any]) -> dict[str, Any]:
             merged.append(cluster)
             continue
         if region not in by_region:
-            by_region[region] = {**cluster, "parts": [cluster["label"]]}
+            by_region[region] = {**cluster, "parts": [cluster["label"]], "name_size": len(cluster["members"])}
             merged.append(by_region[region])
             continue
         into = by_region[region]
         into["parts"].append(cluster["label"])
+        # The merged cluster keeps the display name of its biggest part.
+        if cluster.get("name") and len(cluster["members"]) > into["name_size"]:
+            into["name"], into["name_size"] = cluster["name"], len(cluster["members"])
         for key in ("members", "representative_titles", "positive_traits", "negative_traits",
                     "mood_states", "languages"):
             into[key] = list(dict.fromkeys(into.get(key, []) + cluster.get(key, [])))
         into["description"] = " ".join(d for d in (into.get("description"), cluster.get("description")) if d)
     for cluster in by_region.values():
         parts = cluster.pop("parts")
+        cluster.pop("name_size")
         if len(parts) > 1:
             name = REGION_NAMES[cluster["regions"][0].upper()]
             short = [re.sub(rf"^{name}\s+(and \w+\s+)?", "", p, flags=re.IGNORECASE) for p in parts]
@@ -311,6 +318,7 @@ def structured_prompt(
     scores: dict[str, float],
     enrichments: dict[str, str],
     negative_prefs: list[str] | None = None,
+    previous_names: list[str] | None = None,
 ) -> tuple[str, list[tuple[str, float]]]:
     """The structured-profile prompt and the numbered titles it lists.
 
@@ -326,6 +334,11 @@ def structured_prompt(
         for number, (title, score) in enumerate(scored, start=1)
     ]
     less_like = ", ".join(f'"{title}"' for title in (negative_prefs or [])) or "none"
+    keep_names = (
+        "Names used last time: " + "; ".join(f'"{name}"' for name in previous_names) + ". "
+        "Reuse a name when its cluster is essentially the same group of titles.\n"
+        if previous_names else ""
+    )
     prompt = (
         "Create a compact structured JSON taste profile for a personal streaming recommender.\n"
         + (
@@ -338,12 +351,21 @@ def structured_prompt(
         "mood states, creator affinities, language or region affinities, and explicit dislikes.\n"
         "Return ONLY valid JSON with keys: version, clusters, mood_states, creator_affinities, "
         "language_region_affinities, negative_preferences.\n"
-        "For each cluster include: id, label, description, weight, positive_traits, negative_traits, "
+        "For each cluster include: id, label, name, description, weight, positive_traits, negative_traits, "
         "co_viewing, mood_states, languages, regions, representative_titles, members.\n"
-        "description is 2-3 sentences in second person on what this household loves about the "
-        "cluster, naming a few of their titles (\"You gravitate toward...\").\n"
+        "label is a plain descriptive label used for search, like \"British cozy and procedural mysteries\".\n"
+        "name is the headline the household sees: 2-6 words, warm and plain-spoken, like a friend "
+        "describing them. Not a joke or pun, and not a dry genre label. Examples of the right voice: "
+        "\"Cosy British mysteries\", \"Hindi stories that feel like home\", \"Sci-fi that bends your brain\", "
+        "\"Eating your way around the world\", \"History that leaves a mark\", \"Life behind palace walls\".\n"
+        + keep_names +
+        "description is 2-3 sentences in second person, written like a friend who has just figured "
+        "this household out: playful, specific and affectionate, naming several of their titles. "
+        "Not a report and not a personality test. Example: \"Your ideal crime has a village, a vicar, "
+        "and someone pouring tea before the second body turns up. Grantchester and Father Brown handle "
+        "the cosy end; Happy Valley and Line of Duty remind you the British can be properly terrifying.\"\n"
         "members lists the numbers of every history title in that cluster. Put each title "
-        "in exactly one cluster.\n"
+        f"in exactly one cluster, using at most {MAX_CLUSTERS} clusters.\n"
         "Use ISO-639-1 language codes like hi, en, ko, es, fr when known. "
         "Use ISO-3166 alpha-2 region codes like IN, GB, US, KR when known.\n"
         "Cluster weight and order are computed from members and the scores, so any cluster weight you give is ignored. "
@@ -375,8 +397,9 @@ def build_structured_profile(
     enrichments: dict[str, str],
     client: LLMClient,
     negative_prefs: list[str] | None = None,
+    previous_names: list[str] | None = None,
 ) -> dict[str, Any]:
-    prompt, scored = structured_prompt(events, scores, enrichments, negative_prefs)
+    prompt, scored = structured_prompt(events, scores, enrichments, negative_prefs, previous_names)
     if not scored:
         log.warning("No enriched titles found for structured profile build; returning empty profile")
         return validate_structured_profile({})
