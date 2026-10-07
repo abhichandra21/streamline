@@ -838,14 +838,57 @@ def plex_webhook() -> Response | tuple:
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-def _dashboard_clusters(taste_profile: str, structured_profile: dict | None) -> list[dict]:
+# Calm strength labels for a cluster's weight, strongest first: (floor, dots, label).
+_TASTE_STRENGTHS = [
+    (0.9, 5, "Your biggest love"),
+    (0.45, 4, "A big favourite"),
+    (0.3, 3, "Regular habit"),
+    (0.22, 2, "A soft spot"),
+    (0.0, 1, "Now and then"),
+]
+
+
+def _taste_strength(weight) -> dict | None:
+    if not isinstance(weight, (int, float)):
+        return None
+    for floor, dots, label in _TASTE_STRENGTHS:
+        if weight >= floor:
+            return {"dots": dots, "label": label}
+    return {"dots": 1, "label": _TASTE_STRENGTHS[-1][2]}
+
+
+def _cluster_posters(titles: list[str], by_title: dict[str, dict], limit: int) -> list[dict]:
+    """Posters for the first titles that are in the watch index and have cached art."""
+    posters = []
+    for title in titles:
+        e = by_title.get(_norm_title(title))
+        if not e or not e.get("tmdb_id"):
+            continue
+        ct = e.get("content_type", "movie")
+        url = _get_poster_url(e["tmdb_id"], ct, "w185")
+        if url:
+            posters.append({"title": e["title"], "poster": url, "tmdb_id": e["tmdb_id"], "content_type": ct})
+        if len(posters) >= limit:
+            break
+    return posters
+
+
+def _dashboard_clusters(taste_profile: str, structured_profile: dict | None,
+                        entries: list[dict] | None = None, poster_limit: int = 5) -> list[dict]:
     """Home page clusters: the structured profile search uses, in its computed order.
 
-    Falls back to the prose profile's sections when no structured profile exists.
+    Structured clusters also carry a strength meter and a few posters from the
+    watch index entries. Falls back to the prose profile's sections when no
+    structured profile exists.
     """
     if structured_profile and structured_profile.get("clusters"):
+        by_title: dict[str, dict] = {}
+        for e in entries or []:
+            by_title.setdefault(_norm_title(e.get("title", "")), e)
         clusters = []
         for c in structured_profile["clusters"]:
+            titles = list(dict.fromkeys(list(c.get("representative_titles") or []) + list(c.get("members") or [])))
+            posters = _cluster_posters(titles, by_title, poster_limit)
             body = ""
             if c.get("description"):
                 body += "<p>" + str(escape(c["description"])) + "</p>"
@@ -854,7 +897,14 @@ def _dashboard_clusters(taste_profile: str, structured_profile: dict | None) -> 
             if c.get("representative_titles"):
                 body += ("<p><em>For example:</em> "
                          + str(escape(", ".join(c["representative_titles"][:6]))) + "</p>")
-            clusters.append({"heading": c.get("name") or c["label"], "body_html": Markup(body)})
+            clusters.append({
+                "heading": c.get("name") or c["label"],
+                "body_html": Markup(body),
+                "description": c.get("description") or "",
+                "strength": _taste_strength(c.get("weight")),
+                "posters": posters,
+                "more": max(len(titles) - len(posters), 0),
+            })
         return clusters
 
     clusters = []
@@ -897,7 +947,7 @@ def dashboard() -> str:
     tv_count = sum(1 for e in entries if e.get("content_type") == "tv")
     movie_count = sum(1 for e in entries if e.get("content_type") == "movie")
 
-    clusters = _dashboard_clusters(ctx.taste_profile, ctx.structured_profile)
+    clusters = _dashboard_clusters(ctx.taste_profile, ctx.structured_profile, entries)
     _ensure_user_store_once()
     not_for_you = _not_for_you(user_store.get_disliked_titles(config.EVENT_DB_PATH))
 

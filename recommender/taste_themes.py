@@ -115,7 +115,11 @@ def theme_prompt(tags: dict[str, list[str]], previous: list[dict]) -> str:
         "only for a theme of children's titles.\n"
         f"Map tags to themes: each theme lists the tags that are evidence for it, at most {MAX_THEME_TAGS} "
         "tags per theme, each tag in one theme only. If a theme needs more tags, split it. Map spelling "
-        "variants and synonyms to the same theme. Leave out tags that are facts or too vague.\n"
+        "variants and synonyms to the same theme.\n"
+        "Moods and relationships are tastes: \"feel-good\", \"bittersweet\", \"family drama\", \"romantic "
+        "drama\", \"coming of age\" belong in themes, and a household that carries many of them has a "
+        "theme for them. Leave out only facts about a title: its source (\"based on novel\", \"remake\"), "
+        "its format (\"miniseries\", \"ensemble cast\"), its cast (\"female lead\"), a city or decade.\n"
         "List themes in priority order: country and language themes first, family last.\n\n"
         + keep +
         "Return ONLY JSON: {\"themes\": [{\"id\": \"short-slug\", \"label\": \"plain descriptive label\", "

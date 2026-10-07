@@ -79,3 +79,9 @@ def test_failed_new_tag_call_keeps_themes(tmp_path):
 def test_duplicate_theme_ids_get_a_suffix():
     parsed = parse_themes(_answer([{"id": "a", "label": "A", "tags": ["x"]}, {"id": "a", "label": "B", "tags": ["y"]}]))
     assert [t["id"] for t in parsed] == ["a", "a-2"]
+
+
+def test_prompt_counts_moods_and_relationships_as_tastes():
+    prompt = theme_prompt({"A": ["feel-good"]}, [])
+    assert "Moods and relationships are tastes" in prompt
+    assert "based on novel" in prompt and "decade" in prompt

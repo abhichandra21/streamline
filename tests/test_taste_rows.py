@@ -90,7 +90,8 @@ def test_region_facts_for_films_shows_and_collections(tmp_path):
 
 
 def test_words_are_kept_while_members_mostly_overlap():
-    saved = {"uk": {"members": [f"T{i}" for i in range(10)], "name": "Cosy British mysteries"}}
+    from recommender.taste_rows import WORDS_VERSION
+    saved = {"uk": {"members": [f"T{i}" for i in range(10)], "name": "Cosy British mysteries", "version": WORDS_VERSION}}
     same = [{"id": "uk", "members": [f"T{i}" for i in range(10)] + ["New"]}]
     moved = [{"id": "uk", "members": ["A", "B", "C"]}]
     assert rows_needing_words(same, saved) == []
@@ -106,7 +107,7 @@ def test_words_prompt_has_the_voice_rules_and_members():
 
 def _setup_paths(tmp_path, monkeypatch):
     import config
-    for name in ("TASTE_TAGS_PATH", "TASTE_THEMES_PATH", "TASTE_WORDS_PATH"):
+    for name in ("TASTE_TAGS_PATH", "TASTE_THEMES_PATH", "TASTE_WORDS_PATH", "TASTE_PLACEMENTS_PATH"):
         monkeypatch.setattr(config, name, str(tmp_path / f"{name}.json"))
     monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path / "tmdb"))
 
@@ -119,6 +120,8 @@ def test_build_tag_profile_end_to_end_then_no_calls_on_rerun(tmp_path, monkeypat
         json.dumps({"Vera": ["cosy mystery", "based on book"], "Luther": ["cosy mystery"], "Kids Film": ["kids"]}),
         json.dumps({"themes": [{"id": "cosy", "label": "Cosy mysteries", "tags": ["cosy mystery"]},
                                {"id": "kids", "label": "Kids", "family": True, "tags": ["kids"]}]}),
+        # One usable tag each, so the AI places them once.
+        json.dumps({"Vera": "cosy", "Luther": "cosy", "Kids Film": "kids"}),
         json.dumps({"cosy": {"name": "Cosy British mysteries", "description": "You love a vicar.",
                              "positive_traits": ["cosy"], "mood_states": ["unwind"]},
                     "kids": {"name": "Family movie night", "description": "Saturday mornings."}}),
@@ -139,6 +142,7 @@ def test_failed_words_keep_the_rows_with_their_labels(tmp_path, monkeypatch):
     _setup_paths(tmp_path, monkeypatch)
     answers = [json.dumps({"Vera": ["cosy mystery"]}),
                json.dumps({"themes": [{"id": "cosy", "label": "Cosy mysteries", "tags": ["cosy mystery"]}]}),
+               json.dumps({"Vera": "cosy"}),
                "not json"]
     profile, _ = build_tag_profile({"Vera": 2.0}, {"Vera": "x"}, [], {}, make_mock_llm_sequence(answers), None)
     assert profile["clusters"][0]["label"] == "Cosy mysteries" and profile["clusters"][0]["name"] == ""
@@ -159,3 +163,55 @@ def test_unplaced_region_only_titles_count_in_the_warning():
     facts = {t: {"countries": {"US"}, "language": "en"} for t in loves}
     placed, unplaced = place_loves(loves, tags, THEMES, facts)
     assert any("5 of 5 loves fit no theme" in w for w in coverage_warnings(loves, unplaced, placed))
+
+
+def test_thin_evidence_titles_take_the_saved_ai_placement():
+    tags = {"Game of Thrones": ["fantasy adventure"], "Strong": ["police procedural", "serial killer"]}
+    placed, unplaced = place_loves(list(tags), tags, THEMES, {}, overrides={"Game of Thrones": 3})
+    assert placed[3] == ["Game of Thrones"] and placed[2] == ["Strong"]
+
+
+def test_an_ai_placement_cannot_break_the_region_rule():
+    tags = {"Ted Lasso": ["sports comedy"]}
+    facts = {"Ted Lasso": {"countries": {"US"}, "language": "en"}}
+    placed, unplaced = place_loves(list(tags), tags, THEMES, facts, overrides={"Ted Lasso": 0})
+    assert placed[0] == [] and unplaced == ["Ted Lasso"]
+
+
+def test_doubtful_titles_are_those_with_under_two_usable_tags():
+    from recommender.taste_rows import doubtful_titles
+    tags = {"A": ["car chase"], "B": ["car chase", "serial killer"], "C": ["based on book"], "D": ["british"]}
+    facts = {"D": {"countries": {"US"}, "language": "en"}}
+    assert doubtful_titles(list(tags), tags, THEMES, facts) == ["A", "C", "D"]
+
+
+def test_ai_placements_are_saved_and_never_asked_twice(tmp_path, monkeypatch):
+    from recommender.taste_rows import ai_placements
+    _setup_paths(tmp_path, monkeypatch)
+    client = make_mock_llm_sequence([json.dumps({"A": "action", "C": "none", "Z": "crime"})])
+    tags = {"A": ["car chase"], "C": ["based on book"]}
+    assert ai_placements(["A", "C"], tags, THEMES, client) == {"A": 3, "C": None}
+    rerun = make_mock_llm_sequence([])
+    assert ai_placements(["A", "C"], tags, THEMES, rerun) == {"A": 3, "C": None}
+    assert rerun.generate.call_count == 0
+
+
+def test_words_rewrite_once_when_the_words_version_changes():
+    from recommender.taste_rows import WORDS_VERSION
+    row = [{"id": "uk", "members": ["A"]}]
+    assert rows_needing_words(row, {"uk": {"members": ["A"], "version": WORDS_VERSION - 1}}) == row
+    assert rows_needing_words(row, {"uk": {"members": ["A"], "version": WORDS_VERSION}}) == []
+
+
+def test_words_prompt_spreads_members_and_shows_the_row_tags():
+    members = [f"T{i:03d}" for i in range(100)]
+    prompt = words_prompt([{"id": "uk", "label": "British", "members": members,
+                            "top_tags": ["british", "police procedural"]}])
+    assert "T000" in prompt and "T099" in prompt and "T001" not in prompt
+    assert "british, police procedural" in prompt
+
+
+def test_an_ai_none_keeps_the_title_out_instead_of_a_stray_tag():
+    tags = {"Room": ["car chase"]}
+    placed, unplaced = place_loves(list(tags), tags, THEMES, {}, overrides={"Room": None})
+    assert unplaced == ["Room"] and placed[3] == []

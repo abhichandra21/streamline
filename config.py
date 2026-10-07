@@ -217,6 +217,7 @@ STRUCTURED_TASTE_PROFILE_PATH = str(_ROOT / "recommender/cache/taste_profile_str
 TASTE_TAGS_PATH = str(_ROOT / "recommender/cache/taste_tags.json")
 TASTE_THEMES_PATH = str(_ROOT / "recommender/cache/taste_themes.json")
 TASTE_WORDS_PATH = str(_ROOT / "recommender/cache/taste_words.json")
+TASTE_PLACEMENTS_PATH = str(_ROOT / "recommender/cache/taste_placements.json")
 WATCH_INDEX_PATH = str(_ROOT / "recommender/cache/watch_index.json")
 FEEDBACK_PATH = str(_ROOT / "recommender/cache/feedback.json")
 TMDB_AUDIT_PATH = str(_ROOT / "recommender/cache/logs/tmdb_audit.txt")

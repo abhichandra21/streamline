@@ -3600,3 +3600,51 @@ def test_dashboard_clusters_head_with_the_name_and_fall_back_to_the_label():
     clusters = _dashboard_clusters("", {"clusters": [
         {"label": "British cozy mysteries", "name": "Cosy British mysteries"}, {"label": "Docs"}]})
     assert [c["heading"] for c in clusters] == ["Cosy British mysteries", "Docs"]
+
+
+def test_taste_strength_uses_calm_labels():
+    from recommender.web import _taste_strength
+    assert _taste_strength(1.0) == {"dots": 5, "label": "Your biggest love"}
+    assert _taste_strength(0.5)["label"] == "A big favourite"
+    assert _taste_strength(0.3)["label"] == "Regular habit"
+    assert _taste_strength(0.25)["label"] == "A soft spot"
+    assert _taste_strength(0.1) == {"dots": 1, "label": "Now and then"}
+    assert _taste_strength(None) is None
+
+
+def test_dashboard_clusters_carry_posters_strength_and_a_more_count():
+    from recommender.web import _dashboard_clusters
+    entries = [{"title": "Vera", "tmdb_id": 1, "content_type": "tv"},
+               {"title": "Line of Duty", "tmdb_id": 2, "content_type": "tv"},
+               {"title": "No Art", "tmdb_id": 3, "content_type": "tv"}]
+    structured = {"clusters": [{
+        "label": "Crime", "description": "You love detectives.", "weight": 1.0,
+        "representative_titles": ["Line of Duty"], "members": ["Vera", "Line of Duty", "No Art", "Unindexed"]}]}
+
+    def poster(tmdb_id, content_type, size="w300"):
+        return None if tmdb_id == 3 else f"/p/{tmdb_id}.jpg"
+
+    with patch("recommender.web._get_poster_url", side_effect=poster):
+        c = _dashboard_clusters("", structured, entries)[0]
+    assert [p["title"] for p in c["posters"]] == ["Line of Duty", "Vera"]
+    assert c["more"] == 2
+    assert c["strength"]["label"] == "Your biggest love"
+    assert c["description"] == "You love detectives."
+
+
+def test_dashboard_shows_top_six_tastes_and_folds_the_rest(client, monkeypatch):
+    import recommender.web as web
+    clusters = [{"heading": f"Taste {i}", "body_html": "", "description": f"About {i}",
+                 "strength": {"dots": 3, "label": "Regular habit"}, "posters": [], "more": 0}
+                for i in range(1, 9)]
+    monkeypatch.setattr(web, "_dashboard_clusters", lambda *a, **k: clusters)
+    monkeypatch.setattr(web, "_get_context", lambda: MagicMock(watch_index=MagicMock(entries=[]), taste_profile=""))
+    monkeypatch.setattr(web, "_load_enrichments", lambda: {})
+    monkeypatch.setattr(web, "_ensure_user_store_once", lambda: None)
+    monkeypatch.setattr(web.user_store, "get_disliked_titles", lambda path: [])
+    monkeypatch.setattr(web.query_history, "load", lambda limit=5: [])
+    html = client.get("/").get_data(as_text=True)
+    assert "What you <em>love</em> to watch" in html
+    assert "Regular habit" in html
+    assert html.index("Taste 6") < html.index('class="tastes-more"') < html.index("Taste 7")
+    assert "2 more sides of you" in html
