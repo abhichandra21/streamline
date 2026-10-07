@@ -81,7 +81,7 @@ def _write_json_atomic(data: object, path: str | Path) -> None:
 
 TAG_BATCH_SIZE = 25
 VOCAB_SHOWN = 200
-# Below this the vocabulary is too thin to demand reuse (the very first batches).
+# Below this the vocabulary is too thin to be worth showing (the very first batches).
 MIN_VOCAB_FOR_REUSE = 50
 MAX_TAGS = 8
 MAX_TAG_WORDS = 4
@@ -99,9 +99,13 @@ def tag_prompt(batch: list[tuple[str, str]], vocab: Counter) -> str:
         "\"korean\". Use \"british\" only for titles made in Britain (BBC, ITV, Channel 4 and the like, "
         "on any service), never for titles merely set or shot there. Keep \"set in india\" apart from \"hindi\".\n"
         "For example, Ted Lasso (American, set in England) and 1917 are not british; Grand Designs is.\n"
+        "Be specific. Never use a vague word on its own, like \"action\", \"drama\", \"comedy\", "
+        "\"psychological\", \"character-driven\", \"emotional\" or \"redemptive\"; say what kind "
+        "(\"heist caper\", \"slow-burn espionage\", \"grief dramedy\"). Name a shared universe or "
+        "franchise when there is one (\"marvel\", \"star wars\").\n"
         + (
-            "Use at least 3 tags from the existing tags below and at most 2 new ones per title. "
-            "Never write a spelling or synonym variant of an existing tag.\n"
+            "When an existing tag below says the same thing, use it exactly; never write a spelling or "
+            "synonym variant of one.\n"
             f"Existing tags: {shown}\n\n"
             if len(vocab) >= MIN_VOCAB_FOR_REUSE else "\n"
         )
@@ -156,7 +160,8 @@ def tag_titles(titles: list[str], enrichments: dict[str, str], client, path: str
     for batch in pending_batches(titles, enrichments, load_tags(path)):
         prompt = tag_prompt(batch, vocabulary(load_tags(path)))
         try:
-            text = client.generate(prompt, role="fast", max_tokens=4000, timeout=config.TIMEOUT_PROFILE_MERGE)
+            # The fast model's tags came out too vague to group ("action", "psychological").
+            text = client.generate(prompt, role="reason", max_tokens=4000, timeout=config.TIMEOUT_PROFILE_MERGE)
         except Exception as exc:
             log.warning("Taste tagging batch failed, will retry next build: %s", exc)
             continue

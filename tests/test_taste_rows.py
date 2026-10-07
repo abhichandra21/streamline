@@ -83,7 +83,7 @@ def test_region_facts_for_films_shows_and_collections(tmp_path):
     entries = [{"title": "Film", "content_type": "movie", "tmdb_id": 1},
                {"title": "Show", "content_type": "tv", "tmdb_id": 2}, {"title": "No id"}]
     facts = region_facts(entries, tmp_path, {"Saga Collection (2 films)": ["Film", "Missing"]})
-    assert facts["Film"] == {"countries": {"US", "GB"}, "language": "en"}
+    assert facts["Film"] == {"countries": {"US"}, "language": "en"}     # co-producers don't count
     assert facts["Show"] == {"countries": {"GB", "US"}, "language": "en"}
     assert facts["Saga Collection (2 films)"] == facts["Film"]
     assert "No id" not in facts

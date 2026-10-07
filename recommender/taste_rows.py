@@ -39,8 +39,9 @@ def region_facts(index_entries: list[dict], cache_dir: Path, collections: dict[s
             countries = {n.get("origin_country") for n in meta.get("networks") or [] if n.get("origin_country")}
             countries |= set(meta.get("origin_country") or [])
         else:
-            countries = set(meta.get("origin_country") or [])
-            countries |= {c.get("iso_3166_1") for c in meta.get("production_countries") or [] if c.get("iso_3166_1")}
+            # A film's origin, not its co-producers: 1917 is US-origin with GB money.
+            countries = set(meta.get("origin_country") or []) or {
+                c.get("iso_3166_1") for c in meta.get("production_countries") or [] if c.get("iso_3166_1")}
         facts[entry["title"]] = {"countries": countries, "language": meta.get("original_language") or ""}
     for key, members in collections.items():
         known = [facts[m] for m in members if m in facts]

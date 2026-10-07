@@ -39,10 +39,11 @@ def test_prompt_shows_vocabulary_rules_and_full_enrichment():
     vocab = Counter({"british": 30, "cosy mystery": 9, **{f"t{i}": 1 for i in range(60)}})
     prompt = tag_prompt([("Vera", "# Vera\n\nA long paragraph ending in tone words.")], vocab)
     assert "Existing tags: british, cosy mystery" in prompt
-    assert "at least 3" in prompt and "at most 2 new" in prompt
+    assert "at least 3" not in prompt and "Never use a vague word on its own" in prompt
+    assert "marvel" in prompt
     assert "made in Britain" in prompt and "set or shot" in prompt and "Ted Lasso" in prompt
     assert "ending in tone words" in prompt
-    assert "at least 3" not in tag_prompt([("Vera", "x")], Counter({"british": 1}))
+    assert "Existing tags" not in tag_prompt([("Vera", "x")], Counter({"british": 1}))
 
 
 def test_parse_keeps_known_titles_normalises_and_caps():
@@ -80,6 +81,7 @@ def test_tag_titles_saves_answers_and_makes_no_call_when_nothing_is_new(tmp_path
     assert tag_titles(["Vera"], {"Vera": "x"}, client, path)["Vera"][0] == "british"
     tag_titles(["Vera"], {"Vera": "x"}, client, path)
     assert client.generate.call_count == 1
+    assert client.generate.call_args.kwargs["role"] == "reason"     # the fast model's tags were too vague
 
 
 def test_a_failed_batch_leaves_titles_untagged_for_next_time(tmp_path):
