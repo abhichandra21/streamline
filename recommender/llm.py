@@ -178,7 +178,11 @@ class AnthropicClient(LLMClient):
         # Newer models can return thinking or fallback blocks before the text.
         text = "".join(block.text for block in message.content if block.type == "text")
         if not text:
-            raise RuntimeError(f"Anthropic response did not include text content (model={model})")
+            kinds = ", ".join(block.type for block in message.content) or "none"
+            raise RuntimeError(
+                f"Anthropic response did not include text content (model={model}, served by "
+                f"{message.model}, stop_reason={message.stop_reason}, blocks: {kinds}, "
+                f"output_tokens={message.usage.output_tokens})")
         return text
 
 
