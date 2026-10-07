@@ -408,8 +408,8 @@ def test_structured_ties_keep_newest_titles_first(monkeypatch):
     ]
     scores = {e.title: 1.0 for e in events}
     prompt = _structured_prompt(monkeypatch, False, events, scores)
-    assert "T399" in prompt and "T080" in prompt
-    assert "T079" not in prompt and "T000" not in prompt
+    assert "T399" in prompt and "T100" in prompt
+    assert "T099" not in prompt and "T000" not in prompt
 
 
 def test_structured_prompt_wording_follows_setting(monkeypatch):
@@ -483,3 +483,15 @@ def test_whole_profile_prefers_structured_and_falls_back_to_prose():
 def test_structured_prompt_gives_a_strong_country_or_language_its_own_cluster(monkeypatch):
     prompt = _structured_prompt(monkeypatch, False, [], {"A": 1.0})
     assert "British or Hindi series), give it its own cluster" in prompt
+
+
+def test_every_loved_title_is_sent_and_descriptions_are_cut(monkeypatch):
+    scores = {f"L{i:03d}": 2.0 for i in range(500)} | {f"U{i:03d}": 1.0 for i in range(400)}
+    import config
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    client = make_mock_llm(json.dumps({"version": 1, "clusters": []}))
+    build_structured_profile([], scores, {t: "word " * 200 for t in scores}, client)
+    prompt = client.generate.call_args[0][0]
+    assert all(f"L{i:03d} (score" in prompt for i in range(500))
+    assert sum(f"U{i:03d} (score" in prompt for i in range(400)) == 300
+    assert "word " * 60 not in prompt

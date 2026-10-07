@@ -13,13 +13,16 @@ from typing import Any
 import config
 from .ingestion.base import WatchEvent
 from .llm import LLMClient
+from .signals import STRONG_WEIGHT
 from .taste_profile_builder import _EQUAL_WEIGHT_NOTE, history_label, sort_scored
 
 log = logging.getLogger("recommender.structured_profile")
 
 ALLOWED_CO_VIEWING = {"personal", "family", "mixed", "unknown"}
-# Titles the structured profile sees, highest score first.
-STRUCTURED_INPUT_TITLES = 320
+# Every loved or followed title is sent; this many more fill in from the rest.
+STRUCTURED_EXTRA_TITLES = 300
+# Descriptions are cut to about this many characters to keep the prompt small.
+STRUCTURED_DESCRIPTION_CHARS = 250
 # Weight for a cluster whose member numbers were all unusable.
 EMPTY_CLUSTER_WEIGHT = 0.05
 FAMILY_WEIGHT_MULTIPLIER = 0.75
@@ -243,6 +246,13 @@ def parse_structured_profile_response(
     return apply_member_weights(validate_structured_profile(data), dict(scored))
 
 
+def _short(text: str) -> str:
+    """Cut a description at a word boundary near STRUCTURED_DESCRIPTION_CHARS."""
+    if len(text) <= STRUCTURED_DESCRIPTION_CHARS:
+        return text
+    return text[:STRUCTURED_DESCRIPTION_CHARS].rsplit(" ", 1)[0] + "..."
+
+
 def structured_prompt(
     events: list[WatchEvent],
     scores: dict[str, float],
@@ -253,11 +263,13 @@ def structured_prompt(
 
     Returns ("", []) when no title has an enrichment.
     """
-    scored = sort_scored(events, scores, enrichments)[:STRUCTURED_INPUT_TITLES]
+    scored = sort_scored(events, scores, enrichments)
+    strong = [item for item in scored if item[1] >= STRONG_WEIGHT]
+    scored = strong + [item for item in scored if item[1] < STRONG_WEIGHT][:STRUCTURED_EXTRA_TITLES]
     if not scored:
         return "", []
     lines = [
-        f"{number}. {title} (score: {score:.2f}): {enrichments[title]}"
+        f"{number}. {title} (score: {score:.2f}): {_short(enrichments[title])}"
         for number, (title, score) in enumerate(scored, start=1)
     ]
     less_like = ", ".join(f'"{title}"' for title in (negative_prefs or [])) or "none"
