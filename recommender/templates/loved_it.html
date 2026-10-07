@@ -16,7 +16,8 @@
   .lv-progress-track { height: 2px; background: var(--border); border-radius: 2px; overflow: hidden; margin-top: 0.45rem; }
   .lv-progress-fill { height: 100%; background: var(--yours); opacity: 0.75; }
   .lv-progress-sub { margin-top: 0.4rem; font-size: 0.58rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); text-align: right; }
-  .lv-progress-sub span + span::before { content: '\00b7'; margin: 0 0.45rem; }
+  /* A real character with its own margins, so phones that drop generated content or collapse spaces still separate the two parts. */
+  .lv-progress-sep { display: inline-block; margin: 0 0.45rem; }
 
   /* Source filter: plain links, so it needs no script and every choice is one tap. */
   .lv-sources { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1.5rem; }
@@ -181,7 +182,8 @@
        title is rated or has had its second look, so it stays the quiet number. #}
     <div class="lv-progress-text mono"><b>{{ seen }} of {{ total }}</b> seen</div>
     <div class="lv-progress-track"><div class="lv-progress-fill" style="width:{{ (seen * 100 / total) | round(1) }}%;"></div></div>
-    <div class="lv-progress-sub mono"><span>{{ rated }} rated</span><span>{{ judged }} of {{ total }} done</span></div>
+    {# Done only differs from seen while titles wait for their second look. #}
+    <div class="lv-progress-sub mono"><span>{{ rated }} rated</span>{% if judged != seen %}<span class="lv-progress-sep" aria-hidden="true">&middot;</span><span>{{ judged }} of {{ total }} done</span>{% endif %}</div>
   </div>
   {% endif %}
 </div>
