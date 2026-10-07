@@ -1678,15 +1678,27 @@ def _loved_archive() -> list:
 
 
 def _loved_ratings() -> dict[str, str]:
-    """Ratings keyed "type:id", read fresh. A followed show counts as loved already."""
+    """Ratings keyed "type:id", read fresh. A followed show counts as loved already.
+
+    Older ratings saved without a TMDB ID are matched to archive titles by name,
+    so Loved It never asks about them again or overwrites them.
+    """
     ratings = {
         f"tv:{t['tmdb_id']}": user_store.RATING_MORE
         for t in user_store.list_show_tracking(config.EVENT_DB_PATH) if t["state"] == "following"
     }
-    ratings.update(
-        (f"{r['content_type']}:{r['tmdb_id']}", user_store.normalize_rating(r["rating"]))
-        for r in user_store.load_ratings(config.EVENT_DB_PATH) if r.get("tmdb_id")
-    )
+    by_name = {}
+    for r in user_store.load_ratings(config.EVENT_DB_PATH):
+        rating = user_store.normalize_rating(r["rating"])
+        if r.get("tmdb_id"):
+            ratings[f"{r['content_type']}:{r['tmdb_id']}"] = rating
+        else:
+            by_name[(r["content_type"], r["normalized_title"])] = rating
+    if by_name:
+        for t in _loved_archive():
+            rating = by_name.get((t.content_type, user_store._normalize(t.title)))
+            if rating:
+                ratings.setdefault(t.key, rating)
     return ratings
 
 
@@ -1722,8 +1734,8 @@ def loved_it_page() -> str:
     source = request.args.get("source") or ""
     if source not in dict(LOVED_SOURCES):
         source = ""
-    page = {"titles": [], "judged": 0, "total": 0, "error": None, "second_pass": False,
-            "source": source, "sources": []}
+    page = {"titles": [], "judged": 0, "total": 0, "seen": 0, "rated": 0, "error": None,
+            "second_pass": False, "source": source, "sources": []}
     try:
         archive = _loved_archive()
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -1746,9 +1758,14 @@ def loved_it_page() -> str:
 
     # Each source keeps its own current set, so switching sources draws a full set.
     current_key = f"{_LOVED_CURRENT_KEY}:{source}" if source else _LOVED_CURRENT_KEY
-    by_key = {t.key: t for t in open_titles}
-    titles = [by_key[k] for k in _meta_json(current_key) if k in by_key]
     fresh = [t for t in open_titles if t.key not in seen_once]
+    # Keep only cached titles that belong to the current pass: while first-pass
+    # titles remain, a title seen once under another source waits its turn.
+    by_key = {t.key: t for t in (fresh or open_titles)}
+    titles = [by_key[k] for k in _meta_json(current_key) if k in by_key]
+    # Shown at least once, whatever the answer; rated means loved, not for me, or followed.
+    page["seen"] = len(scope) - len(fresh)
+    page["rated"] = sum(1 for t in scope if t.key in ratings)
     # Titles rated since (here or under another source) drop out; top the set back up.
     if len(titles) < loved_it.SET_SIZE and len(open_titles) > len(titles):
         in_set = {t.key for t in titles}
@@ -1770,12 +1787,21 @@ def loved_it_save():
     elsewhere while the set was open keeps that rating.
     """
     _ensure_user_store_once()
+    source = request.form.get("source") or ""
+    if source not in dict(LOVED_SOURCES):
+        source = ""
+    current_key = f"{_LOVED_CURRENT_KEY}:{source}" if source else _LOVED_CURRENT_KEY
+    # Only titles still in the open set count, so a repeated submit of the
+    # same set (double tap, retry) changes nothing the second time.
+    current = set(_meta_json(current_key))
     loved = set(request.form.getlist("loved"))
     not_for_me = set(request.form.getlist("notforme")) - loved
     by_key = {t.key: t for t in _loved_archive()}
     ratings = _loved_ratings()
     seen_once, retired = _loved_passes()
     for key in request.form.getlist("shown"):
+        if key not in current:
+            continue
         title = by_key.get(key)
         if title is None or key in ratings or key in retired:
             continue
@@ -1791,11 +1817,7 @@ def loved_it_save():
             seen_once.add(key)
     user_store.set_meta(config.EVENT_DB_PATH, _LOVED_SEEN_ONCE_KEY, json.dumps(sorted(seen_once)))
     user_store.set_meta(config.EVENT_DB_PATH, _LOVED_RETIRED_KEY, json.dumps(sorted(retired)))
-    source = request.form.get("source") or ""
-    if source not in dict(LOVED_SOURCES):
-        source = ""
-    user_store.set_meta(config.EVENT_DB_PATH,
-                        f"{_LOVED_CURRENT_KEY}:{source}" if source else _LOVED_CURRENT_KEY, "[]")
+    user_store.set_meta(config.EVENT_DB_PATH, current_key, "[]")
     Path(config.PROFILE_STALE_FLAG).touch()
     return redirect(url_for("loved_it_page", source=source or None))
 

@@ -1058,9 +1058,12 @@ def _profile_scores(
     }
 
     def keys_rated(rating: str) -> set[str]:
+        # Both the TMDB-matched title and the stored title, since two event titles
+        # can share one TMDB identity and the index keeps only one of them.
         return {
-            user_store.rating_score_key(r, key_for_tmdb)
+            key
             for r in ratings if user_store.normalize_rating(r["rating"]) == rating
+            for key in (user_store.rating_score_key(r, key_for_tmdb), r["title"])
         }
 
     followed = {

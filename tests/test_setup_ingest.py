@@ -811,3 +811,15 @@ def test_profile_scores_match_ratings_and_follows_by_tmdb_id(monkeypatch):
     scores = _profile_scores(events, {}, index, ratings, tracking)
     assert scores == {"Film": 2.0, "Vera": 2.0, "Plain": 1.0}
 
+
+
+def test_profile_scores_drop_every_alias_of_a_less_rated_title(monkeypatch):
+    import config
+    from recommender.setup import _profile_scores
+
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    events = [_make_event(title="Film", content_type="movie", series_name="Film"),
+              _make_event(title="Film (Extended)", content_type="movie", series_name="Film (Extended)")]
+    index = [{"title": "Film", "content_type": "movie", "tmdb_id": 1}]
+    ratings = [{"title": "Film (Extended)", "content_type": "movie", "tmdb_id": 1, "rating": "less"}]
+    assert _profile_scores(events, {}, index, ratings, []) == {}
