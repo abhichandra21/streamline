@@ -31,8 +31,8 @@ from recommender.ingestion.disney import parse as parse_disney
 from recommender.ingestion.hbo import parse as parse_hbo
 from recommender.ingestion.manual import parse as parse_manual
 from recommender import imdb_ratings, language_catalog
-from recommender.franchise import collapse_collections
-from recommender.signals import compute_scores
+from recommender.franchise import collapse_collections, collection_members
+from recommender.signals import STRONG_WEIGHT, compute_scores
 from recommender.tmdb_client import TmdbClient, TmdbMetadata, MatchHints
 from recommender.enricher import (
     enrich_batch,
@@ -41,9 +41,8 @@ from recommender.enricher import (
     is_identity_enrichment_index,
 )
 from recommender.taste_profile_builder import build as build_taste_profile
-from recommender.structured_profile import (
-    build_structured_profile, load_structured_profile, save_structured_profile,
-)
+from recommender.structured_profile import save_structured_profile
+from recommender.taste_rows import build_tag_profile
 from recommender.llm import create_client
 from recommender import watch_index as wi
 from recommender import user_store
@@ -1227,7 +1226,10 @@ def run_ingest_only() -> None:
     console.print("\n[green]All configured providers validated and persisted.[/green]")
 
 
-def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provider: str | None = None, profile_path: str | None = None) -> None:
+def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provider: str | None = None,
+              profile_path: str | None = None, rethink_themes: bool = False) -> None:
+    if rethink_themes:
+        refresh_profile = True
     if not config.TMDB_API_KEY:
         console.print("[red]Error: TMDB_API_KEY not set. Export it and re-run.[/red]")
         sys.exit(1)
@@ -1462,12 +1464,10 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
             events, metadata, index.entries, ratings,
             user_store.list_show_tracking(config.EVENT_DB_PATH),
         )
-        scores, enrichments = collapse_collections(
-            scores,
-            {e["title"]: e["tmdb_id"] for e in index.entries
-             if e.get("content_type") == "movie" and e.get("tmdb_id")},
-            enrichments, Path(config.CACHE_DIR),
-        )
+        film_ids = {e["title"]: e["tmdb_id"] for e in index.entries
+                    if e.get("content_type") == "movie" and e.get("tmdb_id")}
+        collections = collection_members(list(scores), film_ids, Path(config.CACHE_DIR))
+        scores, enrichments = collapse_collections(scores, film_ids, enrichments, Path(config.CACHE_DIR))
         negative_prefs = user_store.get_disliked_titles(config.EVENT_DB_PATH)
 
         # We don't know batch count until inside build(); use an indeterminate
@@ -1492,16 +1492,13 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
             structured_profile_skipped = False
             if not using_custom_path:
                 try:
-                    # Last build's names, so the weekly rebuild doesn't rename every row.
-                    previous = load_structured_profile(config.STRUCTURED_TASTE_PROFILE_PATH) or {}
-                    structured_profile = build_structured_profile(
-                        events,
-                        scores,
-                        enrichments,
-                        llm,
-                        negative_prefs=negative_prefs or None,
-                        previous_names=[c["name"] for c in previous.get("clusters", []) if c.get("name")],
+                    loves = {t: s for t, s in scores.items() if s >= STRONG_WEIGHT}
+                    structured_profile, warnings = build_tag_profile(
+                        loves, enrichments, index.entries, collections, llm,
+                        negative_prefs or None, rethink=rethink_themes,
                     )
+                    for warning in warnings:
+                        console.print(f"[yellow]{warning}[/yellow]")
                 except Exception as exc:
                     structured_profile_skipped = True
                     console.print(f"[yellow]Structured taste profile skipped: {exc}[/yellow]")
@@ -1561,6 +1558,9 @@ if __name__ == "__main__":
                         help="LLM provider (default: from config/env)")
     parser.add_argument("--profile-path", type=str, default=None,
                         help="Write taste profile to this path instead of the default")
+    parser.add_argument("--rethink-themes", action="store_true",
+                        help="Rebuild the taste themes from scratch, keeping theme ids where the taste "
+                             "still exists. Also rebuilds the prose taste profile, which is a paid call")
     args = parser.parse_args()
     from recommender.log import setup_logging
     setup_logging(level_override="DEBUG" if args.debug else None)
@@ -1572,4 +1572,5 @@ if __name__ == "__main__":
         run_ingest_only()
     else:
         run_setup(refresh_profile=args.refresh_profile, refresh_data=args.refresh_data,
-                  provider=args.provider, profile_path=args.profile_path)
+                  provider=args.provider, profile_path=args.profile_path,
+                  rethink_themes=args.rethink_themes)

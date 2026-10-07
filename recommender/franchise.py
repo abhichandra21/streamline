@@ -52,3 +52,15 @@ def collapse_collections(
         for title in members:
             del scores[title]
     return scores, enrichments
+
+
+def collection_members(titles: list[str], tmdb_ids: dict[str, int], cache_dir: Path) -> dict[str, list[str]]:
+    """The "<name> (<n> films)" key collapse_collections makes, mapped to its member titles."""
+    groups: dict[tuple[int, str], list[str]] = defaultdict(list)
+    for title in titles:
+        if title in tmdb_ids:
+            found = _collection(cache_dir, tmdb_ids[title])
+            if found:
+                groups[found].append(title)
+    return {f"{name} ({len(members)} films)": sorted(members)
+            for (_, name), members in groups.items() if len(members) >= 2}

@@ -1,6 +1,6 @@
 import json
 
-from recommender.franchise import collapse_collections
+from recommender.franchise import collapse_collections, collection_members
 
 
 def _cache(tmp_path, films):
@@ -33,3 +33,13 @@ def test_standalone_and_single_film_collections_pass_through(tmp_path):
 def test_missing_cache_file_counts_as_no_collection(tmp_path):
     out, _ = collapse_collections({"Film": 1.0}, {"Film": 99}, {}, _cache(tmp_path, {}))
     assert out == {"Film": 1.0}
+
+
+def test_collection_members_match_collapse_keys(tmp_path):
+    cache = _cache(tmp_path, {1: XMEN, 2: XMEN, 3: None})
+    scores = {"X-Men": 2.0, "X2": 0.3, "Solo": 1.0}
+    ids = {"X-Men": 1, "X2": 2, "Solo": 3}
+    collapsed, _ = collapse_collections(scores, ids, {}, cache)
+    members = collection_members(list(scores), ids, cache)
+    assert set(collapsed) - set(scores) == set(members)
+    assert members == {"X-Men Collection (2 films)": ["X-Men", "X2"]}
