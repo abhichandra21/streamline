@@ -365,7 +365,8 @@ def structured_prompt(
         "and someone pouring tea before the second body turns up. Grantchester and Father Brown handle "
         "the cosy end; Happy Valley and Line of Duty remind you the British can be properly terrifying.\"\n"
         "members lists the numbers of every history title in that cluster. Put each title "
-        f"in exactly one cluster, using at most {MAX_CLUSTERS} clusters.\n"
+        f"in exactly one cluster, using at most {MAX_CLUSTERS} clusters. Every number from 1 to {len(scored)} "
+        "must appear; if a group of titles fits none of your clusters, give it a cluster of its own.\n"
         "Use ISO-639-1 language codes like hi, en, ko, es, fr when known. "
         "Use ISO-3166 alpha-2 region codes like IN, GB, US, KR when known.\n"
         "Cluster weight and order are computed from members and the scores, so any cluster weight you give is ignored. "
@@ -415,12 +416,74 @@ def build_structured_profile(
         Path(config.STRUCTURED_TASTE_PROFILE_PATH).with_suffix(".response.txt").write_text(response_text)
     except OSError as exc:
         log.warning("Could not save the structured profile response: %s", exc)
+    response_text = _place_unplaced_titles(response_text, scored, enrichments, client)
     profile = parse_structured_profile_response(response_text, scored)
     # Inferred dislikes contradicted the household's loves, so only their own count.
     profile["negative_preferences"] = explicit_dislikes(negative_prefs)
     if not profile["clusters"]:
         raise ValueError("the model returned no taste clusters")
     return profile
+
+
+def _place_unplaced_titles(
+    response_text: str,
+    scored: list[tuple[str, float]],
+    enrichments: dict[str, str],
+    client: LLMClient,
+) -> str:
+    """Ask the fast model to file the titles the profile answer left out.
+
+    The reasoning model drops hundreds of titles from its member lists, and cluster
+    order comes from members, so leaving them out skews the order. Returns the
+    answer unchanged when nothing is missing or the follow-up fails.
+    """
+    try:
+        data = json.loads(_strip_json_fence(response_text))
+    except json.JSONDecodeError:
+        return response_text
+    clusters = [c for c in _as_list(data.get("clusters") if isinstance(data, dict) else None)
+                if isinstance(c, dict)][:MAX_CLUSTERS]
+    if not clusters:
+        return response_text
+    placed: set[int] = set()
+    for cluster in clusters:
+        for number in _as_list(cluster.get("members")):
+            try:
+                placed.add(int(number))
+            except (TypeError, ValueError):
+                continue
+    unplaced = [n for n in range(1, len(scored) + 1) if n not in placed]
+    if not unplaced:
+        return response_text
+    log.info("Structured profile left %d of %d titles unplaced; filing them", len(unplaced), len(scored))
+    prompt = (
+        "These are a household's taste clusters:\n"
+        + "\n".join(f"C{i}: {_clean_string(c.get('label'))}" for i, c in enumerate(clusters, start=1))
+        + "\n\nPut each title below in the cluster it fits best. Leave out a title only if it "
+        "fits none of them. Return ONLY JSON mapping cluster to title numbers, like "
+        "{\"C1\": [12, 40], \"C2\": [7]}.\n\n"
+        + "\n".join(f"{n}. {scored[n - 1][0]}: {_short(enrichments.get(scored[n - 1][0], ''))[:200]}"
+                    for n in unplaced)
+    )
+    try:
+        answer = json.loads(_strip_json_fence(client.generate(
+            prompt, role="fast", max_tokens=8000, timeout=config.TIMEOUT_PROFILE_MERGE)))
+    except Exception as exc:
+        log.warning("Could not file the unplaced profile titles: %s", exc)
+        return response_text
+    if not isinstance(answer, dict):
+        return response_text
+    wanted = set(unplaced)
+    for key, numbers in answer.items():
+        index = str(key).lstrip("Cc")
+        if not index.isdigit() or not 1 <= int(index) <= len(clusters):
+            continue
+        cluster = clusters[int(index) - 1]
+        for number in _as_list(numbers):
+            if isinstance(number, int) and number in wanted:
+                wanted.discard(number)
+                cluster["members"] = _as_list(cluster.get("members")) + [number]
+    return json.dumps(data)
 
 
 def save_structured_profile(profile: dict[str, Any], path: str | Path) -> None:

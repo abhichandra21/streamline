@@ -159,7 +159,7 @@ def test_build_structured_profile_sends_scores_and_negative_preferences():
         client=client,
         negative_prefs=["Generic Action Movie"],
     )
-    prompt = client.generate.call_args[0][0]
+    prompt = client.generate.call_args_list[0][0][0]
     assert "Kabhi Khushi Kabhie Gham (score: 0.93)" in prompt
     assert "Unknown" not in prompt
     assert "Generic Action Movie" in prompt
@@ -405,7 +405,7 @@ def _structured_prompt(monkeypatch, signals, events, scores):
     monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", signals)
     client = make_mock_llm(ONE_CLUSTER)
     build_structured_profile(events, scores, {t: "x" for t in scores}, client)
-    return client.generate.call_args[0][0]
+    return client.generate.call_args_list[0][0][0]
 
 
 def test_structured_ties_keep_newest_titles_first(monkeypatch):
@@ -502,7 +502,7 @@ def test_every_loved_title_is_sent_and_descriptions_are_cut(monkeypatch):
     monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
     client = make_mock_llm(ONE_CLUSTER)
     build_structured_profile([], scores, {t: "word " * 200 for t in scores}, client)
-    prompt = client.generate.call_args[0][0]
+    prompt = client.generate.call_args_list[0][0][0]
     assert all(f"L{i:03d} (score" in prompt for i in range(500))
     assert sum(f"U{i:03d} (score" in prompt for i in range(400)) == 300
     assert "word " * 90 not in prompt
@@ -568,7 +568,7 @@ def test_prompt_asks_for_names_and_offers_last_names_back(monkeypatch):
     monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
     client = make_mock_llm(ONE_CLUSTER)
     build_structured_profile([], {"A": 2.0}, {"A": "x"}, client, previous_names=["Cosy British mysteries"])
-    prompt = client.generate.call_args[0][0]
+    prompt = client.generate.call_args_list[0][0][0]
     assert "name is the headline the household sees" in prompt
     assert 'Names used last time: "Cosy British mysteries"' in prompt
     assert "Names used last time" not in _structured_prompt(monkeypatch, False, [], {"A": 2.0})
@@ -578,3 +578,34 @@ def test_prompt_states_the_cluster_limit(monkeypatch):
     from recommender.structured_profile import MAX_CLUSTERS
     prompt = _structured_prompt(monkeypatch, False, [], {"A": 2.0})
     assert f"using at most {MAX_CLUSTERS} clusters" in prompt
+
+
+def test_titles_the_answer_left_out_are_filed_by_a_second_call(monkeypatch):
+    import config
+    from tests.mock_llm import make_mock_llm_sequence
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    answer = json.dumps({"clusters": [{"label": "Crime", "members": [1]}, {"label": "Docs", "members": [2]}]})
+    client = make_mock_llm_sequence([answer, '{"C2": [3, 1, 99], "C9": [4]}'])
+    scores = {"A": 4.0, "B": 3.0, "C": 2.0, "D": 1.0}
+    profile = build_structured_profile([], scores, {t: "x" for t in scores}, client)
+    leftover_prompt = client.generate.call_args_list[1][0][0]
+    assert "C1: Crime" in leftover_prompt and "3. C" in leftover_prompt and "1. A" not in leftover_prompt
+    by_label = {c["label"]: c["members"] for c in profile["clusters"]}
+    assert by_label == {"Crime": ["A"], "Docs": ["B", "C"]}
+
+
+def test_no_second_call_when_every_title_is_placed(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    client = make_mock_llm(ONE_CLUSTER)
+    build_structured_profile([], {"A": 2.0}, {"A": "x"}, client)
+    assert client.generate.call_count == 1
+
+
+def test_a_failed_second_call_keeps_the_first_answer(monkeypatch):
+    import config
+    from tests.mock_llm import make_mock_llm_sequence
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    client = make_mock_llm_sequence([ONE_CLUSTER, "not json"])
+    profile = build_structured_profile([], {"A": 2.0, "B": 1.0}, {"A": "x", "B": "y"}, client)
+    assert profile["clusters"][0]["members"] == ["A"]
