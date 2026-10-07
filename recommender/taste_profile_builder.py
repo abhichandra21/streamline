@@ -34,18 +34,19 @@ _FAMILY_CLUSTER_PATTERNS = (
 # Cluster order should follow how much of the history each cluster covers, so
 # every prompt that describes clusters asks for an approximate title count.
 _CLUSTER_COUNT_NOTE = (
-    "Cluster by genre, tone, and style, not by language or country; mention language inside a "
-    "cluster's description if it matters. Assign each title to exactly one cluster and give the "
+    "Cluster by genre, tone, and style; when a country or language runs through many titles "
+    "across genres (for example British or Hindi series), give it its own cluster. Assign each title to exactly one cluster and give the "
     "count, like \"(~34 titles)\", so counts add up to the batch. Count titles marked "
     "\"More like this\" extra. List clusters largest first.\n"
 )
 
-_PROMPT_VERSION = "counts-v1"
+_PROMPT_VERSION = "face-v1"
 
 _EQUAL_WEIGHT_NOTE = (
-    "Every watched title has an equal baseline weight of 1.0. The owner curates heavily, "
-    "so watched generally means liked. Higher weights mark explicit \"More like this\" "
-    "feedback; lower weights mark \"Less like this\".\n"
+    "Each title's score says how sure we are it reflects this household's taste: 2 for titles "
+    "they rated \"More like this\" or follow, 1 for real viewing, 0.3 for titles known only from "
+    "a downloads list or a \"Seen it\" tap. A film franchise appears once, as "
+    "\"<collection> (n films)\".\n"
 )
 
 

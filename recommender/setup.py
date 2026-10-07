@@ -31,7 +31,8 @@ from recommender.ingestion.disney import parse as parse_disney
 from recommender.ingestion.hbo import parse as parse_hbo
 from recommender.ingestion.manual import parse as parse_manual
 from recommender import imdb_ratings, language_catalog
-from recommender.signals import compute_scores
+from recommender.franchise import collapse_collections, collection_members
+from recommender.signals import STRONG_WEIGHT, compute_scores
 from recommender.tmdb_client import TmdbClient, TmdbMetadata, MatchHints
 from recommender.enricher import (
     enrich_batch,
@@ -40,7 +41,8 @@ from recommender.enricher import (
     is_identity_enrichment_index,
 )
 from recommender.taste_profile_builder import build as build_taste_profile
-from recommender.structured_profile import build_structured_profile, save_structured_profile
+from recommender.structured_profile import save_structured_profile
+from recommender.taste_rows import build_tag_profile
 from recommender.llm import create_client
 from recommender import watch_index as wi
 from recommender import user_store
@@ -1039,6 +1041,46 @@ def _import_manual_events() -> list | None:
     return events
 
 
+def _profile_scores(
+    events: list[WatchEvent],
+    metadata: dict,
+    index_entries: list[dict],
+    ratings: list[dict],
+    tracking: list[dict],
+) -> dict[str, float]:
+    """Taste-profile scores. Ratings and follows match titles by TMDB ID.
+
+    With viewing signals off, More and Follow are built into the weights and
+    Less-rated titles are left out, so they only appear as "not for you".
+    """
+    key_for_tmdb = {
+        (e["content_type"], e["tmdb_id"]): e["title"]
+        for e in index_entries if e.get("tmdb_id")
+    }
+
+    def keys_rated(rating: str) -> set[str]:
+        # Both the TMDB-matched title and the stored title, since two event titles
+        # can share one TMDB identity and the index keeps only one of them.
+        return {
+            key
+            for r in ratings if user_store.normalize_rating(r["rating"]) == rating
+            for key in (user_store.rating_score_key(r, key_for_tmdb), r["title"])
+        }
+
+    followed = {
+        key_for_tmdb.get(("tv", t["tmdb_id"]), t["title"])
+        for t in tracking if t["state"] == "following"
+    }
+    scores = compute_scores(
+        events, metadata, config.RECENCY_HALF_LIFE_DAYS,
+        followed_keys=followed, more_keys=keys_rated(user_store.RATING_MORE),
+    )
+    if config.USE_VIEWING_SIGNALS:
+        return user_store.apply_rating_multipliers(scores, ratings, key_for_tmdb)
+    less = keys_rated(user_store.RATING_LESS)
+    return {key: score for key, score in scores.items() if key not in less}
+
+
 def _archive_events() -> list[WatchEvent]:
     """Turn "Seen it" archive entries into watch events for this run only.
 
@@ -1184,7 +1226,10 @@ def run_ingest_only() -> None:
     console.print("\n[green]All configured providers validated and persisted.[/green]")
 
 
-def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provider: str | None = None, profile_path: str | None = None) -> None:
+def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provider: str | None = None,
+              profile_path: str | None = None, rethink_themes: bool = False) -> None:
+    if rethink_themes:
+        refresh_profile = True
     if not config.TMDB_API_KEY:
         console.print("[red]Error: TMDB_API_KEY not set. Export it and re-run.[/red]")
         sys.exit(1)
@@ -1415,8 +1460,14 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                 f"{less_count} less like this, {neutral_count} neutral"
             )
 
-        scores = compute_scores(events, metadata, config.RECENCY_HALF_LIFE_DAYS)
-        scores = user_store.apply_rating_multipliers(scores, ratings)
+        scores = _profile_scores(
+            events, metadata, index.entries, ratings,
+            user_store.list_show_tracking(config.EVENT_DB_PATH),
+        )
+        film_ids = {e["title"]: e["tmdb_id"] for e in index.entries
+                    if e.get("content_type") == "movie" and e.get("tmdb_id")}
+        collections = collection_members(list(scores), film_ids, Path(config.CACHE_DIR))
+        scores, enrichments = collapse_collections(scores, film_ids, enrichments, Path(config.CACHE_DIR))
         negative_prefs = user_store.get_disliked_titles(config.EVENT_DB_PATH)
 
         # We don't know batch count until inside build(); use an indeterminate
@@ -1441,13 +1492,13 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
             structured_profile_skipped = False
             if not using_custom_path:
                 try:
-                    structured_profile = build_structured_profile(
-                        events,
-                        scores,
-                        enrichments,
-                        llm,
-                        negative_prefs=negative_prefs or None,
+                    loves = {t: s for t, s in scores.items() if s >= STRONG_WEIGHT}
+                    structured_profile, warnings = build_tag_profile(
+                        loves, enrichments, index.entries, collections, llm,
+                        negative_prefs or None, rethink=rethink_themes,
                     )
+                    for warning in warnings:
+                        console.print(f"[yellow]{warning}[/yellow]")
                 except Exception as exc:
                     structured_profile_skipped = True
                     console.print(f"[yellow]Structured taste profile skipped: {exc}[/yellow]")
@@ -1468,9 +1519,10 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                 console.print(f"  Structured taste profile saved → {config.STRUCTURED_TASTE_PROFILE_PATH}")
             except Exception as exc:
                 console.print(f"[yellow]Structured taste profile skipped: {exc}[/yellow]")
-                _remove_structured_profile(config.STRUCTURED_TASTE_PROFILE_PATH)
-        elif not using_custom_path and structured_profile_skipped:
-            _remove_structured_profile(config.STRUCTURED_TASTE_PROFILE_PATH)
+        if structured_profile is None and structured_profile_skipped:
+            # The home page and search read the structured profile, so the last good
+            # one stays in place rather than falling back to the prose profile.
+            console.print("[yellow]Previous structured taste profile kept.[/yellow]")
         if not using_custom_path:
             stale_flag = Path(config.PROFILE_STALE_FLAG)
             if stale_flag.exists():
@@ -1506,6 +1558,9 @@ if __name__ == "__main__":
                         help="LLM provider (default: from config/env)")
     parser.add_argument("--profile-path", type=str, default=None,
                         help="Write taste profile to this path instead of the default")
+    parser.add_argument("--rethink-themes", action="store_true",
+                        help="Rebuild the taste themes from scratch, keeping theme ids where the taste "
+                             "still exists. Also rebuilds the prose taste profile, which is a paid call")
     args = parser.parse_args()
     from recommender.log import setup_logging
     setup_logging(level_override="DEBUG" if args.debug else None)
@@ -1517,4 +1572,5 @@ if __name__ == "__main__":
         run_ingest_only()
     else:
         run_setup(refresh_profile=args.refresh_profile, refresh_data=args.refresh_data,
-                  provider=args.provider, profile_path=args.profile_path)
+                  provider=args.provider, profile_path=args.profile_path,
+                  rethink_themes=args.rethink_themes)

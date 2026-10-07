@@ -388,8 +388,11 @@ def _run_setup_with_stale_mocks(
     profile_path=None,
     structured_profile_path=None,
     structured_side_effect=None,
+    scores=None,
+    refresh_profile=True,
+    rethink_themes=False,
 ):
-    """Helper: run run_setup(refresh_profile=True) with all heavy lifting mocked out."""
+    """Helper: run run_setup with all heavy lifting mocked out; returns the tag-profile mock and console."""
     import config
     import recommender.setup as setup
     from unittest.mock import MagicMock, patch
@@ -418,12 +421,12 @@ def _run_setup_with_stale_mocks(
     mock_llm = MagicMock()
     mock_llm.provider = "anthropic"
 
-    structured_profile = {"version": 1, "clusters": []}
+    structured_profile = {"version": 1, "clusters": [{"label": "Fresh", "members": ["Loved"]}]}
     structured_patch = patch.object(
         setup,
-        "build_structured_profile",
+        "build_tag_profile",
         side_effect=structured_side_effect,
-        return_value=structured_profile,
+        return_value=(structured_profile, ["One row holds too much"]),
     )
 
     with patch.object(setup, "create_client", return_value=mock_llm), \
@@ -435,10 +438,13 @@ def _run_setup_with_stale_mocks(
          patch.object(setup.user_store, "apply_rating_multipliers", return_value={}), \
          patch.object(setup.user_store, "get_disliked_titles", return_value=[]), \
          patch.object(setup, "compute_scores", return_value={}), \
+         patch.object(setup, "_profile_scores", return_value=scores or {}), \
          patch.object(setup, "build_taste_profile", return_value="profile text"), \
-         structured_patch, \
-         patch.object(setup, "console"):
-        setup.run_setup(refresh_profile=True, profile_path=profile_path)
+         structured_patch as tag_profile, \
+         patch.object(setup, "console") as console:
+        setup.run_setup(refresh_profile=refresh_profile, profile_path=profile_path,
+                        rethink_themes=rethink_themes)
+    return tag_profile, console
 
 
 def test_stale_flag_not_cleared_for_custom_profile_path(tmp_path, monkeypatch):
@@ -486,11 +492,11 @@ def test_structured_profile_provider_failure_does_not_block_profile_rebuild(tmp_
     )
 
     assert (tmp_path / "taste_profile.txt").read_text() == "profile text"
-    assert not structured_path.exists()
+    assert "stale" in structured_path.read_text()
 
 
-def test_structured_profile_invalid_output_removes_stale_cache(tmp_path, monkeypatch):
-    """If the new structured profile is skipped, an older structured cache must not stay active."""
+def test_structured_profile_invalid_output_keeps_the_last_good_one(tmp_path, monkeypatch):
+    """If the new structured profile is skipped, the previous one stays in place."""
     structured_path = tmp_path / "taste_profile_structured.json"
     structured_path.write_text('{"version":1,"clusters":[{"label":"stale"}]}')
 
@@ -502,7 +508,31 @@ def test_structured_profile_invalid_output_removes_stale_cache(tmp_path, monkeyp
     )
 
     assert (tmp_path / "taste_profile.txt").read_text() == "profile text"
-    assert not structured_path.exists()
+    assert "stale" in structured_path.read_text()
+
+
+def test_tag_profile_gets_only_loves_and_its_warnings_are_printed(tmp_path, monkeypatch):
+    structured_path = tmp_path / "taste_profile_structured.json"
+    tag_profile, console = _run_setup_with_stale_mocks(
+        tmp_path, monkeypatch, structured_profile_path=structured_path,
+        scores={"Loved": 2.0, "Followed": 4.0, "Just watched": 1.0},
+    )
+    loves = tag_profile.call_args[0][0]
+    assert loves == {"Loved": 2.0, "Followed": 4.0}
+    assert tag_profile.call_args.kwargs["rethink"] is False
+    printed = " ".join(str(c) for c in console.print.call_args_list)
+    assert "One row holds too much" in printed
+    assert "Fresh" in structured_path.read_text()
+
+
+def test_rethink_themes_rebuilds_the_profile_and_asks_for_new_themes(tmp_path, monkeypatch):
+    import config
+    profile_file = tmp_path / "taste_profile.txt"
+    profile_file.write_text("old")
+    monkeypatch.setattr(config, "TASTE_PROFILE_PATH", str(profile_file))
+    tag_profile, _ = _run_setup_with_stale_mocks(
+        tmp_path, monkeypatch, scores={"Loved": 2.0}, refresh_profile=False, rethink_themes=True)
+    assert tag_profile.call_args.kwargs["rethink"] is True
 
 
 def test_refresh_imdb_ratings_reports_failure_without_raising(monkeypatch):
@@ -784,3 +814,42 @@ def test_refresh_profile_imports_manual_once_when_none_stored(monkeypatch, tmp_p
 
     setup._import_manual_events()  # what the --refresh-profile branch calls when none are stored
     assert len(load_events(config.EVENT_DB_PATH, provider="manual")) == 4
+
+
+def test_profile_scores_match_ratings_and_follows_by_tmdb_id(monkeypatch):
+    import config
+    from recommender.setup import _profile_scores
+
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    events = [
+        _make_event(platform="archive", title="Film", content_type="movie", series_name="Film"),
+        _make_event(platform="manual", title="Scary", content_type="movie", series_name="Scary"),
+        _make_event(platform="manual", title="Vera S1E1", series_name="Vera"),
+        _make_event(platform="netflix", title="Plain", content_type="movie", series_name="Plain"),
+    ]
+    index = [
+        {"title": "Film", "content_type": "movie", "tmdb_id": 1},
+        {"title": "Scary", "content_type": "movie", "tmdb_id": 2},
+        {"title": "Vera", "content_type": "tv", "tmdb_id": 3},
+    ]
+    ratings = [
+        {"title": "Film (Director's Cut)", "content_type": "movie", "tmdb_id": 1, "rating": "more"},
+        {"title": "Scary!", "content_type": "movie", "tmdb_id": 2, "rating": "less"},
+    ]
+    tracking = [{"tmdb_id": 3, "title": "Vera: Series 1", "state": "following"}]
+
+    scores = _profile_scores(events, {}, index, ratings, tracking)
+    assert scores == {"Film": 2.0, "Vera": 2.0, "Plain": 1.0}
+
+
+
+def test_profile_scores_drop_every_alias_of_a_less_rated_title(monkeypatch):
+    import config
+    from recommender.setup import _profile_scores
+
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    events = [_make_event(title="Film", content_type="movie", series_name="Film"),
+              _make_event(title="Film (Extended)", content_type="movie", series_name="Film (Extended)")]
+    index = [{"title": "Film", "content_type": "movie", "tmdb_id": 1}]
+    ratings = [{"title": "Film (Extended)", "content_type": "movie", "tmdb_id": 1, "rating": "less"}]
+    assert _profile_scores(events, {}, index, ratings, []) == {}

@@ -19,6 +19,7 @@
   <script>
     // Restore the collapsed rail before first paint so it never flashes wide.
     try { if (localStorage.getItem('sidebar') === 'rail') document.documentElement.classList.add('sb-rail'); } catch (e) {}
+    document.documentElement.classList.add('js');
   </script>
 
   <style>
@@ -807,6 +808,15 @@
       .recent-item:nth-of-type(n+4) { display: none; }
       .recent-all { align-self: flex-start; color: var(--accent) !important; }
     }
+    /* Short list that opens into a long one (<details class="more-list">).
+       Without script the summary stays on top and reads "Show fewer" when open.
+       With script the summary hides once open and the "Show fewer" button at
+       the bottom of the list closes it. */
+    .more-list .when-open, .more-list[open] .when-closed { display: none; }
+    .more-list[open] .when-open { display: inline; }
+    .more-list .more-list-fewer { display: none; }
+    .js .more-list[open] > summary { display: none; }
+    .js .more-list[open] .more-list-fewer { display: flex; }
   </style>
 </head>
 
@@ -953,6 +963,21 @@
   <a href="#" class="nav-sheet-scrim" aria-label="Close menu"></a>
 
   <script>
+    // "Show fewer" closes its list and, if the list's top has scrolled away,
+    // brings the place the list started back into view.
+    document.addEventListener('click', function(evt) {
+      var btn = evt.target.closest('.more-list-fewer');
+      if (!btn) return;
+      var list = btn.closest('details.more-list');
+      if (!list) return;
+      list.open = false;
+      var summary = list.querySelector(':scope > summary');
+      if (summary && summary.getBoundingClientRect().top < 0) {
+        summary.scrollIntoView({block: 'center'});
+      }
+      if (summary) summary.focus({preventScroll: true});
+    });
+
     function toggleSidebar() {
       var rail = document.documentElement.classList.toggle('sb-rail');
       var label = rail ? 'Expand sidebar' : 'Collapse sidebar';

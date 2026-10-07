@@ -11,6 +11,17 @@ from recommender.structured_profile import (
 from recommender.query_engine import QueryIntent
 from tests.mock_llm import make_mock_llm
 
+import pytest
+
+ONE_CLUSTER = json.dumps({"version": 1, "clusters": [{"label": "Any", "members": [1]}]})
+
+
+@pytest.fixture(autouse=True)
+def _structured_path_in_tmp(tmp_path, monkeypatch):
+    """Builds save the raw answer next to the structured profile; keep it out of the real cache."""
+    import config
+    monkeypatch.setattr(config, "STRUCTURED_TASTE_PROFILE_PATH", str(tmp_path / "structured.json"))
+
 
 def make_intent(**overrides):
     values = {
@@ -148,16 +159,16 @@ def test_build_structured_profile_sends_scores_and_negative_preferences():
         client=client,
         negative_prefs=["Generic Action Movie"],
     )
-    prompt = client.generate.call_args[0][0]
+    prompt = client.generate.call_args_list[0][0][0]
     assert "Kabhi Khushi Kabhie Gham (score: 0.93)" in prompt
     assert "Unknown" not in prompt
     assert "Generic Action Movie" in prompt
     assert "ISO-639-1" in prompt
     assert "ISO-3166 alpha-2" in prompt
-    assert "not raw watch frequency" in prompt
+    assert "computed from members" in prompt
     assert "creator_affinities entries must include weight, traits, and clusters" in prompt
     assert "language_region_affinities entries must include weight, languages, regions, traits, and applies_to" in prompt
-    assert "negative_preferences should include explicit dislikes first" in prompt
+    assert "negative_preferences entries must include label, weight and applies_to" in prompt
     assert profile["clusters"][0]["label"] == "Hindi family dramas"
 
 
@@ -392,9 +403,9 @@ def test_select_profile_slice_includes_negative_preferences_for_selected_cluster
 def _structured_prompt(monkeypatch, signals, events, scores):
     import config
     monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", signals)
-    client = make_mock_llm(json.dumps({"version": 1, "clusters": []}))
+    client = make_mock_llm(ONE_CLUSTER)
     build_structured_profile(events, scores, {t: "x" for t in scores}, client)
-    return client.generate.call_args[0][0]
+    return client.generate.call_args_list[0][0][0]
 
 
 def test_structured_ties_keep_newest_titles_first(monkeypatch):
@@ -404,17 +415,197 @@ def test_structured_ties_keep_newest_titles_first(monkeypatch):
         WatchEvent(platform="netflix", title=f"T{i:03d}", content_type="movie", series_name=f"T{i:03d}",
                    watched_duration=timedelta(minutes=90), total_duration=None,
                    timestamp=datetime(2024, 1, 1) + timedelta(days=i), profile="p")
-        for i in range(200)
+        for i in range(400)
     ]
     scores = {e.title: 1.0 for e in events}
     prompt = _structured_prompt(monkeypatch, False, events, scores)
-    assert "T199" in prompt and "T040" in prompt
-    assert "T039" not in prompt and "T000" not in prompt
+    assert "T399" in prompt and "T100" in prompt
+    assert "T099" not in prompt and "T000" not in prompt
 
 
 def test_structured_prompt_wording_follows_setting(monkeypatch):
     off = _structured_prompt(monkeypatch, False, [], {"A": 1.0})
-    assert "equal baseline weight of 1.0" in off
+    assert "0.3 for titles known only from a downloads list" in off
     assert "engagement" not in off
     on = _structured_prompt(monkeypatch, True, [], {"A": 0.5})
     assert "engagement scores" in on
+
+
+def _cluster(label, members, co_viewing="personal"):
+    return {"label": label, "co_viewing": co_viewing, "members": members}
+
+
+def _parse(clusters, scored):
+    return parse_structured_profile_response(json.dumps({"version": 1, "clusters": clusters}), scored)
+
+
+SCORED = [("Line of Duty", 2.0), ("Vera", 2.0), ("Marvel (3 films)", 0.3), ("Cars", 1.0), ("Frozen", 1.0),
+          ("Moana", 1.0)]
+
+
+def test_member_scores_set_cluster_weight_and_order():
+    profile = _parse([_cluster("Spectacle", [3]), _cluster("British crime", [1, 2])], SCORED)
+    assert [(c["label"], c["weight"]) for c in profile["clusters"]] == [
+        ("British crime", 1.0), ("Spectacle", 0.075)]
+    assert profile["clusters"][0]["members"] == ["Line of Duty", "Vera"]
+
+
+def test_bad_member_numbers_are_ignored_and_empty_clusters_sort_last():
+    profile = _parse([_cluster("Odd", [0, 99, "x"]), _cluster("Crime", [1, 1]),
+                      _cluster("Repeat", [1])], SCORED)
+    assert [c["label"] for c in profile["clusters"]] == ["Crime", "Odd", "Repeat"]
+    assert profile["clusters"][1]["weight"] == 0.05
+
+
+def test_family_cluster_sorts_after_personal_even_when_larger():
+    profile = _parse([_cluster("Kids", [4, 5, 6], co_viewing="family"), _cluster("Crime", [1])], SCORED)
+    assert [c["label"] for c in profile["clusters"]] == ["Crime", "Kids"]
+
+
+def test_members_survive_save_and_load(tmp_path):
+    profile = _parse([_cluster("Crime", [1, 2])], SCORED)
+    path = tmp_path / "structured.json"
+    save_structured_profile(profile, path)
+    assert load_structured_profile(path)["clusters"][0]["members"] == ["Line of Duty", "Vera"]
+
+
+def test_structured_prompt_numbers_titles_and_asks_for_members(monkeypatch):
+    prompt = _structured_prompt(monkeypatch, False, [], {"A": 1.0, "B": 2.0})
+    assert "1. B (score: 2.00)" in prompt and "2. A (score: 1.00)" in prompt
+    assert "members lists the numbers" in prompt
+
+
+def test_structured_profile_text_lists_every_cluster_in_order():
+    from recommender.structured_profile import structured_profile_text
+    profile = _parse([_cluster("Spectacle", [3]), _cluster("British crime", [1, 2])], SCORED)
+    text = structured_profile_text(profile)
+    assert text.index("British crime") < text.index("Spectacle")
+    assert structured_profile_text(None) == ""
+
+
+def test_whole_profile_prefers_structured_and_falls_back_to_prose():
+    from types import SimpleNamespace
+    from recommender.query_engine import whole_profile
+    profile = _parse([_cluster("British crime", [1])], SCORED)
+    assert "British crime" in whole_profile(SimpleNamespace(structured_profile=profile, taste_profile="prose"))
+    assert whole_profile(SimpleNamespace(structured_profile=None, taste_profile="prose")) == "prose"
+
+
+def test_structured_prompt_gives_a_strong_country_or_language_its_own_cluster(monkeypatch):
+    prompt = _structured_prompt(monkeypatch, False, [], {"A": 1.0})
+    assert "British or Hindi series), give it its own cluster" in prompt
+
+
+def test_every_loved_title_is_sent_and_descriptions_are_cut(monkeypatch):
+    scores = {f"L{i:03d}": 2.0 for i in range(500)} | {f"U{i:03d}": 1.0 for i in range(400)}
+    import config
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    client = make_mock_llm(ONE_CLUSTER)
+    build_structured_profile([], scores, {t: "word " * 200 for t in scores}, client)
+    prompt = client.generate.call_args_list[0][0][0]
+    assert all(f"L{i:03d} (score" in prompt for i in range(500))
+    assert sum(f"U{i:03d} (score" in prompt for i in range(400)) == 300
+    assert "word " * 90 not in prompt
+
+
+def test_descriptions_drop_the_title_heading_and_blank_lines():
+    from recommender.structured_profile import _short
+    assert _short("# Line of Duty\n\nA taut British\n\nprocedural.") == "A taut British procedural."
+
+
+def test_an_answer_with_no_clusters_is_a_failure_and_is_kept_for_diagnosis(tmp_path):
+    client = make_mock_llm(json.dumps({"version": 1, "clusters": []}))
+    with pytest.raises(ValueError, match="no taste clusters"):
+        build_structured_profile([], {"A": 1.0}, {"A": "x"}, client)
+    assert '"clusters": []' in (tmp_path / "structured.response.txt").read_text()
+
+
+def test_clusters_for_one_country_merge_into_one():
+    profile = _parse([
+        {"label": "British thrillers", "co_viewing": "personal", "regions": ["GB"], "members": [1]},
+        {"label": "British cozy mysteries", "co_viewing": "personal", "regions": ["GB"], "members": [2]},
+        {"label": "Action", "co_viewing": "personal", "regions": ["US"], "members": [3]},
+    ], SCORED)
+    labels = [c["label"] for c in profile["clusters"]]
+    assert labels == ["British: thrillers; cozy mysteries", "Action"]
+    assert profile["clusters"][0]["members"] == ["Line of Duty", "Vera"]
+
+
+def test_dislikes_come_only_from_the_households_own_titles(monkeypatch):
+    client = make_mock_llm(json.dumps({"version": 1, "clusters": [{"label": "Any", "members": [1]}],
+                                       "negative_preferences": [{"label": "Bleak drama"}]}))
+    profile = build_structured_profile([], {"A": 1.0}, {"A": "x"}, client, negative_prefs=["Scream", "It"])
+    assert [n["label"] for n in profile["negative_preferences"]] == ["Titles marked Not for me: Scream, It"]
+
+
+def test_clusters_keep_their_description():
+    profile = _parse([{"label": "Crime", "description": "You love slow-burn detectives.", "members": [1]}], SCORED)
+    assert profile["clusters"][0]["description"] == "You love slow-burn detectives."
+
+
+def test_clusters_keep_a_display_name_apart_from_the_search_label():
+    profile = validate_structured_profile({"clusters": [
+        {"label": "British cozy mysteries", "name": "Cosy British mysteries"}, {"label": "Docs"}]})
+    assert profile["clusters"][0]["label"] == "British cozy mysteries"
+    assert profile["clusters"][0]["name"] == "Cosy British mysteries"
+    assert profile["clusters"][1]["name"] == ""
+
+
+def test_merged_country_cluster_keeps_the_name_of_its_biggest_part():
+    from recommender.structured_profile import merge_region_clusters
+    part = {"co_viewing": "personal", "regions": ["GB"], "description": ""}
+    profile = merge_region_clusters({"clusters": [
+        {**part, "label": "British thrillers", "name": "Tense British thrillers", "members": ["A"]},
+        {**part, "label": "British mysteries", "name": "Cosy British mysteries", "members": ["B", "C"]},
+    ]})
+    assert len(profile["clusters"]) == 1
+    assert profile["clusters"][0]["name"] == "Cosy British mysteries"
+    assert "name_size" not in profile["clusters"][0]
+
+
+def test_prompt_asks_for_names_and_offers_last_names_back(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    client = make_mock_llm(ONE_CLUSTER)
+    build_structured_profile([], {"A": 2.0}, {"A": "x"}, client, previous_names=["Cosy British mysteries"])
+    prompt = client.generate.call_args_list[0][0][0]
+    assert "name is the headline the household sees" in prompt
+    assert 'Names used last time: "Cosy British mysteries"' in prompt
+    assert "Names used last time" not in _structured_prompt(monkeypatch, False, [], {"A": 2.0})
+
+
+def test_prompt_states_the_cluster_limit(monkeypatch):
+    from recommender.structured_profile import MAX_CLUSTERS
+    prompt = _structured_prompt(monkeypatch, False, [], {"A": 2.0})
+    assert f"using at most {MAX_CLUSTERS} clusters" in prompt
+
+
+def test_titles_the_answer_left_out_are_filed_by_a_second_call(monkeypatch):
+    import config
+    from tests.mock_llm import make_mock_llm_sequence
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    answer = json.dumps({"clusters": [{"label": "Crime", "members": [1]}, {"label": "Docs", "members": [2]}]})
+    client = make_mock_llm_sequence([answer, '{"C2": [3, 1, 99], "C9": [4]}'])
+    scores = {"A": 4.0, "B": 3.0, "C": 2.0, "D": 1.0}
+    profile = build_structured_profile([], scores, {t: "x" for t in scores}, client)
+    leftover_prompt = client.generate.call_args_list[1][0][0]
+    assert "C1: Crime" in leftover_prompt and "3. C" in leftover_prompt and "1. A" not in leftover_prompt
+    by_label = {c["label"]: c["members"] for c in profile["clusters"]}
+    assert by_label == {"Crime": ["A"], "Docs": ["B", "C"]}
+
+
+def test_no_second_call_when_every_title_is_placed(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    client = make_mock_llm(ONE_CLUSTER)
+    build_structured_profile([], {"A": 2.0}, {"A": "x"}, client)
+    assert client.generate.call_count == 1
+
+
+def test_a_failed_second_call_keeps_the_first_answer(monkeypatch):
+    import config
+    from tests.mock_llm import make_mock_llm_sequence
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    client = make_mock_llm_sequence([ONE_CLUSTER, "not json"])
+    profile = build_structured_profile([], {"A": 2.0, "B": 1.0}, {"A": "x", "B": "y"}, client)
+    assert profile["clusters"][0]["members"] == ["A"]

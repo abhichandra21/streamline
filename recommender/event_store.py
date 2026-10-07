@@ -354,6 +354,45 @@ def load_events(db_path: str, provider: str | None = None) -> list[WatchEvent]:
         conn.close()
 
 
+# Exports with no per-play date; their events carry the import time (see ingestion/hbo.py).
+UNDATED_PROVIDERS = frozenset({"hbo"})
+# Plex scrobbles before this were testing ("mark as played"), not watching.
+PLEX_DATED_FROM = "2026-10-08"
+
+
+def last_played(db_path: str) -> dict[tuple[str, str], str]:
+    """Latest real play per (title, content_type), keyed like the watch index (series name for shows).
+
+    Exports often file an episode as a movie ("A Place of Hiding-Lynley S1")
+    that TMDB then indexes as a show, so callers fall back to the other type
+    when the typed key is missing.
+
+    List providers (the downloads list, Seen It) and undated exports are left
+    out: their timestamps are when setup ran or the title was marked, not when
+    it was watched.
+    """
+    from recommender.signals import LIST_PLATFORMS
+    if not Path(db_path).exists():
+        return {}
+    conn = _connect(db_path)
+    try:
+        if not conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='watch_events'"
+        ).fetchone():
+            return {}
+        undated = sorted(LIST_PLATFORMS | UNDATED_PROVIDERS)
+        marks = ",".join("?" for _ in undated)
+        rows = conn.execute(
+            "SELECT CASE content_type WHEN 'tv' THEN series_name ELSE title END, content_type, "
+            f"MAX(timestamp_iso) FROM watch_events WHERE provider NOT IN ({marks}) "
+            "AND NOT (provider = 'plex' AND timestamp_iso < ?) GROUP BY 1, 2",
+            (*undated, PLEX_DATED_FROM),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {(key, ct): ts for key, ct, ts in rows}
+
+
 def get_import_info(db_path: str) -> dict[str, dict]:
     """Return per-provider import metadata with event counts."""
     if not Path(db_path).exists():

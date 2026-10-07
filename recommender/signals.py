@@ -7,17 +7,49 @@ from .ingestion.base import WatchEvent
 from .tmdb_client import TmdbMetadata
 
 
+# Bulk sources that say a title was seen, not that it was chosen and watched.
+LIST_PLATFORMS = frozenset({"manual", "archive"})
+LIST_WEIGHT = 0.3
+STRONG_WEIGHT = 2.0
+
+
+def profile_weights(
+    events: list[WatchEvent],
+    followed_keys: set[str] | frozenset[str],
+    more_keys: set[str] | frozenset[str],
+) -> dict[str, float]:
+    """Real viewing sets the weight; the downloads list and Seen it taps only fill in.
+
+    More and Follow are the owner's own word, so they lift any title to full strength.
+    """
+    grouped: dict[str, list[WatchEvent]] = defaultdict(list)
+    for e in events:
+        grouped[e.series_name if e.content_type == "tv" else e.title].append(e)
+    weights = {}
+    for key, evts in grouped.items():
+        base = 1.0 if any(e.platform not in LIST_PLATFORMS for e in evts) else LIST_WEIGHT
+        if key in more_keys or key in followed_keys:
+            base = max(base, 1.0) * STRONG_WEIGHT
+        weights[key] = base
+    return weights
+
+
 def compute_scores(
     events: list[WatchEvent],
     metadata: dict[str | tuple[str, str], TmdbMetadata],
     recency_half_life_days: int = 90,
+    followed_keys: set[str] | frozenset[str] = frozenset(),
+    more_keys: set[str] | frozenset[str] = frozenset(),
 ) -> dict[str, float]:
     """
-    Returns {series_name_or_title: implicit_score (0.0-1.0)}.
+    Returns {series_name_or_title: implicit_score}.
     Groups TV events by series_name; movies by title.
-    Weights from config.yaml: completion, rewatch, recency.
-    Unless scoring.use_viewing_signals is on, every watched title scores 1.0.
+    Unless scoring.use_viewing_signals is on, scores come from profile_weights().
+    When on: completion, rewatch and recency weights from config.yaml (0.0-1.0).
     """
+    if not config.USE_VIEWING_SIGNALS:
+        return profile_weights(events, followed_keys, more_keys)
+
     today = datetime.now()
 
     grouped: dict[str, list[WatchEvent]] = defaultdict(list)
@@ -27,10 +59,6 @@ def compute_scores(
 
     scores: dict[str, float] = {}
     for key, evts in grouped.items():
-        if not config.USE_VIEWING_SIGNALS:
-            scores[key] = 1.0
-            continue
-
         content_type = evts[0].content_type
         meta = metadata.get((key, content_type)) or metadata.get(key)
 

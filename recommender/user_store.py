@@ -440,16 +440,28 @@ def get_disliked_titles(db_path: str) -> list[str]:
         conn.close()
 
 
+def rating_score_key(entry: dict, key_for_tmdb: dict[tuple[str, int], str] | None) -> str:
+    """The score key a rating belongs to: by TMDB ID when known, else its stored title."""
+    if key_for_tmdb and entry.get("tmdb_id"):
+        key = key_for_tmdb.get((entry.get("content_type"), entry["tmdb_id"]))
+        if key:
+            return key
+    return entry["title"]
+
+
 def apply_rating_multipliers(scores: dict[str, float],
-                             ratings: list[dict]) -> dict[str, float]:
+                             ratings: list[dict],
+                             key_for_tmdb: dict[tuple[str, int], str] | None = None) -> dict[str, float]:
     """Apply liked/disliked multipliers to engagement scores.
 
     "More like this" gets a 1.3x boost; "less like this" gets a
-    0.5x penalty; "it was fine" is deliberately neutral.
+    0.5x penalty; "it was fine" is deliberately neutral. Ratings
+    match their title by TMDB ID through key_for_tmdb when given,
+    since a stored title can differ from the watch-index title.
     """
     modified = dict(scores)
     for entry in ratings:
-        title = entry["title"]
+        title = rating_score_key(entry, key_for_tmdb)
         rating = normalize_rating(entry["rating"])
         if title in modified:
             if rating == RATING_MORE:
@@ -493,9 +505,14 @@ def find_conflict(db_path: str, content_type: str, tmdb_id: int) -> dict | None:
 
 
 def add_to_archive(db_path: str, title: str, content_type: str,
-                   tmdb_id: int | None = None, source: str = "web") -> None:
-    """Upsert a manual archive entry."""
-    now = _now_iso()
+                   tmdb_id: int | None = None, source: str = "web",
+                   watched_at: str | None = None) -> None:
+    """Upsert a manual archive entry.
+
+    watched_at defaults to now. Pass "" when the date is unknown (Seen It: watched
+    at some point), so the Archive's recency sort doesn't treat it as today.
+    """
+    now = _now_iso() if watched_at is None else watched_at
     norm = _normalize(title)
     conn = _connect(db_path)
     try:
@@ -527,14 +544,17 @@ def add_to_archive(db_path: str, title: str, content_type: str,
 
 def mark_watched_from_watchlist(db_path: str, title: str, content_type: str,
                                 rating: str | None = None,
-                                tmdb_id: int | None = None) -> None:
+                                tmdb_id: int | None = None,
+                                watched_at: str | None = None) -> None:
     """Atomic: remove from saved_titles, add to manual_archive, optionally rate.
 
+    watched_at defaults to now; "" means the watch date is unknown (Seen It).
     If any step fails, the entire transaction rolls back.
     """
     if rating and rating != "clear":
         rating = normalize_rating(rating)
     now = _now_iso()
+    marked = now if watched_at is None else watched_at
     norm = _normalize(title)
     conn = _connect(db_path)
     try:
@@ -562,7 +582,7 @@ def mark_watched_from_watchlist(db_path: str, title: str, content_type: str,
                     "ON CONFLICT (content_type, tmdb_id) WHERE tmdb_id IS NOT NULL "
                     "DO UPDATE SET title=excluded.title, normalized_title=excluded.normalized_title, "
                     "watched_at=excluded.watched_at, source=excluded.source",
-                    (title, norm, content_type, tmdb_id, now),
+                    (title, norm, content_type, tmdb_id, marked),
                 )
             else:
                 conn.execute(
@@ -572,7 +592,7 @@ def mark_watched_from_watchlist(db_path: str, title: str, content_type: str,
                     "ON CONFLICT (content_type, normalized_title) WHERE tmdb_id IS NULL "
                     "DO UPDATE SET title=excluded.title, watched_at=excluded.watched_at, "
                     "source=excluded.source",
-                    (title, norm, content_type, now),
+                    (title, norm, content_type, marked),
                 )
 
             # Optional rating

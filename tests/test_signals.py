@@ -4,13 +4,13 @@ import math
 from datetime import datetime, timedelta
 from recommender.ingestion.base import WatchEvent
 from recommender.tmdb_client import TmdbMetadata
-from recommender.signals import compute_scores
+from recommender.signals import compute_scores, profile_weights
 
 
-def make_event(title, series, ct, minutes, days_ago, profile="Ratna"):
+def make_event(title, series, ct, minutes, days_ago, profile="Ratna", platform="netflix"):
     ts = datetime.now() - timedelta(days=days_ago)
     return WatchEvent(
-        platform="netflix", title=title, content_type=ct,
+        platform=platform, title=title, content_type=ct,
         series_name=series, watched_duration=timedelta(minutes=minutes),
         total_duration=None, timestamp=ts, profile=profile,
     )
@@ -162,3 +162,37 @@ def test_formula_unchanged_when_signals_on(monkeypatch):
     meta = {"Movie": make_movie_meta("Movie", runtime=90)}
     expected = config.WEIGHT_COMPLETION + config.WEIGHT_RECENCY  # full watch, no rewatch, today
     assert compute_scores(events, meta)["Movie"] == pytest.approx(expected)
+
+
+def test_list_and_tap_titles_fill_in_at_0_3():
+    evs = [make_event("A", "A", "movie", 90, 0, platform="manual"),
+           make_event("B", "B", "movie", 90, 0, platform="archive")]
+    assert profile_weights(evs, set(), set()) == {"A": 0.3, "B": 0.3}
+
+
+def test_real_watch_wins_over_list_for_the_same_title():
+    evs = [make_event("A", "A", "movie", 90, 0, platform="manual"),
+           make_event("A", "A", "movie", 90, 900)]
+    assert profile_weights(evs, set(), set())["A"] == 1.0
+
+
+def test_hbo_counts_as_real_viewing():
+    evs = [make_event("A", "A", "movie", 90, 0, platform="hbo")]
+    assert profile_weights(evs, set(), set())["A"] == 1.0
+
+
+def test_more_on_a_tap_only_title_is_full_strength():
+    evs = [make_event("A", "A", "movie", 90, 0, platform="archive")]
+    assert profile_weights(evs, set(), {"A"})["A"] == 2.0
+
+
+def test_follow_and_more_do_not_stack():
+    evs = [make_event("Ep1", "Vera", "tv", 45, 900)]
+    assert profile_weights(evs, {"Vera"}, {"Vera"})["Vera"] == 2.0
+
+
+def test_equal_mode_uses_profile_weights():
+    evs = [make_event("A", "A", "movie", 90, 0, platform="manual"),
+           make_event("Ep1", "Vera", "tv", 45, 900)]
+    assert compute_scores(evs, {}, followed_keys={"Vera"}) == {"A": 0.3, "Vera": 2.0}
+

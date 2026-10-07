@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Streamline — Rate It{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+
+<style>
+{% include "_poster_picks_css.html" %}
+
+  .lv-progress { min-width: 12rem; flex: 0 1 16rem; }
+  .lv-progress-text { font-size: 0.66rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); text-align: right; }
+  .lv-progress-text b { color: var(--text); font-weight: 500; font-size: 0.95rem; letter-spacing: 0.02em; }
+  .lv-progress-track { height: 2px; background: var(--border); border-radius: 2px; overflow: hidden; margin-top: 0.45rem; }
+  .lv-progress-fill { height: 100%; background: var(--yours); opacity: 0.75; }
+  .lv-progress-sub { margin-top: 0.4rem; font-size: 0.58rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); text-align: right; }
+  /* A real character with its own margins, so phones that drop generated content or collapse spaces still separate the two parts. */
+  .lv-progress-sep { display: inline-block; margin: 0 0.45rem; }
+
+  /* Source filter: plain links, so it needs no script and every choice is one tap. */
+  .lv-sources { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1.5rem; }
+  .lv-source {
+    display: inline-flex; align-items: baseline; gap: 0.45rem;
+    padding: 0.35rem 0.7rem; border: 1px solid var(--border); border-radius: 999px;
+    font-size: 0.64rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .lv-source:hover { border-color: var(--muted); color: var(--text); text-decoration: none; }
+  .lv-source:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .lv-source[aria-current="page"] { border-color: var(--text); color: var(--text); background: var(--surface2); }
+  .lv-source-n { color: var(--muted); font-size: 0.6rem; }
+  .lv-source[aria-current="page"] .lv-source-n { color: var(--body); }
+
+  /* Kids & family switch: a plain link that adds or drops ?kids=show, drawn
+     as a switch. ON (hiding) is the default, so ON is the calm state. */
+  .lv-kids {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 0.55rem;
+    padding: 0.3rem 0.2rem; font-size: 0.62rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--body); border-radius: 999px;
+  }
+  .lv-kids:hover { color: var(--text); text-decoration: none; }
+  .lv-kids:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .lv-kids-track {
+    position: relative; width: 1.9rem; height: 1.05rem; flex-shrink: 0; border-radius: 999px;
+    background: var(--surface2); border: 1px solid var(--border); transition: background 0.15s, border-color 0.15s;
+  }
+  .lv-kids-track::after {
+    content: ''; position: absolute; top: 50%; left: 0.12rem; width: 0.72rem; height: 0.72rem;
+    border-radius: 50%; background: var(--muted); transform: translateY(-50%);
+    transition: left 0.18s cubic-bezier(0.3, 1.4, 0.5, 1), background 0.15s;
+  }
+  .lv-kids[aria-checked="true"] .lv-kids-track { background: var(--text); border-color: var(--text); }
+  .lv-kids[aria-checked="true"] .lv-kids-track::after { left: calc(100% - 0.84rem); background: var(--bg); }
+  .lv-kids-n { color: var(--muted); }
+
+  @media (max-width: 640px) {
+    .lv-progress { flex-basis: 100%; }
+    .lv-progress-text, .lv-progress-sub, .lv-restart { text-align: left; }
+    .lv-kids { margin-left: 0; flex-basis: 100%; }
+  }
+</style>
+
+<div class="lv-head">
+  <div class="lv-intro">
+    <a href="/history" class="mono result-link">&larr; Archive</a>
+    <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.4rem;">Rate It</h1>
+    <p>Tap the ones you loved. Mark Not for me only for real no's. Leave the rest: they come back in a later round. Rate whenever you like.</p>
+  </div>
+  {% if not error and total %}
+  <div class="lv-progress">
+    {# The headline is progress through this round; the quiet line is the standing tally. #}
+    <div class="lv-progress-text mono"><b>{{ seen }} of {{ total }}</b> this round</div>
+    <div class="lv-progress-track"><div class="lv-progress-fill" style="width:{{ (seen * 100 / total) | round(1) }}%;"></div></div>
+    <div class="lv-progress-sub mono"><span>{{ rated }} rated</span><span class="lv-progress-sep" aria-hidden="true">&middot;</span><span>{{ unrated }} unrated</span></div>
+    <form method="post" action="/loved-it/restart" class="lv-restart">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="source" value="{{ source }}">
+      {% if show_kids %}<input type="hidden" name="kids" value="show">{% endif %}
+      <button type="submit">Start over</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+{% if not error and (sources or kids_count) %}
+{% set kids_q = "kids=show" if show_kids else "" %}
+{% set source_q = "source=" ~ (source | urlencode) if source else "" %}
+<nav class="lv-sources mono" aria-label="Filter by source">
+  <a class="lv-source" href="/loved-it{% if kids_q %}?{{ kids_q }}{% endif %}"{% if not source %} aria-current="page"{% endif %}>All</a>
+  {% for s in sources %}
+  <a class="lv-source" href="/loved-it?source={{ s.value | urlencode }}{% if kids_q %}&amp;{{ kids_q }}{% endif %}"{% if source == s.value %} aria-current="page"{% endif %}>{{ s.label }} <span class="lv-source-n">{{ s.open }}</span></a>
+  {% endfor %}
+  {% if kids_count %}
+  {# Flipping the switch keeps the source; on drops kids=show, off adds it. #}
+  {% if show_kids %}{% set kids_href = "/loved-it" ~ ("?" ~ source_q if source_q else "") %}
+  {% else %}{% set kids_href = "/loved-it?" ~ (source_q ~ "&" if source_q else "") ~ "kids=show" %}{% endif %}
+  <a class="lv-kids" href="{{ kids_href }}" role="switch" aria-checked="{{ 'false' if show_kids else 'true' }}">
+    <span class="lv-kids-track" aria-hidden="true"></span>
+    <span>Hide kids &amp; family{% if not show_kids %} <span class="lv-kids-n">&middot; {{ kids_count }} hidden</span>{% endif %}</span>
+  </a>
+  {% endif %}
+</nav>
+{% endif %}
+
+{% if error %}
+<div style="padding:1rem 1.25rem; background:rgba(232,93,74,0.08); border:1px solid rgba(232,93,74,0.2); border-radius:6px; font-size:0.88rem; color:#e88;">{{ error }}</div>
+{% elif not titles %}
+<p class="mono" style="font-size:0.7rem; text-transform:uppercase; color:var(--muted);">You've been through them all.</p>
+{% else %}
+<form method="post" action="/loved-it/save" class="lv-form">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="source" value="{{ source }}">
+  {% if show_kids %}<input type="hidden" name="kids" value="show">{% endif %}
+  <div class="lv-grid">
+    {% for t in titles %}
+    {% set id = "lv-" ~ loop.index %}
+    {# Both checkboxes come before the labels so ~ can style the card from either. #}
+    <div class="lv-item" style="--i: {{ loop.index0 }};">
+      <input type="hidden" name="shown" value="{{ t.key }}">
+      <input type="checkbox" class="lv-check lv-pick-love" id="{{ id }}-love" name="loved" value="{{ t.key }}">
+      <input type="checkbox" class="lv-check lv-pick-nfm" id="{{ id }}-nfm" name="notforme" value="{{ t.key }}" aria-label="Not for me: {{ t.title }}">
+      <label class="lv-card" for="{{ id }}-love">
+        <span class="lv-poster">
+          {% if t.poster_path %}
+          <img src="https://image.tmdb.org/t/p/w342{{ t.poster_path }}" alt="" loading="lazy">
+          {% else %}
+          <span class="lv-poster-blank">{{ t.title }}</span>
+          {% endif %}
+          <span class="lv-seal" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+        </span>
+        <span class="lv-meta">
+          <span class="lv-title">{{ t.title }}</span>
+          <span class="lv-sub mono">{% if t.year %}{{ t.year }} &middot; {% endif %}<span class="lv-type--{{ t.content_type }}">{% if t.content_type == 'tv' %}TV{% else %}Film{% endif %}</span></span>
+        </span>
+      </label>
+      <label class="lv-nfm mono" for="{{ id }}-nfm" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>Not for me</label>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="lv-bar">
+    <span class="lv-counts mono" aria-hidden="true"><span class="lv-count-loved">loved</span><span class="lv-count-nfm">not for me</span></span>
+    <button type="submit" class="btn-yours lv-save">Save and next</button>
+  </div>
+</form>
+{% endif %}
+
+{% endblock %}

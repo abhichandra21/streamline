@@ -13,11 +13,20 @@ from typing import Any
 import config
 from .ingestion.base import WatchEvent
 from .llm import LLMClient
+from .signals import STRONG_WEIGHT
 from .taste_profile_builder import _EQUAL_WEIGHT_NOTE, history_label, sort_scored
 
 log = logging.getLogger("recommender.structured_profile")
 
 ALLOWED_CO_VIEWING = {"personal", "family", "mixed", "unknown"}
+# Every loved or followed title is sent; this many more fill in from the rest.
+STRUCTURED_EXTRA_TITLES = 300
+# Descriptions are cut to about this many characters to keep the prompt small.
+# Clusters past this are dropped, with their titles, so the prompt asks for no more.
+MAX_CLUSTERS = 16
+STRUCTURED_DESCRIPTION_CHARS = 400
+# Weight for a cluster whose member numbers were all unusable.
+EMPTY_CLUSTER_WEIGHT = 0.05
 FAMILY_WEIGHT_MULTIPLIER = 0.75
 FAMILY_TERMS = {
     "animation",
@@ -46,7 +55,11 @@ def _strip_json_fence(text: str) -> str:
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\n?", "", cleaned)
         cleaned = re.sub(r"\n?```$", "", cleaned)
-    return cleaned.strip()
+    cleaned = cleaned.strip()
+    # Models sometimes put a sentence before the JSON ("Judging by...:"); keep the object.
+    if not cleaned.startswith(("{", "[")) and "{" in cleaned:
+        cleaned = cleaned[cleaned.find("{"):cleaned.rfind("}") + 1]
+    return cleaned
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -89,7 +102,7 @@ def _clean_named_items(value: Any, limit: int = 12) -> list[dict[str, Any]]:
     for index, raw in enumerate(_as_list(value)):
         if not isinstance(raw, dict):
             continue
-        label = _clean_string(raw.get("label") or raw.get("name") or raw.get("id"))
+        label = _clean_string(raw.get("label") or raw.get("name") or raw.get("id") or raw.get("description"))
         if not label:
             continue
         item: dict[str, Any] = {
@@ -147,7 +160,9 @@ def validate_structured_profile(data: dict[str, Any]) -> dict[str, Any]:
         clusters.append({
             "id": _clean_string(raw.get("id")) or _slug(label, f"cluster-{index + 1}"),
             "label": label,
+            "name": _clean_string(raw.get("name")),
             "weight": _clamp_weight(raw.get("weight")),
+            "description": _clean_string(raw.get("description")),
             "positive_traits": _clean_string_list(raw.get("positive_traits")),
             "negative_traits": _clean_string_list(raw.get("negative_traits")),
             "co_viewing": co_viewing,
@@ -155,8 +170,9 @@ def validate_structured_profile(data: dict[str, Any]) -> dict[str, Any]:
             "languages": _clean_string_list(raw.get("languages")),
             "regions": _clean_string_list(raw.get("regions")),
             "representative_titles": representative_titles,
+            "members": _clean_string_list(raw.get("members"), limit=400),
         })
-        if len(clusters) == 16:
+        if len(clusters) == MAX_CLUSTERS:
             break
 
     profile["clusters"] = clusters
@@ -184,52 +200,186 @@ def _deprioritize_family_cluster_weights(profile: dict[str, Any]) -> dict[str, A
     return adjusted
 
 
-def parse_structured_profile_response(text: str) -> dict[str, Any]:
+def _resolve_members(data: dict[str, Any], scored: list[tuple[str, float]]) -> None:
+    """Turn each cluster's member numbers into titles, one cluster per title.
+
+    Numbers that are out of range, repeated, or not numbers are ignored.
+    """
+    claimed: set[int] = set()
+    for raw in _as_list(data.get("clusters")):
+        if not isinstance(raw, dict):
+            continue
+        titles = []
+        for number in _as_list(raw.get("members")):
+            try:
+                index = int(number) - 1
+            except (TypeError, ValueError):
+                continue
+            if 0 <= index < len(scored) and index not in claimed:
+                claimed.add(index)
+                titles.append(scored[index][0])
+        raw["members"] = titles
+
+
+# A cluster tied to one of these countries joins any other cluster tied to it.
+REGION_NAMES = {"GB": "British", "IN": "Indian", "KR": "Korean", "JP": "Japanese",
+                "ES": "Spanish", "FR": "French", "DE": "German", "IT": "Italian"}
+
+
+def merge_region_clusters(profile: dict[str, Any]) -> dict[str, Any]:
+    """Merge personal clusters that belong to the same single country.
+
+    The model is asked for one cluster per strong country but can split it
+    (British thrillers, British cozy mysteries, British period drama); split, each
+    part sorts low although together they are one of the household's biggest tastes.
+    """
+    merged: list[dict[str, Any]] = []
+    by_region: dict[str, dict[str, Any]] = {}
+    for cluster in profile["clusters"]:
+        regions = cluster.get("regions") or []
+        region = regions[0].upper() if len(regions) == 1 else ""
+        if region not in REGION_NAMES or cluster["co_viewing"] == "family":
+            merged.append(cluster)
+            continue
+        if region not in by_region:
+            by_region[region] = {**cluster, "parts": [cluster["label"]], "name_size": len(cluster["members"])}
+            merged.append(by_region[region])
+            continue
+        into = by_region[region]
+        into["parts"].append(cluster["label"])
+        # The merged cluster keeps the display name of its biggest part.
+        if cluster.get("name") and len(cluster["members"]) > into["name_size"]:
+            into["name"], into["name_size"] = cluster["name"], len(cluster["members"])
+        for key in ("members", "representative_titles", "positive_traits", "negative_traits",
+                    "mood_states", "languages"):
+            into[key] = list(dict.fromkeys(into.get(key, []) + cluster.get(key, [])))
+        into["description"] = " ".join(d for d in (into.get("description"), cluster.get("description")) if d)
+    for cluster in by_region.values():
+        parts = cluster.pop("parts")
+        cluster.pop("name_size")
+        if len(parts) > 1:
+            name = REGION_NAMES[cluster["regions"][0].upper()]
+            short = [re.sub(rf"^{name}\s+(and \w+\s+)?", "", p, flags=re.IGNORECASE) for p in parts]
+            cluster["label"] = f"{name}: " + "; ".join(short)
+    return {**profile, "clusters": merged}
+
+
+def explicit_dislikes(titles: list[str] | None, shown: int = 25) -> list[dict[str, Any]]:
+    """The household's own Not for me titles, as the only negative preference."""
+    if not titles:
+        return []
+    listed = ", ".join(titles[:shown]) + (f" and {len(titles) - shown} more" if len(titles) > shown else "")
+    return [{"id": "not-for-me", "label": f"Titles marked Not for me: {listed}", "weight": 1.0}]
+
+
+def apply_member_weights(profile: dict[str, Any], scores: dict[str, float]) -> dict[str, Any]:
+    """Set each cluster's weight from its members' summed scores, then order clusters.
+
+    The top cluster gets 1.0 and the rest are relative to it, so the order comes
+    from the household's data rather than the model's guess. Family clusters are
+    discounted and always sort after personal ones.
+    """
+    sums = [sum(scores.get(title, 0.0) for title in c["members"]) for c in profile["clusters"]]
+    top = max(sums, default=0.0)
+    clusters = []
+    for cluster, total in zip(profile["clusters"], sums):
+        weight = total / top if top and total else EMPTY_CLUSTER_WEIGHT
+        clusters.append({**cluster, "weight": _clamp_weight(weight)})
+    adjusted = _deprioritize_family_cluster_weights({**profile, "clusters": clusters})
+    adjusted["clusters"].sort(key=lambda c: (c["co_viewing"] == "family", -c["weight"]))
+    return adjusted
+
+
+def parse_structured_profile_response(
+    text: str,
+    scored: list[tuple[str, float]] | None = None,
+) -> dict[str, Any]:
     try:
         data = json.loads(_strip_json_fence(text))
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid structured profile JSON: {exc}") from exc
-    return _deprioritize_family_cluster_weights(validate_structured_profile(data))
+    if scored is None:
+        return _deprioritize_family_cluster_weights(validate_structured_profile(data))
+    if isinstance(data, dict):
+        _resolve_members(data, scored)
+    return apply_member_weights(merge_region_clusters(validate_structured_profile(data)), dict(scored))
 
 
-def build_structured_profile(
+def _short(text: str) -> str:
+    """One line of description, cut at a word boundary near STRUCTURED_DESCRIPTION_CHARS.
+
+    Drops a leading "# Title" heading, which only repeats the title.
+    """
+    text = re.sub(r"^\s*#[^\n]*\n", "", text)
+    text = " ".join(text.split())
+    if len(text) <= STRUCTURED_DESCRIPTION_CHARS:
+        return text
+    return text[:STRUCTURED_DESCRIPTION_CHARS].rsplit(" ", 1)[0] + "..."
+
+
+def structured_prompt(
     events: list[WatchEvent],
     scores: dict[str, float],
     enrichments: dict[str, str],
-    client: LLMClient,
     negative_prefs: list[str] | None = None,
-) -> dict[str, Any]:
-    scored = sort_scored(events, scores, enrichments)
-    if not scored:
-        log.warning("No enriched titles found for structured profile build; returning empty profile")
-        return validate_structured_profile({})
+    previous_names: list[str] | None = None,
+) -> tuple[str, list[tuple[str, float]]]:
+    """The structured-profile prompt and the numbered titles it lists.
 
+    Returns ("", []) when no title has an enrichment.
+    """
+    scored = sort_scored(events, scores, enrichments)
+    strong = [item for item in scored if item[1] >= STRONG_WEIGHT]
+    scored = strong + [item for item in scored if item[1] < STRONG_WEIGHT][:STRUCTURED_EXTRA_TITLES]
+    if not scored:
+        return "", []
     lines = [
-        f"- {title} (score: {score:.2f}): {enrichments[title]}"
-        for title, score in scored[:160]
+        f"{number}. {title} (score: {score:.2f}): {_short(enrichments[title])}"
+        for number, (title, score) in enumerate(scored, start=1)
     ]
     less_like = ", ".join(f'"{title}"' for title in (negative_prefs or [])) or "none"
+    keep_names = (
+        "Names used last time: " + "; ".join(f'"{name}"' for name in previous_names) + ". "
+        "Reuse a name when its cluster is essentially the same group of titles.\n"
+        if previous_names else ""
+    )
     prompt = (
         "Create a compact structured JSON taste profile for a personal streaming recommender.\n"
         + (
             "Use the engagement scores to separate strong taste signals from incidental watches.\n"
             if config.USE_VIEWING_SIGNALS else _EQUAL_WEIGHT_NOTE
         ) +
+        "When a country or language runs through many titles across genres (for example British "
+        "or Hindi series), give it its own cluster instead of spreading it across genre clusters.\n"
         "Capture specific taste clusters, positive traits, negative traits, co-viewing context, "
         "mood states, creator affinities, language or region affinities, and explicit dislikes.\n"
         "Return ONLY valid JSON with keys: version, clusters, mood_states, creator_affinities, "
         "language_region_affinities, negative_preferences.\n"
-        "For each cluster include: id, label, weight, positive_traits, negative_traits, "
-        "co_viewing, mood_states, languages, regions, representative_titles.\n"
+        "For each cluster include: id, label, name, description, weight, positive_traits, negative_traits, "
+        "co_viewing, mood_states, languages, regions, representative_titles, members.\n"
+        "label is a plain descriptive label used for search, like \"British cozy and procedural mysteries\".\n"
+        "name is the headline the household sees: 2-6 words, warm and plain-spoken, like a friend "
+        "describing them. Not a joke or pun, and not a dry genre label. Examples of the right voice: "
+        "\"Cosy British mysteries\", \"Hindi stories that feel like home\", \"Sci-fi that bends your brain\", "
+        "\"Eating your way around the world\", \"History that leaves a mark\", \"Life behind palace walls\".\n"
+        + keep_names +
+        "description is 2-3 sentences in second person, written like a friend who has just figured "
+        "this household out: playful, specific and affectionate, naming several of their titles. "
+        "Not a report and not a personality test. Example: \"Your ideal crime has a village, a vicar, "
+        "and someone pouring tea before the second body turns up. Grantchester and Father Brown handle "
+        "the cosy end; Happy Valley and Line of Duty remind you the British can be properly terrifying.\"\n"
+        "members lists the numbers of every history title in that cluster. Put each title "
+        f"in exactly one cluster, using at most {MAX_CLUSTERS} clusters. Every number from 1 to {len(scored)} "
+        "must appear; if a group of titles fits none of your clusters, give it a cluster of its own.\n"
         "Use ISO-639-1 language codes like hi, en, ko, es, fr when known. "
         "Use ISO-3166 alpha-2 region codes like IN, GB, US, KR when known.\n"
-        "Cluster weight should mean strength and confidence of the taste signal, not raw watch frequency. "
-        "Do not let high-volume family/co-viewing clusters outrank stronger personal preferences by volume alone.\n"
+        "Cluster weight and order are computed from members and the scores, so any cluster weight you give is ignored. "
+        "Use co_viewing family only for children's and kids' titles; a family story for adults is personal.\n"
         "creator_affinities entries must include weight, traits, and clusters. "
         "Traits should explain what the user responds to in that creator's work, not just repeat the name.\n"
         "language_region_affinities entries must include weight, languages, regions, traits, and applies_to. "
         "For example, use languages ['hi'] and regions ['IN'] for a Hindi and Indian cinema affinity.\n"
-        "negative_preferences should include explicit dislikes first. "
+        "negative_preferences entries must include label, weight and applies_to, and should include explicit dislikes first. "
         + (
             "Only infer cautious anti-patterns when repeated low-engagement evidence supports them; otherwise return an empty list.\n"
             if config.USE_VIEWING_SIGNALS else
@@ -243,13 +393,101 @@ def build_structured_profile(
         f"Watch history sorted by {history_label()}:\n"
         + "\n".join(lines)
     )
+    return prompt, scored
+
+
+def build_structured_profile(
+    events: list[WatchEvent],
+    scores: dict[str, float],
+    enrichments: dict[str, str],
+    client: LLMClient,
+    negative_prefs: list[str] | None = None,
+    previous_names: list[str] | None = None,
+) -> dict[str, Any]:
+    prompt, scored = structured_prompt(events, scores, enrichments, negative_prefs, previous_names)
+    if not scored:
+        log.warning("No enriched titles found for structured profile build; returning empty profile")
+        return validate_structured_profile({})
+
     response_text = client.generate(
         prompt,
         role="reason",
         max_tokens=config.TOKENS_PROFILE_MERGE,
         timeout=config.TIMEOUT_PROFILE_MERGE,
     )
-    return parse_structured_profile_response(response_text)
+    # Kept for diagnosis: a bad answer is otherwise invisible.
+    try:
+        Path(config.STRUCTURED_TASTE_PROFILE_PATH).with_suffix(".response.txt").write_text(response_text)
+    except OSError as exc:
+        log.warning("Could not save the structured profile response: %s", exc)
+    response_text = _place_unplaced_titles(response_text, scored, enrichments, client)
+    profile = parse_structured_profile_response(response_text, scored)
+    # Inferred dislikes contradicted the household's loves, so only their own count.
+    profile["negative_preferences"] = explicit_dislikes(negative_prefs)
+    if not profile["clusters"]:
+        raise ValueError("the model returned no taste clusters")
+    return profile
+
+
+def _place_unplaced_titles(
+    response_text: str,
+    scored: list[tuple[str, float]],
+    enrichments: dict[str, str],
+    client: LLMClient,
+) -> str:
+    """Ask the fast model to file the titles the profile answer left out.
+
+    The reasoning model drops hundreds of titles from its member lists, and cluster
+    order comes from members, so leaving them out skews the order. Returns the
+    answer unchanged when nothing is missing or the follow-up fails.
+    """
+    try:
+        data = json.loads(_strip_json_fence(response_text))
+    except json.JSONDecodeError:
+        return response_text
+    clusters = [c for c in _as_list(data.get("clusters") if isinstance(data, dict) else None)
+                if isinstance(c, dict)][:MAX_CLUSTERS]
+    if not clusters:
+        return response_text
+    placed: set[int] = set()
+    for cluster in clusters:
+        for number in _as_list(cluster.get("members")):
+            try:
+                placed.add(int(number))
+            except (TypeError, ValueError):
+                continue
+    unplaced = [n for n in range(1, len(scored) + 1) if n not in placed]
+    if not unplaced:
+        return response_text
+    log.info("Structured profile left %d of %d titles unplaced; filing them", len(unplaced), len(scored))
+    prompt = (
+        "These are a household's taste clusters:\n"
+        + "\n".join(f"C{i}: {_clean_string(c.get('label'))}" for i, c in enumerate(clusters, start=1))
+        + "\n\nPut each title below in the cluster it fits best. Leave out a title only if it "
+        "fits none of them. Return ONLY JSON mapping cluster to title numbers, like "
+        "{\"C1\": [12, 40], \"C2\": [7]}.\n\n"
+        + "\n".join(f"{n}. {scored[n - 1][0]}: {_short(enrichments.get(scored[n - 1][0], ''))[:200]}"
+                    for n in unplaced)
+    )
+    try:
+        answer = json.loads(_strip_json_fence(client.generate(
+            prompt, role="fast", max_tokens=8000, timeout=config.TIMEOUT_PROFILE_MERGE)))
+    except Exception as exc:
+        log.warning("Could not file the unplaced profile titles: %s", exc)
+        return response_text
+    if not isinstance(answer, dict):
+        return response_text
+    wanted = set(unplaced)
+    for key, numbers in answer.items():
+        index = str(key).lstrip("Cc")
+        if not index.isdigit() or not 1 <= int(index) <= len(clusters):
+            continue
+        cluster = clusters[int(index) - 1]
+        for number in _as_list(numbers):
+            if isinstance(number, int) and number in wanted:
+                wanted.discard(number)
+                cluster["members"] = _as_list(cluster.get("members")) + [number]
+    return json.dumps(data)
 
 
 def save_structured_profile(profile: dict[str, Any], path: str | Path) -> None:
@@ -379,6 +617,18 @@ def _format_cluster(cluster: dict[str, Any]) -> str:
         f"- {cluster['label']} (weight {cluster['weight']:.2f}, {cluster['co_viewing']}): "
         f"likes {positives}; avoid {negatives}; titles: {titles}"
     )
+
+
+def structured_profile_text(profile: dict[str, Any] | None) -> str:
+    """The whole structured profile as prompt text, strongest cluster first."""
+    if not profile or not profile.get("clusters"):
+        return ""
+    normalized = validate_structured_profile(profile)
+    lines = ["Taste profile, strongest first:"]
+    lines.extend(_format_cluster(cluster) for cluster in normalized["clusters"])
+    lines.extend(_format_named_item("negative preference", item)
+                 for item in normalized["negative_preferences"][:6])
+    return "\n".join(lines)
 
 
 def _format_named_item(prefix: str, item: dict[str, Any]) -> str:

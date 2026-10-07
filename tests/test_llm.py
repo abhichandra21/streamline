@@ -196,3 +196,16 @@ def test_anthropic_client_records_usage_under_fallback_model(monkeypatch):
 
     assert list(client.usage._by_model) == ["claude-sonnet-5"]
     assert client.usage.cost_usd > 0
+
+
+def test_anthropic_client_says_what_came_back_when_there_is_no_text(monkeypatch):
+    import pytest
+    from recommender import llm as llm_module
+
+    fake_module, _ = _fake_anthropic_module([SimpleNamespace(type="thinking", thinking="")],
+                                            stop_reason="max_tokens")
+    monkeypatch.setitem(sys.modules, "anthropic", fake_module)
+    client = llm_module.AnthropicClient(api_key="test-key", models={"reason": "claude-sonnet-5-5"})
+
+    with pytest.raises(RuntimeError, match="stop_reason=max_tokens, blocks: thinking, output_tokens=20"):
+        client.generate("hello")

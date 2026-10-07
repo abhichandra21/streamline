@@ -612,7 +612,10 @@ class TestComingSoonGroupingAndSort:
         body = client.get("/shows").get_data(as_text=True)
 
         assert "No date announced" in body
-        assert "Show the remaining 3" in body
+        assert "Show 3 more" in body
+        rest = body[body.index("Show 3 more"):]
+        # "Show fewer" comes after the folded rows, at the bottom of the list.
+        assert rest.index("Undated") < rest.index('class="more-list-fewer')
         assert body.count("Undated") >= 8
 
     def test_small_undated_group_needs_no_expander(self, client, monkeypatch):
@@ -1700,6 +1703,101 @@ def test_history_provider_filter_and_recent_sort(client, tmp_path, monkeypatch):
         # Recent sort puts the most recently watched first.
         html = client.get("/history?sort=recent").data.decode()
         assert html.index("Prime Pick") < html.index("Netflix Pick")
+
+
+def test_recent_sort_uses_real_plays_not_the_downloads_list_date(client, tmp_path, monkeypatch):
+    """Downloads-list titles carry the setup run's time, which is not when they were watched."""
+    from unittest.mock import MagicMock, patch
+    from recommender.user_store import init_db
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = [
+        {"title": "Qlist Pick", "content_type": "movie", "tmdb_id": None,
+         "platforms": ["manual"], "last_watched": "2026-10-06T09:16:43"},
+        {"title": "Qboth Pick", "content_type": "movie", "tmdb_id": None,
+         "platforms": ["manual", "prime"], "last_watched": "2026-10-06T09:16:43"},
+        {"title": "Qreal Pick", "content_type": "movie", "tmdb_id": None,
+         "platforms": ["netflix"], "last_watched": "2026-05-01T00:00:00"},
+    ]
+    played = {("Qboth Pick", "movie"): "2026-02-01T00:00:00"}
+    with patch("recommender.web._get_context", return_value=mock_ctx), \
+         patch("recommender.web.event_store.last_played", return_value=played):
+        html = client.get("/history?sort=recent").data.decode()
+    assert html.index("Qreal Pick") < html.index("Qboth Pick") < html.index("Qlist Pick")
+
+
+def test_recent_sort_keeps_types_apart_and_trusts_merged_real_dates(client, tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+    from recommender.user_store import init_db
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = [
+        # Same name as a show watched in September; this film was watched in January.
+        {"title": "Qbreathe Pick", "content_type": "movie", "tmdb_id": None,
+         "platforms": ["netflix"], "last_watched": "2026-01-01T00:00:00"},
+        {"title": "Qmay Pick", "content_type": "movie", "tmdb_id": None,
+         "platforms": ["netflix"], "last_watched": "2026-05-01T00:00:00"},
+        # Merged aliases: the index holds the later, real date; the lookup only knows the first name.
+        {"title": "Qedge Pick", "content_type": "movie", "tmdb_id": None,
+         "platforms": ["netflix"], "last_watched": "2026-09-01T00:00:00"},
+    ]
+    played = {("Qbreathe Pick", "movie"): "2026-01-01T00:00:00", ("Qbreathe Pick", "tv"): "2026-09-15T00:00:00",
+              ("Qmay Pick", "movie"): "2026-05-01T00:00:00", ("Qedge Pick", "movie"): "2026-01-02T00:00:00"}
+    with patch("recommender.web._get_context", return_value=mock_ctx), \
+         patch("recommender.web.event_store.last_played", return_value=played):
+        html = client.get("/history?sort=recent").data.decode()
+    assert html.index("Qedge Pick") < html.index("Qmay Pick") < html.index("Qbreathe Pick")
+
+
+def test_recent_sort_ignores_the_seen_it_mark_date_on_a_watched_title(client, tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+    from recommender.user_store import init_db, add_to_archive
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+    add_to_archive(db, "Qold Pick", "movie", tmdb_id=None, watched_at="")  # a Seen It mark
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = [
+        {"title": "Qold Pick", "content_type": "movie", "tmdb_id": None,
+         "platforms": ["netflix"], "last_watched": "2022-01-01T00:00:00"},
+        {"title": "Qnew Pick", "content_type": "movie", "tmdb_id": None,
+         "platforms": ["netflix"], "last_watched": "2026-05-01T00:00:00"},
+    ]
+    with patch("recommender.web._get_context", return_value=mock_ctx), \
+         patch("recommender.web.event_store.last_played", return_value={}):
+        html = client.get("/history?sort=recent").data.decode()
+    assert html.index("Qnew Pick") < html.index("Qold Pick")
+
+
+def test_recent_sort_counts_app_marked_watches_and_puts_undated_marks_last(client, tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+    from recommender.user_store import init_db, add_to_archive
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+    add_to_archive(db, "Qgrey Pick", "movie", watched_at="2026-09-13T05:39:51+00:00")
+    add_to_archive(db, "Qseen Pick", "movie", watched_at="")
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = [
+        {"title": "Qmarch Pick", "content_type": "movie", "tmdb_id": None,
+         "platforms": ["netflix"], "last_watched": "2026-03-01T00:00:00"},
+    ]
+    with patch("recommender.web._get_context", return_value=mock_ctx), \
+         patch("recommender.web.event_store.last_played", return_value={}):
+        html = client.get("/history?sort=recent").data.decode()
+    assert html.index("Qgrey Pick") < html.index("Qmarch Pick") < html.index("Qseen Pick")
 
 
 def test_history_merges_manual_provenance_into_existing_entry(client, tmp_path, monkeypatch):
@@ -3246,12 +3344,62 @@ class TestClassicsAndNotInterested:
     def test_page_shows_a_set_with_both_actions_and_new_set(self, client, classics_env):
         body = client.get("/classics").get_data(as_text=True)
 
-        assert "Have you seen these?" in body
+        assert "Seen It" in body
         assert "T100" in body
-        assert 'hx-post="/classics/seen"' in body
-        assert 'hx-post="/watchlist/dismiss"' in body
+        assert 'action="/classics/save"' in body
+        assert 'name="seen" value="movie:100"' in body
+        assert 'name="notinterested" value="movie:100"' in body
         assert "New set" in body
         assert "Show more" not in body
+
+    def test_save_marks_seen_and_not_interested_together(self, client, classics_env, tmp_path, monkeypatch):
+        from recommender.user_store import list_manual_archive, list_saved_titles
+        db, _ = classics_env
+        monkeypatch.setattr(web, "_load_user_state", lambda: MagicMock(
+            is_manually_watched=lambda t: False, is_dismissed=lambda t: False,
+            is_in_watchlist=lambda t: False))
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / "stale"))
+        client.get("/classics")
+
+        resp = client.post("/classics/save", data={
+            **_csrf_form(),
+            "seen": ["movie:100", "movie:101", "movie:999"],
+            "notinterested": ["movie:101", "movie:102"],
+        })
+
+        assert resp.status_code == 302
+        archived = {(e["content_type"], e["tmdb_id"]) for e in list_manual_archive(db)}
+        assert archived == {("movie", 100), ("movie", 101)}
+        # Seen It means "watched at some point", not "watched today".
+        assert {e["watched_at"] for e in list_manual_archive(db)} == {""}
+        dismissed = list_saved_titles(db, status="dismissed")
+        assert [(d["content_type"], d["tmdb_id"]) for d in dismissed] == [("movie", 102)]
+        assert (tmp_path / "stale").exists()
+
+    def test_save_takes_a_saved_title_off_the_watchlist(self, client, classics_env, tmp_path, monkeypatch):
+        from recommender.user_store import save_title, list_saved_titles, list_manual_archive
+        db, _ = classics_env
+        save_title(db, "T100", "movie", tmdb_id=100)
+        monkeypatch.setattr(web, "_load_user_state", lambda: MagicMock(
+            is_manually_watched=lambda t: False, is_dismissed=lambda t: False,
+            is_in_watchlist=lambda t: t.tmdb_id == 100))
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / "stale"))
+        client.get("/classics")
+
+        client.post("/classics/save", data={**_csrf_form(), "seen": "movie:100"})
+
+        assert list_saved_titles(db, status="watchlist") == []
+        assert [e["watched_at"] for e in list_manual_archive(db)] == [""]
+
+    def test_save_with_nothing_marked_keeps_the_set(self, client, classics_env):
+        _, draws = classics_env
+        client.get("/classics")
+
+        client.post("/classics/save", data=_csrf_form())
+        body = client.get("/classics").get_data(as_text=True)
+
+        assert len(draws) == 1
+        assert "T100" in body
 
     def test_reloading_shows_the_same_set_without_drawing_again(self, client, classics_env):
         _, draws = classics_env
@@ -3384,3 +3532,269 @@ def test_searches_page_results_offer_seen_it_and_not_interested(client, monkeypa
 
     assert 'hx-post="/archive/add"' in html and "Seen it" in html
     assert 'hx-post="/watchlist/dismiss"' in html and "Not interested" in html
+
+
+def test_dashboard_clusters_follow_the_structured_profile():
+    from recommender.web import _dashboard_clusters
+    structured = {"clusters": [
+        {"label": "British crime", "positive_traits": ["slow-burn detectives"],
+         "representative_titles": ["Vera", "Line of Duty"]},
+        {"label": "Franchise fun", "positive_traits": [], "representative_titles": []},
+    ]}
+    clusters = _dashboard_clusters("## Prose cluster\nbody", structured)
+    assert [c["heading"] for c in clusters] == ["British crime", "Franchise fun"]
+    assert "Vera, Line of Duty" in clusters[0]["body_html"]
+
+
+def test_dashboard_clusters_show_the_description_when_there_is_one():
+    from recommender.web import _dashboard_clusters
+    clusters = _dashboard_clusters("", {"clusters": [
+        {"label": "Crime", "description": "You love slow-burn detectives.", "positive_traits": ["x"],
+         "representative_titles": ["Vera"]}]})
+    assert "You love slow-burn detectives." in clusters[0]["body_html"]
+    assert "Vera" in clusters[0]["body_html"]
+
+
+def test_dashboard_clusters_fall_back_to_prose():
+    from recommender.web import _dashboard_clusters
+    clusters = _dashboard_clusters("## 1. Prose cluster\nSome **bold** text", None)
+    assert clusters[0]["heading"] == "1. Prose cluster"
+    assert "<strong>bold</strong>" in clusters[0]["body_html"]
+
+
+def test_not_for_you_lists_eight_then_counts_the_rest():
+    from recommender.web import _not_for_you
+    assert _not_for_you([]) == ""
+    line = _not_for_you([f"T{i}" for i in range(10)])
+    assert line.startswith("T0, T1") and line.endswith("T7 and 2 more")
+
+
+class TestLovedIt:
+    @pytest.fixture
+    def archive(self, tmp_path, monkeypatch):
+        import json as _json
+        from recommender.user_store import init_db
+        db = str(tmp_path / "test.db")
+        init_db(db)
+        cache = tmp_path / "tmdb"
+        (cache / "tv").mkdir(parents=True)
+        entries = []
+        for i in (1, 2, 3):
+            (cache / "tv" / f"{i}.json").write_text(_json.dumps({
+                "poster_path": f"/p{i}.jpg", "origin_country": ["GB"], "genres": [{"name": "Crime"}],
+                "first_air_date": "2015-01-01", "vote_count": 100 * i}))
+            entries.append({"title": f"Show {i}", "content_type": "tv", "tmdb_id": i, "platforms": ["netflix"]})
+        index = tmp_path / "watch_index.json"
+        index.write_text(_json.dumps(entries))
+        monkeypatch.setattr("config.EVENT_DB_PATH", db)
+        monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+        monkeypatch.setattr("config.WATCH_INDEX_PATH", str(index))
+        monkeypatch.setattr("config.CACHE_DIR", str(cache))
+        monkeypatch.setattr("config.PROFILE_STALE_FLAG", str(tmp_path / ".stale"))
+        monkeypatch.setattr(web, "_loved_archive_cache", None)
+        return db
+
+    def _ratings(self, db):
+        from recommender.user_store import load_ratings
+        return {r["tmdb_id"]: r["rating"] for r in load_ratings(db)}
+
+    def _save(self, client, archive, shown, source="", **form):
+        """Open a set holding exactly these titles, then save it."""
+        from recommender.user_store import set_meta
+        set_meta(archive, f"loved_current:{source}" if source else "loved_current", __import__("json").dumps(shown))
+        return client.post("/loved-it/save", data=_csrf_form(shown=shown, source=source, **form))
+
+    def _meta(self, key):
+        return set(web._meta_json(key))
+
+    def _shown(self):
+        return self._meta("loved_round_shown")
+
+    def _page(self, client, q=""):
+        return client.get(f"/loved-it{q}").get_data(as_text=True)
+
+    def test_save_loves_rejects_and_marks_the_rest_shown(self, client, archive):
+        resp = self._save(client, archive, ["tv:1", "tv:2", "tv:3"], loved=["tv:2"], notforme=["tv:3"])
+        assert resp.status_code == 302
+        assert self._ratings(archive) == {2: "more", 3: "less"}
+        assert self._shown() == {"tv:1"}
+
+    def test_a_round_shows_each_unrated_title_once_then_comes_back_around(self, client, archive):
+        self._save(client, archive, ["tv:1", "tv:2"])
+        body = self._page(client)
+        assert 'value="tv:3"' in body and 'value="tv:1"' not in body
+        self._save(client, archive, ["tv:3"])
+        body = self._page(client)  # round done: everything unrated comes back
+        assert all(f'value="tv:{i}"' in body for i in (1, 2, 3))
+        assert self._shown() == set()
+
+    def test_progress_holds_through_the_round(self, client, archive):
+        from flask import template_rendered
+        self._save(client, archive, ["tv:1", "tv:2"], loved=["tv:1"])
+        ctx = {}
+        record = lambda sender, template, context, **extra: ctx.update(context)
+        template_rendered.connect(record, app)
+        try:
+            client.get("/loved-it")
+        finally:
+            template_rendered.disconnect(record, app)
+        assert (ctx["seen"], ctx["rated"], ctx["unrated"], ctx["total"]) == (2, 1, 2, 3)
+
+    def test_start_over_shows_everything_unrated_again(self, client, archive):
+        self._save(client, archive, ["tv:1", "tv:2"])
+        client.post("/loved-it/restart", data=_csrf_form())
+        assert self._shown() == set()
+        assert 'value="tv:1"' in self._page(client)
+
+    def test_excluded_titles_never_show(self, client, archive):
+        from recommender.user_store import set_meta
+        set_meta(archive, "loved_excluded", '["tv:1"]')
+        body = self._page(client)
+        assert 'value="tv:1"' not in body and 'value="tv:2"' in body and "0 of 2" in body
+
+    def test_save_keeps_a_rating_given_elsewhere_while_the_set_was_open(self, client, archive):
+        from recommender.user_store import rate_title
+        rate_title(archive, "Show 1", "tv", "less", tmdb_id=1)
+        self._save(client, archive, ["tv:1", "tv:2"], loved=["tv:1"])
+        assert self._ratings(archive) == {1: "less"}
+        assert self._shown() == {"tv:2"}
+
+    def test_kids_titles_are_hidden_until_switched_on(self, client, archive):
+        from recommender.user_store import set_meta
+        set_meta(archive, "loved_excluded", '["tv:1"]')
+        assert 'value="tv:1"' not in self._page(client)
+        body = self._page(client, "?kids=show")
+        assert 'value="tv:1"' in body and "0 of 3" in body
+
+    def test_source_filter_limits_the_set_and_the_progress(self, client, archive, tmp_path):
+        import json as _json
+        from pathlib import Path
+        index = Path(web.config.WATCH_INDEX_PATH)
+        entries = _json.loads(index.read_text())
+        entries[0]["platforms"] = ["prime"]
+        index.write_text(_json.dumps(entries))
+        web._loved_archive_cache = None
+        client.get("/loved-it")  # an All set holding all three is saved first
+        body = self._page(client, "?source=prime")
+        assert 'value="tv:1"' in body and 'value="tv:2"' not in body
+        assert "0 of 1" in body
+        self._save(client, archive, ["tv:1"], loved=["tv:1"], source="prime")
+        body = self._page(client)
+        assert 'value="tv:2"' in body and 'value="tv:3"' in body
+
+    def test_a_repeated_save_changes_nothing(self, client, archive):
+        self._save(client, archive, ["tv:1"], loved=["tv:1"])
+        client.post("/loved-it/save", data=_csrf_form(shown=["tv:1"], notforme=["tv:1"]))  # same set again
+        assert self._ratings(archive) == {1: "more"}
+
+    def test_a_rating_saved_without_a_tmdb_id_is_respected(self, client, archive):
+        from recommender.user_store import rate_title
+        rate_title(archive, "Show 1", "tv", "less")
+        assert web._loved_ratings().get("tv:1") == "less"
+
+    def test_a_set_that_shrank_is_topped_back_up(self, client, archive, monkeypatch):
+        from recommender.user_store import rate_title
+        monkeypatch.setattr(web.loved_it, "SET_SIZE", 2)
+        client.get("/loved-it")
+        first = web._meta_json("loved_current")
+        rate_title(archive, "x", "tv", "more", tmdb_id=int(first[0].split(":")[1]))
+        body = self._page(client)
+        assert body.count('name="notforme"') == 2
+        assert f'value="{first[1]}"' in body
+
+    def test_page_renders_the_set_progress_and_the_token(self, client, archive):
+        self._save(client, archive, ["tv:1"], loved=["tv:1"])
+        body = self._page(client)
+        assert "Show 2" in body and "Show 3" in body and 'value="tv:1"' not in body
+        assert "1 of 3" in body
+        assert 'name="_csrf_token"' in body
+        assert 'value="tv:2"' in body
+
+
+def test_loved_it_treats_a_followed_show_as_loved(tmp_path, monkeypatch):
+    from recommender.user_store import init_db, follow_show
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    follow_show(db, "Vera", 7, 1)
+    assert web._loved_ratings() == {"tv:7": "more"}
+
+
+def test_history_loved_filter_includes_followed_shows(client, tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+    from recommender.user_store import init_db, follow_show
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    follow_show(db, "Vera", 7, 1)
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = [
+        {"title": "Vera", "content_type": "tv", "tmdb_id": 7, "platforms": [], "last_watched": ""},
+        {"title": "Other", "content_type": "tv", "tmdb_id": 8, "platforms": [], "last_watched": ""},
+    ]
+    with patch("recommender.web._get_context", return_value=mock_ctx), \
+         patch("recommender.web._get_poster_url", return_value=None), \
+         patch("recommender.web._get_tmdb_overview", return_value=""):
+        loved = client.get("/history?rating=more").get_data(as_text=True)
+        unrated = client.get("/history?rating=unrated").get_data(as_text=True)
+    assert "Vera" in loved and "Other" not in loved
+    assert "Other" in unrated and ">Vera<" not in unrated
+
+
+def test_dashboard_clusters_head_with_the_name_and_fall_back_to_the_label():
+    from recommender.web import _dashboard_clusters
+    clusters = _dashboard_clusters("", {"clusters": [
+        {"label": "British cozy mysteries", "name": "Cosy British mysteries"}, {"label": "Docs"}]})
+    assert [c["heading"] for c in clusters] == ["Cosy British mysteries", "Docs"]
+
+
+def test_taste_strength_uses_calm_labels():
+    from recommender.web import _taste_strength
+    assert _taste_strength(1.0) == {"dots": 5, "label": "Your biggest love"}
+    assert _taste_strength(0.5)["label"] == "A big favourite"
+    assert _taste_strength(0.3)["label"] == "Regular habit"
+    assert _taste_strength(0.25)["label"] == "A soft spot"
+    assert _taste_strength(0.1) == {"dots": 1, "label": "Now and then"}
+    assert _taste_strength(None) is None
+
+
+def test_dashboard_clusters_carry_posters_strength_and_a_more_count():
+    from recommender.web import _dashboard_clusters
+    entries = [{"title": "Vera", "tmdb_id": 1, "content_type": "tv"},
+               {"title": "Line of Duty", "tmdb_id": 2, "content_type": "tv"},
+               {"title": "No Art", "tmdb_id": 3, "content_type": "tv"}]
+    structured = {"clusters": [{
+        "label": "Crime", "description": "You love detectives.", "weight": 1.0,
+        "representative_titles": ["Line of Duty"], "members": ["Vera", "Line of Duty", "No Art", "Unindexed"]}]}
+
+    def poster(tmdb_id, content_type, size="w300"):
+        return None if tmdb_id == 3 else f"/p/{tmdb_id}.jpg"
+
+    with patch("recommender.web._get_poster_url", side_effect=poster):
+        c = _dashboard_clusters("", structured, entries)[0]
+    assert [p["title"] for p in c["posters"]] == ["Line of Duty", "Vera"]
+    assert c["more"] == 2
+    assert c["strength"]["label"] == "Your biggest love"
+    assert c["description"] == "You love detectives."
+
+
+def test_dashboard_shows_top_six_tastes_and_folds_the_rest(client, monkeypatch):
+    import recommender.web as web
+    clusters = [{"heading": f"Taste {i}", "body_html": "", "description": f"About {i}",
+                 "strength": {"dots": 3, "label": "Regular habit"}, "posters": [], "more": 0}
+                for i in range(1, 9)]
+    monkeypatch.setattr(web, "_dashboard_clusters", lambda *a, **k: clusters)
+    monkeypatch.setattr(web, "_get_context", lambda: MagicMock(watch_index=MagicMock(entries=[]), taste_profile=""))
+    monkeypatch.setattr(web, "_load_enrichments", lambda: {})
+    monkeypatch.setattr(web, "_ensure_user_store_once", lambda: None)
+    monkeypatch.setattr(web.user_store, "get_disliked_titles", lambda path: [])
+    monkeypatch.setattr(web.query_history, "load", lambda limit=5: [])
+    html = client.get("/").get_data(as_text=True)
+    assert "What you <em>love</em> to watch" in html
+    assert "Regular habit" in html
+    assert html.index("Taste 6") < html.index('class="tastes-more more-list"') < html.index("Taste 7")
+    assert "Show 2 more" in html
+    # The collapse control sits after the folded rows, at the bottom of the list.
+    assert html.index("Taste 8") < html.index('class="tastes-more-btn more-list-fewer"')
