@@ -3562,3 +3562,26 @@ def test_loved_it_treats_a_followed_show_as_loved(tmp_path, monkeypatch):
     monkeypatch.setattr("config.EVENT_DB_PATH", db)
     follow_show(db, "Vera", 7, 1)
     assert web._loved_ratings() == {"tv:7": "more"}
+
+
+def test_history_loved_filter_includes_followed_shows(client, tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+    from recommender.user_store import init_db, follow_show
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    follow_show(db, "Vera", 7, 1)
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = [
+        {"title": "Vera", "content_type": "tv", "tmdb_id": 7, "platforms": [], "last_watched": ""},
+        {"title": "Other", "content_type": "tv", "tmdb_id": 8, "platforms": [], "last_watched": ""},
+    ]
+    with patch("recommender.web._get_context", return_value=mock_ctx), \
+         patch("recommender.web._get_poster_url", return_value=None), \
+         patch("recommender.web._get_tmdb_overview", return_value=""):
+        loved = client.get("/history?rating=more").get_data(as_text=True)
+        unrated = client.get("/history?rating=unrated").get_data(as_text=True)
+    assert "Vera" in loved and "Other" not in loved
+    assert "Other" in unrated and ">Vera<" not in unrated

@@ -494,4 +494,9 @@ def test_every_loved_title_is_sent_and_descriptions_are_cut(monkeypatch):
     prompt = client.generate.call_args[0][0]
     assert all(f"L{i:03d} (score" in prompt for i in range(500))
     assert sum(f"U{i:03d} (score" in prompt for i in range(400)) == 300
-    assert "word " * 60 not in prompt
+    assert "word " * 90 not in prompt
+
+
+def test_descriptions_drop_the_title_heading_and_blank_lines():
+    from recommender.structured_profile import _short
+    assert _short("# Line of Duty\n\nA taut British\n\nprocedural.") == "A taut British procedural."

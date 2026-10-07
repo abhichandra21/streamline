@@ -22,7 +22,7 @@ ALLOWED_CO_VIEWING = {"personal", "family", "mixed", "unknown"}
 # Every loved or followed title is sent; this many more fill in from the rest.
 STRUCTURED_EXTRA_TITLES = 300
 # Descriptions are cut to about this many characters to keep the prompt small.
-STRUCTURED_DESCRIPTION_CHARS = 250
+STRUCTURED_DESCRIPTION_CHARS = 400
 # Weight for a cluster whose member numbers were all unusable.
 EMPTY_CLUSTER_WEIGHT = 0.05
 FAMILY_WEIGHT_MULTIPLIER = 0.75
@@ -247,7 +247,12 @@ def parse_structured_profile_response(
 
 
 def _short(text: str) -> str:
-    """Cut a description at a word boundary near STRUCTURED_DESCRIPTION_CHARS."""
+    """One line of description, cut at a word boundary near STRUCTURED_DESCRIPTION_CHARS.
+
+    Drops a leading "# Title" heading, which only repeats the title.
+    """
+    text = re.sub(r"^\s*#[^\n]*\n", "", text)
+    text = " ".join(text.split())
     if len(text) <= STRUCTURED_DESCRIPTION_CHARS:
         return text
     return text[:STRUCTURED_DESCRIPTION_CHARS].rsplit(" ", 1)[0] + "..."

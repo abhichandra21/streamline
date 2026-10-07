@@ -1033,14 +1033,21 @@ def history() -> str:
             "last_watched": e.get("last_watched") or "",
         })
 
-    if rating_filter in user_store.RATINGS:
-        items = [it for it in items if it["rating"] == rating_filter]
-    elif rating_filter in ("liked", "disliked"):
+    # A followed show counts as loved, as on Rate It, unless it has a rating of its own.
+    followed = {t["tmdb_id"] for t in user_store.list_show_tracking(config.EVENT_DB_PATH)
+                if t["state"] == "following"}
+    for it in items:
+        it["loved"] = it["rating"] == user_store.RATING_MORE or (
+            not it["rating"] and it["content_type"] == "tv" and it["tmdb_id"] in followed)
+    if rating_filter in ("liked", "disliked"):
         # Old bookmarks and links keep working after the vocabulary change.
-        wanted = user_store.normalize_rating(rating_filter)
-        items = [it for it in items if it["rating"] == wanted]
+        rating_filter = user_store.normalize_rating(rating_filter)
+    if rating_filter == user_store.RATING_MORE:
+        items = [it for it in items if it["loved"]]
+    elif rating_filter in user_store.RATINGS:
+        items = [it for it in items if it["rating"] == rating_filter]
     elif rating_filter == "unrated":
-        items = [it for it in items if not it["rating"]]
+        items = [it for it in items if not it["rating"] and not it["loved"]]
 
     total = len(items)
     ALLOWED_PAGE_SIZES = (30, 60, 120)
