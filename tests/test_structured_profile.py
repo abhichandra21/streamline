@@ -518,3 +518,26 @@ def test_an_answer_with_no_clusters_is_a_failure_and_is_kept_for_diagnosis(tmp_p
     with pytest.raises(ValueError, match="no taste clusters"):
         build_structured_profile([], {"A": 1.0}, {"A": "x"}, client)
     assert '"clusters": []' in (tmp_path / "structured.response.txt").read_text()
+
+
+def test_clusters_for_one_country_merge_into_one():
+    profile = _parse([
+        {"label": "British thrillers", "co_viewing": "personal", "regions": ["GB"], "members": [1]},
+        {"label": "British cozy mysteries", "co_viewing": "personal", "regions": ["GB"], "members": [2]},
+        {"label": "Action", "co_viewing": "personal", "regions": ["US"], "members": [3]},
+    ], SCORED)
+    labels = [c["label"] for c in profile["clusters"]]
+    assert labels == ["British: thrillers; cozy mysteries", "Action"]
+    assert profile["clusters"][0]["members"] == ["Line of Duty", "Vera"]
+
+
+def test_dislikes_come_only_from_the_households_own_titles(monkeypatch):
+    client = make_mock_llm(json.dumps({"version": 1, "clusters": [{"label": "Any", "members": [1]}],
+                                       "negative_preferences": [{"label": "Bleak drama"}]}))
+    profile = build_structured_profile([], {"A": 1.0}, {"A": "x"}, client, negative_prefs=["Scream", "It"])
+    assert [n["label"] for n in profile["negative_preferences"]] == ["Titles marked Not for me: Scream, It"]
+
+
+def test_clusters_keep_their_description():
+    profile = _parse([{"label": "Crime", "description": "You love slow-burn detectives.", "members": [1]}], SCORED)
+    assert profile["clusters"][0]["description"] == "You love slow-burn detectives."

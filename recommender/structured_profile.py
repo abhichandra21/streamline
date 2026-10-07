@@ -155,6 +155,7 @@ def validate_structured_profile(data: dict[str, Any]) -> dict[str, Any]:
             "id": _clean_string(raw.get("id")) or _slug(label, f"cluster-{index + 1}"),
             "label": label,
             "weight": _clamp_weight(raw.get("weight")),
+            "description": _clean_string(raw.get("description")),
             "positive_traits": _clean_string_list(raw.get("positive_traits")),
             "negative_traits": _clean_string_list(raw.get("negative_traits")),
             "co_viewing": co_viewing,
@@ -213,6 +214,53 @@ def _resolve_members(data: dict[str, Any], scored: list[tuple[str, float]]) -> N
         raw["members"] = titles
 
 
+# A cluster tied to one of these countries joins any other cluster tied to it.
+REGION_NAMES = {"GB": "British", "IN": "Indian", "KR": "Korean", "JP": "Japanese",
+                "ES": "Spanish", "FR": "French", "DE": "German", "IT": "Italian"}
+
+
+def merge_region_clusters(profile: dict[str, Any]) -> dict[str, Any]:
+    """Merge personal clusters that belong to the same single country.
+
+    The model is asked for one cluster per strong country but can split it
+    (British thrillers, British cozy mysteries, British period drama); split, each
+    part sorts low although together they are one of the household's biggest tastes.
+    """
+    merged: list[dict[str, Any]] = []
+    by_region: dict[str, dict[str, Any]] = {}
+    for cluster in profile["clusters"]:
+        regions = cluster.get("regions") or []
+        region = regions[0].upper() if len(regions) == 1 else ""
+        if region not in REGION_NAMES or cluster["co_viewing"] == "family":
+            merged.append(cluster)
+            continue
+        if region not in by_region:
+            by_region[region] = {**cluster, "parts": [cluster["label"]]}
+            merged.append(by_region[region])
+            continue
+        into = by_region[region]
+        into["parts"].append(cluster["label"])
+        for key in ("members", "representative_titles", "positive_traits", "negative_traits",
+                    "mood_states", "languages"):
+            into[key] = list(dict.fromkeys(into.get(key, []) + cluster.get(key, [])))
+        into["description"] = " ".join(d for d in (into.get("description"), cluster.get("description")) if d)
+    for cluster in by_region.values():
+        parts = cluster.pop("parts")
+        if len(parts) > 1:
+            name = REGION_NAMES[cluster["regions"][0].upper()]
+            short = [re.sub(rf"^{name}\s+(and \w+\s+)?", "", p, flags=re.IGNORECASE) for p in parts]
+            cluster["label"] = f"{name}: " + "; ".join(short)
+    return {**profile, "clusters": merged}
+
+
+def explicit_dislikes(titles: list[str] | None, shown: int = 25) -> list[dict[str, Any]]:
+    """The household's own Not for me titles, as the only negative preference."""
+    if not titles:
+        return []
+    listed = ", ".join(titles[:shown]) + (f" and {len(titles) - shown} more" if len(titles) > shown else "")
+    return [{"id": "not-for-me", "label": f"Titles marked Not for me: {listed}", "weight": 1.0}]
+
+
 def apply_member_weights(profile: dict[str, Any], scores: dict[str, float]) -> dict[str, Any]:
     """Set each cluster's weight from its members' summed scores, then order clusters.
 
@@ -243,7 +291,7 @@ def parse_structured_profile_response(
         return _deprioritize_family_cluster_weights(validate_structured_profile(data))
     if isinstance(data, dict):
         _resolve_members(data, scored)
-    return apply_member_weights(validate_structured_profile(data), dict(scored))
+    return apply_member_weights(merge_region_clusters(validate_structured_profile(data)), dict(scored))
 
 
 def _short(text: str) -> str:
@@ -290,8 +338,10 @@ def structured_prompt(
         "mood states, creator affinities, language or region affinities, and explicit dislikes.\n"
         "Return ONLY valid JSON with keys: version, clusters, mood_states, creator_affinities, "
         "language_region_affinities, negative_preferences.\n"
-        "For each cluster include: id, label, weight, positive_traits, negative_traits, "
+        "For each cluster include: id, label, description, weight, positive_traits, negative_traits, "
         "co_viewing, mood_states, languages, regions, representative_titles, members.\n"
+        "description is 2-3 sentences in second person on what this household loves about the "
+        "cluster, naming a few of their titles (\"You gravitate toward...\").\n"
         "members lists the numbers of every history title in that cluster. Put each title "
         "in exactly one cluster.\n"
         "Use ISO-639-1 language codes like hi, en, ko, es, fr when known. "
@@ -343,6 +393,8 @@ def build_structured_profile(
     except OSError as exc:
         log.warning("Could not save the structured profile response: %s", exc)
     profile = parse_structured_profile_response(response_text, scored)
+    # Inferred dislikes contradicted the household's loves, so only their own count.
+    profile["negative_preferences"] = explicit_dislikes(negative_prefs)
     if not profile["clusters"]:
         raise ValueError("the model returned no taste clusters")
     return profile

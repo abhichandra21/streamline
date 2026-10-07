@@ -847,7 +847,9 @@ def _dashboard_clusters(taste_profile: str, structured_profile: dict | None) -> 
         clusters = []
         for c in structured_profile["clusters"]:
             body = ""
-            if c.get("positive_traits"):
+            if c.get("description"):
+                body += "<p>" + str(escape(c["description"])) + "</p>"
+            elif c.get("positive_traits"):
                 body += "<p>" + str(escape("; ".join(c["positive_traits"]).capitalize())) + ".</p>"
             if c.get("representative_titles"):
                 body += ("<p><em>For example:</em> "

@@ -3398,6 +3398,15 @@ def test_dashboard_clusters_follow_the_structured_profile():
     assert "Vera, Line of Duty" in clusters[0]["body_html"]
 
 
+def test_dashboard_clusters_show_the_description_when_there_is_one():
+    from recommender.web import _dashboard_clusters
+    clusters = _dashboard_clusters("", {"clusters": [
+        {"label": "Crime", "description": "You love slow-burn detectives.", "positive_traits": ["x"],
+         "representative_titles": ["Vera"]}]})
+    assert "You love slow-burn detectives." in clusters[0]["body_html"]
+    assert "Vera" in clusters[0]["body_html"]
+
+
 def test_dashboard_clusters_fall_back_to_prose():
     from recommender.web import _dashboard_clusters
     clusters = _dashboard_clusters("## 1. Prose cluster\nSome **bold** text", None)
