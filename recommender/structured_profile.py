@@ -96,7 +96,7 @@ def _clean_named_items(value: Any, limit: int = 12) -> list[dict[str, Any]]:
     for index, raw in enumerate(_as_list(value)):
         if not isinstance(raw, dict):
             continue
-        label = _clean_string(raw.get("label") or raw.get("name") or raw.get("id"))
+        label = _clean_string(raw.get("label") or raw.get("name") or raw.get("id") or raw.get("description"))
         if not label:
             continue
         item: dict[str, Any] = {
@@ -302,7 +302,7 @@ def structured_prompt(
         "Traits should explain what the user responds to in that creator's work, not just repeat the name.\n"
         "language_region_affinities entries must include weight, languages, regions, traits, and applies_to. "
         "For example, use languages ['hi'] and regions ['IN'] for a Hindi and Indian cinema affinity.\n"
-        "negative_preferences should include explicit dislikes first. "
+        "negative_preferences entries must include label, weight and applies_to, and should include explicit dislikes first. "
         + (
             "Only infer cautious anti-patterns when repeated low-engagement evidence supports them; otherwise return an empty list.\n"
             if config.USE_VIEWING_SIGNALS else

@@ -157,7 +157,7 @@ def test_build_structured_profile_sends_scores_and_negative_preferences():
     assert "computed from members" in prompt
     assert "creator_affinities entries must include weight, traits, and clusters" in prompt
     assert "language_region_affinities entries must include weight, languages, regions, traits, and applies_to" in prompt
-    assert "negative_preferences should include explicit dislikes first" in prompt
+    assert "negative_preferences entries must include label, weight and applies_to" in prompt
     assert profile["clusters"][0]["label"] == "Hindi family dramas"
 
 
