@@ -127,15 +127,17 @@
       {% endfor %}
     </div>
     {% if sections.might_be_back|length > batch %}
-    <details class="shows-decisions-rest">
+    <details class="shows-decisions-rest more-list">
       <summary class="mono">
-        Show the remaining {{ sections.might_be_back|length - batch }}
+        <span class="when-closed">Show {{ sections.might_be_back|length - batch }} more</span>
+        <span class="when-open">Show fewer</span>
       </summary>
       <div class="shows-decisions-list">
         {% for show in sections.might_be_back[batch:] %}
         {{ decision_row(show, csrf_token) }}
         {% endfor %}
       </div>
+      <button type="button" class="more-list-fewer mono">Show fewer</button>
     </details>
     {% endif %}
   </section>

@@ -33,6 +33,7 @@ from recommender import show_tracker
 from recommender import user_store
 from recommender import watch_index as wi
 from recommender import event_store
+from recommender.signals import LIST_PLATFORMS
 from recommender.event_store import has_event_store, load_events
 from recommender.jobs import registry as job_registry
 from recommender.llm import create_client
@@ -1020,6 +1021,7 @@ def history() -> str:
                 # Manual additions are their own provider category (issue #37).
                 "platforms": ["manual"],
                 "last_watched": watched_at,
+                "archive_watched_at": watched_at,
             })
             new_i = len(entries) - 1
             if tid:
@@ -1031,6 +1033,10 @@ def history() -> str:
             # first — the entry dict is shared with the cached watch index and
             # must not be mutated in place.
             merged = dict(entries[target])
+            # The recency sort must see the index's real dates, not this mark's date.
+            merged.setdefault("index_platforms", merged.get("platforms") or [])
+            merged.setdefault("index_last_watched", merged.get("last_watched") or "")
+            merged["archive_watched_at"] = max(merged.get("archive_watched_at") or "", watched_at)
             merged["platforms"] = sorted(set(merged.get("platforms") or []) | {"manual"})
             if watched_at > (merged.get("last_watched") or ""):
                 merged["last_watched"] = watched_at
@@ -1048,8 +1054,25 @@ def history() -> str:
         entries = [e for e in entries if platform_filter in (e.get("platforms") or [])]
 
     if sort == "recent":
-        # Most recently watched first; titles with no timestamp sort last.
-        entries.sort(key=lambda e: e.get("last_watched") or "", reverse=True)
+        # Most recently watched first, by real plays only: downloads-list and Seen It
+        # titles carry the time setup ran, so without a real play they sort last.
+        played = event_store.last_played(config.EVENT_DB_PATH)
+
+        # Plex's index date may be a pre-cutoff test scrobble; its real plays come from last_played.
+        undated = LIST_PLATFORMS | event_store.UNDATED_PROVIDERS | {"plex"}
+
+        def _watched_on(e: dict) -> str:
+            ct = e.get("content_type", "tv")
+            other = "movie" if ct == "tv" else "tv"
+            # Real plays, plus the date a watch was marked in the app ("" for Seen It).
+            real = max(played.get((e["title"], ct)) or played.get((e["title"], other)) or "",
+                       e.get("archive_watched_at") or "")
+            platforms = e.get("index_platforms", e.get("platforms") or [])
+            # With only dated sources, the index date is real and covers merged aliases.
+            if platforms and not any(p in undated for p in platforms):
+                return max(real, e.get("index_last_watched", e.get("last_watched")) or "")
+            return real
+        entries.sort(key=_watched_on, reverse=True)
     elif sort == "za":
         entries.sort(key=lambda e: e["title"].lower(), reverse=True)
     else:
@@ -1907,6 +1930,39 @@ def classics_new_set():
     """Retire the current set (it is never shown again, but not dismissed) and draw a new one."""
     _ensure_user_store_once()
     _retire_classics_set()
+    return redirect(url_for("classics_page"))
+
+
+@app.route("/classics/save", methods=["POST"])
+def classics_save():
+    """Save every title marked on the Seen It page at once.
+
+    Seen it does what /classics/seen does, Not interested what /watchlist/dismiss
+    does; Seen it wins when both are ticked. Only titles in the open set count, and
+    their details come from the saved set, not the form. Untouched titles stay in
+    the set: only "New set" retires them.
+    """
+    _ensure_user_store_once()
+    by_key = {f"{row['content_type']}:{row['tmdb_id']}": row for row in _meta_json(_CLASSICS_CURRENT_KEY)}
+    seen = [k for k in dict.fromkeys(request.form.getlist("seen")) if k in by_key]
+    skip = [k for k in dict.fromkeys(request.form.getlist("notinterested")) if k in by_key and k not in seen]
+    user_state = _load_user_state()
+    for key in seen:
+        row = by_key[key]
+        title, ct, tmdb_id = row["title"], row["content_type"], row["tmdb_id"]
+        if _title_state(title, ct, user_state, tmdb_id)["in_watchlist"]:
+            user_store.mark_watched_from_watchlist(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id,
+                                                   watched_at="")
+        else:
+            # Seen It records a past watch with no known date.
+            user_store.add_to_archive(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id, source="web",
+                                      watched_at="")
+    for key in skip:
+        row = by_key[key]
+        user_store.dismiss_title(config.EVENT_DB_PATH, row["title"], row["content_type"],
+                                 tmdb_id=row["tmdb_id"])
+    if seen:
+        Path(config.PROFILE_STALE_FLAG).touch()
     return redirect(url_for("classics_page"))
 
 

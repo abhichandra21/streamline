@@ -180,7 +180,7 @@ def test_an_ai_placement_cannot_break_the_region_rule():
 
 def test_doubtful_titles_are_those_with_under_two_usable_tags():
     from recommender.taste_rows import doubtful_titles
-    tags = {"A": ["car chase"], "B": ["car chase", "serial killer"], "C": ["based on book"], "D": ["british"]}
+    tags = {"A": ["car chase"], "B": ["serial killer", "police procedural"], "C": ["based on book"], "D": ["british"]}
     facts = {"D": {"countries": {"US"}, "language": "en"}}
     assert doubtful_titles(list(tags), tags, THEMES, facts) == ["A", "C", "D"]
 
@@ -215,3 +215,63 @@ def test_an_ai_none_keeps_the_title_out_instead_of_a_stray_tag():
     tags = {"Room": ["car chase"]}
     placed, unplaced = place_loves(list(tags), tags, THEMES, {}, overrides={"Room": None})
     assert unplaced == ["Room"] and placed[3] == []
+
+
+def test_close_calls_between_two_themes_are_doubtful():
+    from recommender.taste_rows import doubtful_titles
+    tags = {"Close": ["car chase", "serial killer"], "Clear": ["serial killer", "police procedural"],
+            "Other": ["car chase"], "More": ["car chase"]}
+    assert "Close" in doubtful_titles(list(tags), tags, THEMES, {})
+    assert "Clear" not in doubtful_titles(list(tags), tags, THEMES, {})
+
+
+def test_placement_prompt_marks_region_themes_and_reasks_blocked_answers(tmp_path, monkeypatch):
+    from recommender.taste_rows import ai_placements
+    _setup_paths(tmp_path, monkeypatch)
+    import config
+    Path = __import__("pathlib").Path
+    Path(config.TASTE_PLACEMENTS_PATH).write_text(json.dumps({"Game of Thrones": "uk"}))
+    facts = {"Game of Thrones": {"countries": {"US"}, "language": "en"}}
+    client = make_mock_llm_sequence([json.dumps({"Game of Thrones": "action"})])
+    got = ai_placements(["Game of Thrones"], {"Game of Thrones": ["fantasy"]}, THEMES, client, facts=facts)
+    assert got == {"Game of Thrones": 3}
+    prompt = client.generate.call_args[0][0]
+    assert "only for titles made in GB" in prompt and "only for titles in language hi" in prompt
+
+
+def test_a_blocked_answer_is_saved_as_none_and_not_asked_again(tmp_path, monkeypatch):
+    from recommender.taste_rows import ai_placements
+    _setup_paths(tmp_path, monkeypatch)
+    facts = {"1923": {"countries": {"US"}, "language": "en"}}
+    client = make_mock_llm_sequence([json.dumps({"1923": "uk"})])
+    assert ai_placements(["1923"], {"1923": ["western"]}, THEMES, client, facts=facts) == {"1923": None}
+    rerun = make_mock_llm_sequence([])
+    assert ai_placements(["1923"], {"1923": ["western"]}, THEMES, rerun, facts=facts) == {"1923": None}
+    assert rerun.generate.call_count == 0
+
+
+def test_placement_answer_with_a_sentence_before_the_json_is_still_read(tmp_path, monkeypatch):
+    from recommender.taste_rows import ai_placements
+    _setup_paths(tmp_path, monkeypatch)
+    client = make_mock_llm_sequence(['Judging by what each title is:\n```json\n{"A": "action"}\n```'])
+    assert ai_placements(["A"], {"A": ["car chase"]}, THEMES, client) == {"A": 3}
+
+
+def test_placement_matches_quoted_titles_and_saves_skips_as_vote(tmp_path, monkeypatch):
+    from recommender.taste_rows import ai_placements
+    _setup_paths(tmp_path, monkeypatch)
+    tags = {'"Sr."': ["car chase"], "Skipped": ["car chase"]}
+    client = make_mock_llm_sequence([json.dumps({"Sr.": "action"})])
+    assert ai_placements(['"Sr."', "Skipped"], tags, THEMES, client) == {'"Sr."': 3}
+    rerun = make_mock_llm_sequence([])
+    assert ai_placements(['"Sr."', "Skipped"], tags, THEMES, rerun) == {'"Sr."': 3}
+    assert rerun.generate.call_count == 0
+
+
+def test_a_failed_placement_call_is_retried_next_build(tmp_path, monkeypatch):
+    from recommender.taste_rows import ai_placements
+    _setup_paths(tmp_path, monkeypatch)
+    tags = {"A": ["car chase"]}
+    assert ai_placements(["A"], tags, THEMES, make_mock_llm_sequence([RuntimeError("timeout")])) == {}
+    retry = make_mock_llm_sequence([json.dumps({"A": "action"})])
+    assert ai_placements(["A"], tags, THEMES, retry) == {"A": 3}

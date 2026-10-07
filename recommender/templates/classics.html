@@ -1,22 +1,24 @@
 {% extends "base.html" %}
 {% block title %}Streamline — Seen It{% endblock %}
+{% block main_class %}wide{% endblock %}
 {% block content %}
 
 <style>
-  .classics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1rem; }
-  .classic-card { display: flex; flex-direction: column; gap: 0.4rem; }
-  .classic-poster { aspect-ratio: 2/3; border-radius: 4px; overflow: hidden; background: var(--surface2); display: block; }
-  .classic-poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .classic-title { font-size: 0.85rem; line-height: 1.3; color: var(--text); }
-  .classic-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
+{% include "_poster_picks_css.html" %}
 </style>
 
-<div style="margin-bottom:1.5rem;">
-  <a href="/history" class="mono result-link">&larr; Archive</a>
-  <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.4rem;">Seen It</h1>
-  <p style="font-size:0.88rem; color:var(--muted); margin-top:0.4rem;">
-    Famous movies and shows that are not in your history, such as ones you saw in theaters or before streaming. Tap "Seen it" for the ones you have watched, "Not interested" for the ones you will skip. "New set" retires anything you leave untouched; it will not come back here, and it stays available in search.
-  </p>
+<div class="lv-head">
+  <div class="lv-intro">
+    <a href="/history" class="mono result-link">&larr; Archive</a>
+    <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.4rem;">Seen It</h1>
+    <p>Famous movies and shows that are not in your history, such as ones you saw in theaters or before streaming. Tap the ones you have seen. Mark Not interested for the ones you will skip. Untouched titles stay here until you ask for a new set; then they will not come back here, and stay available in search.</p>
+  </div>
+  {% if not error and titles %}
+  <form method="post" action="/classics/new" class="lv-restart">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <button type="submit">New set</button>
+  </form>
+  {% endif %}
 </div>
 
 {% if error %}
@@ -24,35 +26,39 @@
 {% elif not titles %}
 <p class="mono" style="font-size:0.7rem; text-transform:uppercase; color:var(--muted);">You've been through them all.</p>
 {% else %}
-<div class="classics-grid">
-  {% for t in titles %}
-  <div class="classic-card" id="cl-card-{{ t.content_type }}-{{ t.tmdb_id }}">
-    <a class="classic-poster" href="https://www.themoviedb.org/{{ t.content_type }}/{{ t.tmdb_id }}" target="_blank" rel="noopener">
-      {% if t.poster_path %}<img src="https://image.tmdb.org/t/p/w342{{ t.poster_path }}" alt="{{ t.title }}" loading="lazy">{% endif %}
-    </a>
-    <div class="classic-title">{{ t.title }}{% if t.year %} <span class="mono" style="font-size:0.62rem; color:var(--muted);">{{ t.year }}</span>{% endif %}</div>
-    <div class="classic-actions">
-      <form hx-post="/classics/seen" hx-target="closest .classic-card" hx-swap="outerHTML" style="margin:0; display:inline;">
-          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-          <input type="hidden" name="title" value="{{ t.title }}">
-          <input type="hidden" name="content_type" value="{{ t.content_type }}">
-          <input type="hidden" name="tmdb_id" value="{{ t.tmdb_id }}">
-          <button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;">Seen it</button>
-      </form>
-      <form hx-post="/watchlist/dismiss" hx-target="closest .classic-card" hx-swap="outerHTML" style="margin:0; display:inline;">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="title" value="{{ t.title }}">
-        <input type="hidden" name="content_type" value="{{ t.content_type }}">
-        <input type="hidden" name="tmdb_id" value="{{ t.tmdb_id }}">
-        <button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;">Not interested</button>
-      </form>
-    </div>
-  </div>
-  {% endfor %}
-</div>
-<form method="post" action="/classics/new" style="margin-top:1.5rem; text-align:center;">
+<form method="post" action="/classics/save" class="lv-form">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-  <button type="submit" class="btn-ghost" style="padding:0.6rem 1.2rem; cursor:pointer;">New set</button>
+  <div class="lv-grid">
+    {% for t in titles %}
+    {% set id = "cl-" ~ loop.index %}
+    {% set key = t.content_type ~ ":" ~ t.tmdb_id %}
+    {# Both checkboxes come before the labels so ~ can style the card from either. #}
+    <div class="lv-item" style="--i: {{ loop.index0 }};">
+      <input type="checkbox" class="lv-check lv-pick-love" id="{{ id }}-seen" name="seen" value="{{ key }}">
+      <input type="checkbox" class="lv-check lv-pick-nfm" id="{{ id }}-skip" name="notinterested" value="{{ key }}" aria-label="Not interested: {{ t.title }}">
+      <label class="lv-card" for="{{ id }}-seen">
+        <span class="lv-poster">
+          {% if t.poster_path %}
+          <img src="https://image.tmdb.org/t/p/w342{{ t.poster_path }}" alt="" loading="lazy">
+          {% else %}
+          <span class="lv-poster-blank">{{ t.title }}</span>
+          {% endif %}
+          <span class="lv-seal" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+        </span>
+        <span class="lv-meta">
+          <span class="lv-title">{{ t.title }}</span>
+          <span class="lv-sub mono">{% if t.year %}{{ t.year }} &middot; {% endif %}<span class="lv-type--{{ t.content_type }}">{% if t.content_type == 'tv' %}TV{% else %}Film{% endif %}</span></span>
+        </span>
+      </label>
+      <label class="lv-nfm mono" for="{{ id }}-skip" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>Not interested</label>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="lv-bar">
+    <span class="lv-counts mono" aria-hidden="true"><span class="lv-count-loved">seen</span><span class="lv-count-nfm">not interested</span></span>
+    <button type="submit" class="btn-yours lv-save">Save</button>
+  </div>
 </form>
 {% endif %}
 

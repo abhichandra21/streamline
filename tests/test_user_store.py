@@ -310,6 +310,8 @@ def test_add_to_archive(tmp_path):
     assert len(items) == 1
     assert items[0]["title"] == "The Bear"
     assert items[0]["source"] == "web"
+    add_to_archive(db, "Old Film", "movie", watched_at="")
+    assert {i["title"]: i["watched_at"] for i in list_manual_archive(db)}["Old Film"] == ""
 
 
 def test_add_to_archive_upserts_on_tmdb_id(tmp_path):

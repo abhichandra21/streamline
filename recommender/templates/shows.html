@@ -287,7 +287,7 @@
   }
   .show-decision-row h3, .show-row--settled h3 { font-size: 1.05rem; }
   .shows-decisions-rest { margin-top: 0.2rem; }
-  .shows-decisions-rest summary {
+  .shows-decisions-rest summary, .shows-decisions-rest .more-list-fewer {
     padding: 0.6rem 0;
     border-top: 1px solid var(--border);
     color: var(--muted);
@@ -296,7 +296,7 @@
     letter-spacing: 0.09em;
     text-transform: uppercase;
   }
-  .shows-decisions-rest summary:hover { color: var(--text); }
+  .shows-decisions-rest summary:hover, .shows-decisions-rest .more-list-fewer:hover { color: var(--text); }
   .shows-decisions-clear {
     margin-top: 2.1rem;
     padding: 0.75rem 0.9rem;
@@ -403,7 +403,7 @@
     text-transform: uppercase;
   }
   .soon-undated .soon-date { color: var(--border); }
-  .soon-undated-rest summary {
+  .soon-undated-rest summary, .soon-undated-rest .more-list-fewer {
     padding: 0.5rem 0 0;
     color: var(--muted);
     cursor: pointer;
@@ -411,7 +411,10 @@
     letter-spacing: 0.09em;
     text-transform: uppercase;
   }
-  .soon-undated-rest summary:hover { color: var(--text); }
+  .soon-undated-rest summary:hover, .soon-undated-rest .more-list-fewer:hover { color: var(--text); }
+  /* "Show fewer" is a button drawn like the summary it replaces. */
+  .more-list-fewer { width: 100%; background: none; border-left: 0; border-right: 0; border-bottom: 0; text-align: left; }
+  .soon-undated-rest .more-list-fewer { border-top: 0; }
   .soon-date { color: var(--body); font-size: 0.68rem; letter-spacing: 0.03em; }
   .soon-title { color: var(--text); font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .soon-slug { color: var(--muted); font-size: 0.6rem; letter-spacing: 0.06em; }

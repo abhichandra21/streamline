@@ -55,7 +55,11 @@ def _strip_json_fence(text: str) -> str:
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\n?", "", cleaned)
         cleaned = re.sub(r"\n?```$", "", cleaned)
-    return cleaned.strip()
+    cleaned = cleaned.strip()
+    # Models sometimes put a sentence before the JSON ("Judging by...:"); keep the object.
+    if not cleaned.startswith(("{", "[")) and "{" in cleaned:
+        cleaned = cleaned[cleaned.find("{"):cleaned.rfind("}") + 1]
+    return cleaned
 
 
 def _as_list(value: Any) -> list[Any]:

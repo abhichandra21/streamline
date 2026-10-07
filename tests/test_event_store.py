@@ -6,7 +6,7 @@ from pathlib import Path
 from recommender.ingestion.base import WatchEvent
 from recommender.event_store import (
     _connect, _compute_source_hash, init_db, replace_provider_events,
-    append_provider_events, remove_disabled_providers, load_events, get_import_info,
+    append_provider_events, remove_disabled_providers, load_events, get_import_info, last_played,
 )
 
 
@@ -701,3 +701,21 @@ def test_remove_disabled_providers_never_deletes_plex(tmp_path):
 
     remove_disabled_providers(db_path, [])
     assert [e.platform for e in load_events(db_path)] == ["plex"]
+
+
+def test_last_played_ignores_list_providers_and_keys_shows_by_series(tmp_path):
+    db = str(tmp_path / "e.db")
+    init_db(db)
+    append_provider_events(db, "netflix", [_make_event(timestamp=datetime(2026, 1, 1)),
+                                           _make_event(timestamp=datetime(2026, 3, 1))])
+    append_provider_events(db, "manual", [_make_event(platform="manual", title="Film", content_type="movie",
+                                                      series_name="Film", timestamp=datetime(2026, 10, 6))])
+    append_provider_events(db, "hbo", [_make_event(platform="hbo", title="Veep", content_type="movie",
+                                                   series_name="Veep", timestamp=datetime(2026, 10, 6))])
+    append_provider_events(db, "plex", [
+        _make_event(platform="plex", title="Civil War", content_type="movie", series_name="Civil War",
+                    timestamp=datetime(2026, 10, 4, 7, 11)),
+        _make_event(platform="plex", title="Later", content_type="movie", series_name="Later",
+                    timestamp=datetime(2026, 10, 9, 20, 0))])
+    assert last_played(db) == {("Succession", "tv"): "2026-03-01T00:00:00",
+                               ("Later", "movie"): "2026-10-09T20:00:00"}

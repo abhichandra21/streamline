@@ -145,15 +145,16 @@
     {% for cluster in clusters[:top_n] %}{{ taste_row(cluster, loop.index) }}{% endfor %}
   </ol>
   {% if clusters|length > top_n %}
-  <details class="tastes-more">
+  <details class="tastes-more more-list">
     <summary class="tastes-more-btn">
       <span class="plus" aria-hidden="true">+</span>
-      <span class="when-closed">{{ clusters|length - top_n }} more sides of you</span>
-      <span class="when-open">Just the big ones</span>
+      <span class="when-closed">Show {{ clusters|length - top_n }} more</span>
+      <span class="when-open">Show fewer</span>
     </summary>
     <ol class="tastes tastes--rest" start="{{ top_n + 1 }}">
       {% for cluster in clusters[top_n:] %}{{ taste_row(cluster, top_n + loop.index) }}{% endfor %}
     </ol>
+    <button type="button" class="tastes-more-btn more-list-fewer"><span class="plus" aria-hidden="true">&minus;</span>Show fewer</button>
   </details>
   {% endif %}
   {% if not_for_you %}
@@ -298,13 +299,11 @@
     width:max-content; margin:1.4rem auto; cursor:pointer; display:flex; align-items:center; gap:0.6rem;
     font-family:'JetBrains Mono', monospace; font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase;
     color:var(--body); border:1px solid var(--border); border-radius:999px; padding:0.6rem 1.2rem;
-    transition:border-color 0.2s, color 0.2s;
+    background:none; transition:border-color 0.2s, color 0.2s;
   }
   .tastes-more-btn:hover { border-color:var(--accent); color:var(--accent); }
   .tastes-more-btn .plus { font-size:0.9rem; transition:transform 0.3s; }
-  .tastes-more[open] > .tastes-more-btn .plus { transform:rotate(45deg); }
-  .tastes-more .when-open, .tastes-more[open] .when-closed { display:none; }
-  .tastes-more[open] .when-open { display:inline; }
+  .tastes-more[open] > summary .plus { transform:rotate(45deg); }
   .tastes-more[open] .tastes--rest { border-top:1px solid var(--border); }
 
   .taste-nfy { padding:1rem 1rem 0; font-size:0.85rem; color:var(--body); }

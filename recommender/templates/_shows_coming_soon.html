@@ -60,13 +60,17 @@
         {% endfor %}
       </div>
       {% if soon_undated|length > undated_batch %}
-      <details class="soon-undated-rest">
-        <summary class="mono">Show the remaining {{ soon_undated|length - undated_batch }}</summary>
+      <details class="soon-undated-rest more-list">
+        <summary class="mono">
+          <span class="when-closed">Show {{ soon_undated|length - undated_batch }} more</span>
+          <span class="when-open">Show fewer</span>
+        </summary>
         <div class="soon-list">
           {% for show in soon_undated[undated_batch:] %}
           {{ soon_row(show, csrf_token, undated=true) }}
           {% endfor %}
         </div>
+        <button type="button" class="more-list-fewer mono">Show fewer</button>
       </details>
       {% endif %}
     </div>

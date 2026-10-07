@@ -27,6 +27,10 @@ WORDS_TAGS_SHOWN = 8
 WORDS_VERSION = 2
 # A title with fewer usable tags than this is placed by the AI, once, not by one stray tag.
 MIN_TAGS_FOR_CODE_PLACEMENT = 2
+# A vote this close to the runner-up is a coin toss on one stray tag; the AI decides it instead.
+CLEAR_WIN_RATIO = 1.5
+# Saved for a title the AI skipped: placed by the code's vote, never asked again.
+VOTE = "vote"
 
 
 def region_facts(index_entries: list[dict], cache_dir: Path, collections: dict[str, list[str]]) -> dict[str, dict]:
@@ -74,23 +78,54 @@ def _allowed(title, tags, themes, facts, mapping):
             and (not _is_region(themes[mapping[t]]) or _in_region(themes[mapping[t]], fact))]
 
 
+def _votes(allowed, carriers) -> Counter:
+    votes = Counter()
+    for tag, i in allowed:
+        votes[i] += 1 / math.sqrt(carriers[tag])
+    return votes
+
+
 def doubtful_titles(loves, tags, themes, facts) -> list[str]:
+    """Titles code can't place with confidence: too few usable tags, or a near-tie between two themes."""
     mapping = tag_to_theme(themes)
-    return sorted((t for t in loves if len(_allowed(t, tags, themes, facts, mapping)) < MIN_TAGS_FOR_CODE_PLACEMENT),
-                  key=str.casefold)
+    carriers = Counter(t for title in loves for t in set(tags.get(title, [])))
+    doubtful = []
+    for title in loves:
+        allowed = _allowed(title, tags, themes, facts, mapping)
+        if any(_is_region(themes[i]) for _, i in allowed):
+            continue  # the facts decide region rows
+        top = [v for _, v in _votes(allowed, carriers).most_common(2)]
+        if len(allowed) < MIN_TAGS_FOR_CODE_PLACEMENT or (len(top) == 2 and top[0] < CLEAR_WIN_RATIO * top[1]):
+            doubtful.append(title)
+    return sorted(doubtful, key=str.casefold)
 
 
-def ai_placements(titles: list[str], tags: dict, themes: list[dict], client, reset: bool = False) -> dict[str, int | None]:
+def _theme_line(theme: dict) -> str:
+    if theme["region"]:
+        return f"{theme['id']}: {theme['label']} (only for titles made in {theme['region']})"
+    if theme["language"]:
+        return f"{theme['id']}: {theme['label']} (only for titles in language {theme['language']})"
+    return f"{theme['id']}: {theme['label']}"
+
+
+def ai_placements(titles: list[str], tags: dict, themes: list[dict], client, reset: bool = False,
+                  facts: dict | None = None) -> dict[str, int | None]:
     """The AI's saved pick of theme for titles with thin tag evidence; asked once per title.
 
     None means the AI judged that no theme fits, so the title stays out of every row.
     """
     saved = {} if reset else _load_json(config.TASTE_PLACEMENTS_PATH)
+    index = {t["id"]: i for i, t in enumerate(themes)}
+    # An answer the region rule blocks is a wrong answer: ask again.
+    for title in titles:
+        i = index.get(saved.get(title))
+        if i is not None and _is_region(themes[i]) and not _in_region(themes[i], (facts or {}).get(title)):
+            del saved[title]
     todo = [t for t in titles if t not in saved]
     if todo:
         prompt = (
             "A household's taste themes:\n"
-            + "\n".join(f"{t['id']}: {t['label']}" for t in themes)
+            + "\n".join(_theme_line(t) for t in themes)
             + "\n\nFor each loved title below, answer the id of the theme it belongs in, judged by what the "
             "title is, or \"none\" if it fits none. Return ONLY JSON mapping title to id.\n\n"
             + "\n".join(f"{t}: {', '.join(tags.get(t, []))}" for t in todo)
@@ -100,12 +135,23 @@ def ai_placements(titles: list[str], tags: dict, themes: list[dict], client, res
                 prompt, role="reason", max_tokens=4000, timeout=config.TIMEOUT_PROFILE_MERGE)))
         except Exception as exc:
             log.warning("Could not place thin-evidence titles, will retry next build: %s", exc)
-            answer = {}
+            answer = None
         if isinstance(answer, dict):
-            saved.update({t: str(answer[t]) for t in todo if t in answer})
+            # Models drop quotes or change case in titles like "Sr.".
+            loose = {str(k).strip('"\'').casefold(): v for k, v in answer.items()}
+            for title in todo:
+                found = answer.get(title, loose.get(title.strip('"\'').casefold()))
+                if found is None:
+                    saved[title] = VOTE  # skipped: code's vote decides, and it isn't asked again
+                    continue
+                pick = str(found)
+                i = index.get(pick)
+                # A pick the region rule blocks fits nowhere it's allowed; never ask again.
+                if i is not None and _is_region(themes[i]) and not _in_region(themes[i], (facts or {}).get(title)):
+                    pick = "none"
+                saved[title] = pick
             _write_json_atomic(saved, config.TASTE_PLACEMENTS_PATH)
-    index = {t["id"]: i for i, t in enumerate(themes)}
-    return {t: index.get(saved[t]) for t in titles if t in saved}
+    return {t: index.get(saved[t]) for t in titles if t in saved and saved[t] != VOTE}
 
 
 def place_loves(loves, tags, themes, facts, overrides=None):
@@ -127,9 +173,7 @@ def place_loves(loves, tags, themes, facts, overrides=None):
                 continue
         chosen = min((i for _, i in allowed if _is_region(themes[i])), default=None)
         if chosen is None and allowed:
-            votes = Counter()
-            for tag, i in allowed:
-                votes[i] += 1 / math.sqrt(carriers[tag])
+            votes = _votes(allowed, carriers)
             # Highest vote, then the earlier theme.
             chosen = min(votes, key=lambda i: (-round(votes[i], 9), i))
         if chosen is None:
@@ -235,7 +279,7 @@ def build_tag_profile(loves_scores, enrichments, index_entries, collections, cli
         themes = map_new_tags(themes, unmapped, client, config.TASTE_THEMES_PATH)
     facts = region_facts(index_entries, Path(config.CACHE_DIR), collections)
     doubtful = doubtful_titles(loves, loved_tags, themes, facts)
-    overrides = ai_placements(doubtful, loved_tags, themes, client, reset=rethink) if doubtful else {}
+    overrides = ai_placements(doubtful, loved_tags, themes, client, reset=rethink, facts=facts) if doubtful else {}
     placed, unplaced = place_loves(loves, loved_tags, themes, facts, overrides)
     rows = []
     for i, theme in enumerate(themes):
