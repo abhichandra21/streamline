@@ -1226,6 +1226,26 @@ def run_ingest_only() -> None:
     console.print("\n[green]All configured providers validated and persisted.[/green]")
 
 
+def _auto_data_refresh(index_path: Path, overrides_path: Path, archive_events: list[WatchEvent]) -> str | None:
+    """Why the watch index is out of date, or None when it isn't."""
+    if not index_path.exists():
+        return None
+    if overrides_path.exists() and overrides_path.stat().st_mtime > index_path.stat().st_mtime:
+        return "Overrides file changed since last build"
+    if archive_events:
+        # Archive entries added since the last build are not in the index, so they
+        # have no metadata or enrichment yet.
+        known = wi.load(str(index_path))
+        if any(
+            # Typed identity when the row has an ID; title only for rows without one.
+            ((e.content_type, e.tmdb_id_hint) not in known.tmdb_keys) if e.tmdb_id_hint
+            else ((wi._normalize(e.title), e.content_type) not in known.normalized_titles)
+            for e in archive_events
+        ):
+            return 'New "Seen it" archive entries'
+    return None
+
+
 def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provider: str | None = None,
               profile_path: str | None = None, rethink_themes: bool = False) -> None:
     if rethink_themes:
@@ -1273,32 +1293,13 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
     duplicate_override_keys: list[str] = []
     rematch_result: dict | None = None
 
-    # Auto-detect if overrides file has changed since last index build
     index_path = Path(config.WATCH_INDEX_PATH)
-    overrides_path = Path(config.OVERRIDES_PATH)
-    overrides_newer = (
-        overrides_path.exists()
-        and index_path.exists()
-        and overrides_path.stat().st_mtime > index_path.stat().st_mtime
-    )
-    if overrides_newer and not refresh_data:
-        console.print("\n[yellow]Overrides file changed since last build — triggering data + profile refresh.[/yellow]")
-        refresh_data = True
-        refresh_profile = True
-
-    if not refresh_data and index_path.exists() and archive_events:
-        # Archive entries added since the last build are not in the index, so they
-        # have no metadata or enrichment yet.
-        known = wi.load(config.WATCH_INDEX_PATH)
-        if any(
-            # Typed identity when the row has an ID; title only for rows without one.
-            ((e.content_type, e.tmdb_id_hint) not in known.tmdb_keys) if e.tmdb_id_hint
-            else ((wi._normalize(e.title), e.content_type) not in known.normalized_titles)
-            for e in archive_events
-        ):
-            console.print("\n[yellow]New \"Seen it\" archive entries — triggering data + profile refresh.[/yellow]")
+    if not refresh_data:
+        reason = _auto_data_refresh(index_path, Path(config.OVERRIDES_PATH), archive_events)
+        if reason:
+            # Data only: the taste profile rebuilds on request (--refresh-profile), never on its own.
+            console.print(f"\n[yellow]{reason} — triggering a data refresh.[/yellow]")
             refresh_data = True
-            refresh_profile = True
 
     if not refresh_data and index_path.exists():
         console.print("\nWatch index exists, skipping data fetch (use --refresh-data to rebuild).")

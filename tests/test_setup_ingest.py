@@ -853,3 +853,27 @@ def test_profile_scores_drop_every_alias_of_a_less_rated_title(monkeypatch):
     index = [{"title": "Film", "content_type": "movie", "tmdb_id": 1}]
     ratings = [{"title": "Film (Extended)", "content_type": "movie", "tmdb_id": 1, "rating": "less"}]
     assert _profile_scores(events, {}, index, ratings, []) == {}
+
+
+def test_a_data_refresh_never_rebuilds_the_taste_profile_on_its_own(tmp_path, monkeypatch):
+    """The profile rebuilds only on request (--refresh-profile), not when overrides or archive entries change."""
+    import os
+    from datetime import datetime
+    from recommender.ingestion.base import WatchEvent
+    from datetime import timedelta
+    import recommender.setup as setup
+    index = tmp_path / "watch_index.json"
+    index.write_text("[]")
+    overrides = tmp_path / "overrides.json"
+    overrides.write_text("{}")
+    os.utime(index, (1, 1))
+    new_seen = WatchEvent(platform="archive", title="New", content_type="movie", series_name="New",
+                          watched_duration=timedelta(0), total_duration=None, timestamp=datetime.now(),
+                          profile="")
+    reason = setup._auto_data_refresh(index, overrides, [new_seen])
+    assert reason and "Overrides" in reason
+    assert "profile" not in reason
+    os.utime(overrides, (1, 1))
+    os.utime(index, (2, 2))
+    assert "Seen it" in setup._auto_data_refresh(index, overrides, [new_seen])
+    assert setup._auto_data_refresh(index, overrides, []) is None
