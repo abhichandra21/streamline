@@ -3450,38 +3450,64 @@ class TestLovedIt:
     def _meta(self, key):
         return set(web._meta_json(key))
 
-    def test_save_loves_rejects_and_sends_the_rest_to_the_second_pass(self, client, archive):
+    def _shown(self):
+        return self._meta("loved_round_shown")
+
+    def _page(self, client, q=""):
+        return client.get(f"/loved-it{q}").get_data(as_text=True)
+
+    def test_save_loves_rejects_and_marks_the_rest_shown(self, client, archive):
         resp = self._save(client, archive, ["tv:1", "tv:2", "tv:3"], loved=["tv:2"], notforme=["tv:3"])
         assert resp.status_code == 302
         assert self._ratings(archive) == {2: "more", 3: "less"}
-        assert self._meta("loved_seen_once") == {"tv:1"}
+        assert self._shown() == {"tv:1"}
 
-    def test_untapped_twice_is_retired_with_no_rating(self, client, archive):
-        for _ in range(2):
-            self._save(client, archive, ["tv:1"])
-        assert self._ratings(archive) == {}
-        assert self._meta("loved_seen_once") == set() and self._meta("loved_retired") == {"tv:1"}
+    def test_a_round_shows_each_unrated_title_once_then_comes_back_around(self, client, archive):
+        self._save(client, archive, ["tv:1", "tv:2"])
+        body = self._page(client)
+        assert 'value="tv:3"' in body and 'value="tv:1"' not in body
+        self._save(client, archive, ["tv:3"])
+        body = self._page(client)  # round done: everything unrated comes back
+        assert all(f'value="tv:{i}"' in body for i in (1, 2, 3))
+        assert self._shown() == set()
+
+    def test_progress_holds_through_the_round(self, client, archive):
+        from flask import template_rendered
+        self._save(client, archive, ["tv:1", "tv:2"], loved=["tv:1"])
+        ctx = {}
+        record = lambda sender, template, context, **extra: ctx.update(context)
+        template_rendered.connect(record, app)
+        try:
+            client.get("/loved-it")
+        finally:
+            template_rendered.disconnect(record, app)
+        assert (ctx["seen"], ctx["rated"], ctx["unrated"], ctx["total"]) == (2, 1, 2, 3)
+
+    def test_start_over_shows_everything_unrated_again(self, client, archive):
+        self._save(client, archive, ["tv:1", "tv:2"])
+        client.post("/loved-it/restart", data=_csrf_form())
+        assert self._shown() == set()
+        assert 'value="tv:1"' in self._page(client)
+
+    def test_excluded_titles_never_show(self, client, archive):
+        from recommender.user_store import set_meta
+        set_meta(archive, "loved_excluded", '["tv:1"]')
+        body = self._page(client)
+        assert 'value="tv:1"' not in body and 'value="tv:2"' in body and "0 of 2" in body
 
     def test_save_keeps_a_rating_given_elsewhere_while_the_set_was_open(self, client, archive):
         from recommender.user_store import rate_title
         rate_title(archive, "Show 1", "tv", "less", tmdb_id=1)
         self._save(client, archive, ["tv:1", "tv:2"], loved=["tv:1"])
         assert self._ratings(archive) == {1: "less"}
-        assert self._meta("loved_seen_once") == {"tv:2"}
+        assert self._shown() == {"tv:2"}
 
-    def test_second_pass_starts_only_when_every_title_was_shown(self, client, archive):
-        self._save(client, archive, ["tv:1", "tv:2"])
-        body = client.get("/loved-it").get_data(as_text=True)
-        assert 'value="tv:3"' in body and 'value="tv:1"' not in body
-        self._save(client, archive, ["tv:3"])
-        body = client.get("/loved-it").get_data(as_text=True)
-        assert 'value="tv:1"' in body and 'value="tv:2"' in body
-
-    def test_earlier_passed_titles_join_the_second_pass(self, client, archive):
+    def test_kids_titles_are_hidden_until_switched_on(self, client, archive):
         from recommender.user_store import set_meta
-        set_meta(archive, "loved_passed", '["tv:1"]')
-        client.get("/loved-it")
-        assert self._meta("loved_seen_once") == {"tv:1"} and self._meta("loved_passed") == set()
+        set_meta(archive, "loved_excluded", '["tv:1"]')
+        assert 'value="tv:1"' not in self._page(client)
+        body = self._page(client, "?kids=show")
+        assert 'value="tv:1"' in body and "0 of 3" in body
 
     def test_source_filter_limits_the_set_and_the_progress(self, client, archive, tmp_path):
         import json as _json
@@ -3492,44 +3518,17 @@ class TestLovedIt:
         index.write_text(_json.dumps(entries))
         web._loved_archive_cache = None
         client.get("/loved-it")  # an All set holding all three is saved first
-        body = client.get("/loved-it?source=prime").get_data(as_text=True)
+        body = self._page(client, "?source=prime")
         assert 'value="tv:1"' in body and 'value="tv:2"' not in body
         assert "0 of 1" in body
         self._save(client, archive, ["tv:1"], loved=["tv:1"], source="prime")
-        body = client.get("/loved-it").get_data(as_text=True)
+        body = self._page(client)
         assert 'value="tv:2"' in body and 'value="tv:3"' in body
 
-    def test_progress_counts_seen_and_rated_separately(self, client, archive):
-        from flask import template_rendered
-        self._save(client, archive, ["tv:1", "tv:2"], loved=["tv:1"])
-        ctx = {}
-        def record(sender, template, context, **extra):
-            ctx.update(context)
-        template_rendered.connect(record, app)
-        try:
-            client.get("/loved-it")
-        finally:
-            template_rendered.disconnect(record, app)
-        assert (ctx["seen"], ctx["rated"], ctx["total"]) == (2, 1, 3)
-
-    def test_a_put_back_skip_left_untapped_again_is_done(self, client, archive):
-        from recommender.user_store import set_meta
-        set_meta(archive, "loved_reshown", '["tv:1", "tv:2"]')
-        self._save(client, archive, ["tv:1", "tv:2"], loved=["tv:2"])
-        assert self._meta("loved_retired") == {"tv:1"} and self._meta("loved_seen_once") == set()
-        assert self._ratings(archive) == {2: "more"} and self._meta("loved_reshown") == set()
-
     def test_a_repeated_save_changes_nothing(self, client, archive):
-        self._save(client, archive, ["tv:1"])
-        client.post("/loved-it/save", data=_csrf_form(shown=["tv:1"]))  # same set again
-        assert self._meta("loved_seen_once") == {"tv:1"} and self._meta("loved_retired") == set()
-
-    def test_a_source_set_drops_titles_seen_once_while_first_pass_titles_remain(self, client, archive):
-        from recommender.user_store import set_meta
-        set_meta(archive, "loved_current:netflix", '["tv:1", "tv:2"]')
-        self._save(client, archive, ["tv:1"])  # seen once from the All page
-        body = client.get("/loved-it?source=netflix").get_data(as_text=True)
-        assert 'value="tv:1"' not in body and 'value="tv:2"' in body
+        self._save(client, archive, ["tv:1"], loved=["tv:1"])
+        client.post("/loved-it/save", data=_csrf_form(shown=["tv:1"], notforme=["tv:1"]))  # same set again
+        assert self._ratings(archive) == {1: "more"}
 
     def test_a_rating_saved_without_a_tmdb_id_is_respected(self, client, archive):
         from recommender.user_store import rate_title
@@ -3542,13 +3541,13 @@ class TestLovedIt:
         client.get("/loved-it")
         first = web._meta_json("loved_current")
         rate_title(archive, "x", "tv", "more", tmdb_id=int(first[0].split(":")[1]))
-        body = client.get("/loved-it").get_data(as_text=True)
+        body = self._page(client)
         assert body.count('name="notforme"') == 2
         assert f'value="{first[1]}"' in body
 
     def test_page_renders_the_set_progress_and_the_token(self, client, archive):
         self._save(client, archive, ["tv:1"], loved=["tv:1"])
-        body = client.get("/loved-it").get_data(as_text=True)
+        body = self._page(client)
         assert "Show 2" in body and "Show 3" in body and 'value="tv:1"' not in body
         assert "1 of 3" in body
         assert 'name="_csrf_token"' in body

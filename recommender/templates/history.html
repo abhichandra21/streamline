@@ -116,7 +116,7 @@
   >
     {% if item.poster %}
     {% if link %}
-    <a href="{{ link }}" style="flex-shrink:0; display:block; width:38px; height:57px; overflow:hidden; border-radius:3px;">
+    <a href="{{ link }}" data-peek style="flex-shrink:0; display:block; width:38px; height:57px; overflow:hidden; border-radius:3px;">
       <img src="{{ item.poster }}" alt="{{ item.title }}" style="width:100%; height:100%; object-fit:cover;">
     </a>
     {% else %}
@@ -133,7 +133,7 @@
     <div style="flex:1; min-width:0;">
       <div style="display:flex; align-items:baseline; gap:0.5rem;">
         {% if link %}
-        <a href="{{ link }}" style="font-family:'DM Serif Display',serif; font-size:1.05rem; color:var(--text); text-decoration:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:color 0.12s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">{{ item.title }}</a>
+        <a href="{{ link }}" data-peek style="font-family:'DM Serif Display',serif; font-size:1.05rem; color:var(--text); text-decoration:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:color 0.12s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">{{ item.title }}</a>
         {% else %}
         <span style="font-family:'DM Serif Display',serif; font-size:1.05rem; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ item.title }}</span>
         {% endif %}
@@ -170,7 +170,7 @@
     {% set link = "/title/" ~ item.tmdb_id ~ "?type=" ~ item.content_type if item.tmdb_id else none %}
     {# No TMDB ID means nothing to open, so draw a plain card, not a link. #}
     {% set card_tag = 'a' if link else 'div' %}
-    <{{ card_tag }}{% if link %} href="{{ link }}"{% endif %} style="display:block; text-decoration:none; position:relative; group;" title="{{ item.title }}">
+    <{{ card_tag }}{% if link %} href="{{ link }}" data-peek{% endif %} style="display:block; text-decoration:none; position:relative; group;" title="{{ item.title }}">
       <div style="aspect-ratio:2/3; overflow:hidden; border-radius:4px; background:var(--surface2); border:1px solid var(--border); transition:border-color 0.2s;"
         onmouseover="{% if link %}this.style.borderColor='var(--accent)'; {% endif %}this.querySelector('.grid-title').style.opacity='1'"
         onmouseout="this.style.borderColor='var(--border)'; this.querySelector('.grid-title').style.opacity='0'"
@@ -210,7 +210,7 @@
     <div style="break-inside:avoid; padding:0.3rem 0; display:flex; align-items:baseline; gap:0.4rem;">
       <span class="badge {{ 'badge-tv' if item.content_type == 'tv' else 'badge-movie' }}" style="font-size:0.5rem; flex-shrink:0;">{{ item.content_type[:1] | upper }}</span>
       {% if link %}
-      <a href="{{ link }}" style="font-size:0.85rem; color:var(--body); text-decoration:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:color 0.12s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--body)'">{{ item.title }}</a>
+      <a href="{{ link }}" data-peek style="font-size:0.85rem; color:var(--body); text-decoration:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:color 0.12s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--body)'">{{ item.title }}</a>
       {% else %}
       <span style="font-size:0.85rem; color:var(--body); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ item.title }}</span>
       {% endif %}
@@ -243,6 +243,33 @@
   {% endif %}
 </div>
 {% endif %}
+
+<!-- Title modal: opens a title over the Archive so the page, filters and
+     scroll stay put. Left/Right step through the titles on this page.
+     Without JavaScript the links above go to the full title page. -->
+<dialog id="peek" class="peek" aria-labelledby="title-panel-heading">
+  <div class="peek-bar">
+    <span class="mono peek-eyebrow">Archive <span id="peek-pos" class="peek-pos"></span></span>
+    <div class="peek-nav">
+      <button type="button" class="peek-btn" data-peek-step="-1" aria-label="Previous title" title="Previous title (Left arrow)">
+        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M9 2L4 7l5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button type="button" class="peek-btn" data-peek-step="1" aria-label="Next title" title="Next title (Right arrow)">
+        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M5 2l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+    <a id="peek-full" href="#" class="mono peek-full">Full page ↗</a>
+    <button type="button" class="peek-btn peek-close" data-peek-close aria-label="Close and return to the Archive" title="Close (Esc)">
+      <span class="mono peek-esc" aria-hidden="true">Esc</span>
+      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  <div id="peek-body" class="peek-body"></div>
+  <p class="mono peek-keys" aria-hidden="true">
+    <span><kbd>L</kbd> loved</span><span><kbd>F</kbd> fine</span><span><kbd>N</kbd> not for me</span>
+    <span><kbd>←</kbd><kbd>→</kbd> move</span><span><kbd>Esc</kbd> close</span>
+  </p>
+</dialog>
 
 <style>
   /* Hide all views by default, show only the one matching the saved preference.
@@ -325,6 +352,162 @@
   #view-list > div:nth-child(10), #view-grid > div > a:nth-child(10) { animation-delay: 0.18s; }
   #view-list > div:nth-child(11), #view-grid > div > a:nth-child(11) { animation-delay: 0.20s; }
   #view-list > div:nth-child(12), #view-grid > div > a:nth-child(12) { animation-delay: 0.22s; }
+  /* Title modal. A centred card over the dimmed Archive; on phones it becomes
+     a tall bottom sheet. Native <dialog> gives Esc, the focus trap and an
+     inert page behind it for free. */
+  .peek {
+    width: min(820px, calc(100vw - 3rem));
+    max-width: none;
+    height: min(860px, calc(100dvh - 4rem));
+    max-height: none;
+    margin: auto;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg);
+    color: var(--body);
+    box-shadow: 0 30px 80px rgba(0,0,0,0.55);
+    overflow: hidden;
+    flex-direction: column;
+  }
+  .peek[open] { display: flex; animation: peekIn 0.24s cubic-bezier(.2,.7,.2,1) both; }
+  .peek::backdrop {
+    background: rgba(10,8,14,0.6);
+    backdrop-filter: blur(3px);
+    animation: peekFade 0.2s ease both;
+  }
+  @keyframes peekIn   { from { transform: translateY(14px) scale(0.985); opacity: 0; } to { transform: none; opacity: 1; } }
+  @keyframes peekUp   { from { transform: translateY(36px); opacity: 0; } to { transform: none; opacity: 1; } }
+  @keyframes peekFade { from { opacity: 0; } to { opacity: 1; } }
+  /* Stepping to the next or previous title slides the content that way. */
+  @keyframes peekNext { from { transform: translateX(18px); opacity: 0; } to { transform: none; opacity: 1; } }
+  @keyframes peekPrev { from { transform: translateX(-18px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .peek-body.is-next > * { animation: peekNext 0.22s ease both; }
+  .peek-body.is-prev > * { animation: peekPrev 0.22s ease both; }
+  /* Freeze the page behind the modal so its scroll position cannot drift. */
+  html:has(.peek[open]) { overflow: hidden; }
+
+  .peek-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.7rem 1rem 0.7rem 1.75rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    flex-shrink: 0;
+  }
+  .peek-eyebrow {
+    font-size: 0.58rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-right: auto;
+    white-space: nowrap;
+  }
+  .peek-pos { color: var(--muted); margin-left: 0.5rem; letter-spacing: 0.08em; }
+  .peek-nav { display: flex; gap: 4px; }
+  .peek-full {
+    font-size: 0.6rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+    transition: color 0.15s;
+  }
+  .peek-full:hover { color: var(--text); text-decoration: none; }
+  .peek-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    min-width: 34px;
+    height: 32px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--muted);
+    padding: 0 0.55rem;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, opacity 0.15s;
+  }
+  .peek-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+  .peek-btn:disabled { opacity: 0.35; cursor: default; }
+  .peek-btn:focus-visible, .peek-full:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .peek-esc { font-size: 0.55rem; letter-spacing: 0.08em; }
+
+  .peek-body {
+    flex: 1;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0.5rem 1.75rem 2.5rem;
+    position: relative;
+    isolation: isolate;
+  }
+  /* A soft wash of the poster behind the header, only in the modal. */
+  .peek .title-panel { position: relative; }
+  .peek .title-panel::before {
+    content: "";
+    position: absolute;
+    inset: -0.5rem -1.75rem auto;
+    height: 320px;
+    background: var(--tp-poster, none) center 25% / cover no-repeat;
+    filter: blur(40px) saturate(1.2);
+    opacity: 0.22;
+    -webkit-mask-image: linear-gradient(to bottom, #000 20%, transparent);
+            mask-image: linear-gradient(to bottom, #000 20%, transparent);
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  /* Keyboard hint. Hidden where there is no keyboard to press. */
+  .peek-keys {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.35rem 1.1rem;
+    padding: 0.55rem 1rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.56rem;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .peek-keys kbd {
+    font: inherit;
+    color: var(--body);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0 0.3rem;
+    margin-right: 0.3rem;
+  }
+  .peek-keys kbd + kbd { margin-left: -0.15rem; }
+  @media (hover: none), (max-width: 639px) { .peek-keys { display: none; } }
+
+  .peek-loading { padding-top: 1.75rem; display: flex; gap: 1.25rem; }
+  .peek-loading span { display: block; background: var(--surface2); border-radius: 4px; animation: peekPulse 1.1s ease-in-out infinite alternate; }
+  @keyframes peekPulse { from { opacity: 0.45; } to { opacity: 1; } }
+  .peek-error { padding: 3rem 0; text-align: center; }
+
+  @media (max-width: 639px) {
+    .peek {
+      width: 100%;
+      height: 92dvh;
+      margin: auto 0 0;
+      border-width: 1px 0 0;
+      border-radius: 14px 14px 0 0;
+      box-shadow: 0 -20px 50px rgba(0,0,0,0.5);
+    }
+    .peek[open] { animation-name: peekUp; }
+    .peek-bar { padding: 0.6rem 0.75rem 0.6rem 1.25rem; gap: 0.5rem; }
+    .peek-btn { min-width: 40px; height: 38px; }
+    .peek-body { padding: 0.25rem 1.25rem 2rem; }
+    .peek-esc { display: none; }
+    .peek .title-panel::before { inset: -0.25rem -1.25rem auto; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .peek[open], .peek::backdrop, .peek-body > * { animation: none !important; }
+  }
 </style>
 
 <script>
@@ -359,6 +542,177 @@ function setView(mode) {
     document.querySelectorAll('.view-btn').forEach(function(el) { el.classList.remove('active'); });
     document.getElementById('btn-' + saved).classList.add('active');
   }
+})();
+// Title modal. Plain clicks on a title open it over the Archive; modified
+// clicks (new tab, etc.) and pages without HTMX keep the normal link.
+(function() {
+  var dialog = document.getElementById('peek');
+  var body = document.getElementById('peek-body');
+  var fullLink = document.getElementById('peek-full');
+  var posLabel = document.getElementById('peek-pos');
+  var prevBtn = dialog.querySelector('[data-peek-step="-1"]');
+  var nextBtn = dialog.querySelector('[data-peek-step="1"]');
+  var current = null;   // the link for the title on screen; focus returns here
+  var request = 0;
+
+  // A reload while the modal was open leaves our history entry behind.
+  if (history.state && history.state.peek) history.replaceState(null, '');
+  history.scrollRestoration = 'auto';
+
+  // The titles on this page, in order, from whichever view is showing. List
+  // rows link both poster and name, so keep one link per title.
+  function titles() {
+    var seen = {};
+    return Array.prototype.filter.call(document.querySelectorAll('.archive-view a[data-peek]'), function(a) {
+      if (!a.offsetParent || seen[a.getAttribute('href')]) return false;
+      seen[a.getAttribute('href')] = true;
+      return true;
+    });
+  }
+
+  function loading() {
+    body.innerHTML = '<div class="peek-loading" aria-label="Loading">'
+      + '<span style="width:108px; height:162px;"></span>'
+      + '<div style="flex:1; display:flex; flex-direction:column; gap:0.6rem;">'
+      + '<span style="width:30%; height:0.8rem;"></span>'
+      + '<span style="width:80%; height:1.8rem;"></span>'
+      + '<span style="width:55%; height:0.8rem;"></span></div></div>';
+  }
+
+  function show(link, direction, focusHeading) {
+    current = link;
+    var href = link.getAttribute('href');
+    fullLink.href = href;
+    var list = titles();
+    var i = list.indexOf(link);
+    posLabel.textContent = i >= 0 ? (i + 1) + ' / ' + list.length : '';
+    prevBtn.disabled = i <= 0;
+    nextBtn.disabled = i < 0 || i >= list.length - 1;
+    body.classList.remove('is-next', 'is-prev');
+    if (direction) {
+      void body.offsetWidth;  // restart the slide animation
+      body.classList.add(direction > 0 ? 'is-next' : 'is-prev');
+      // Keep the page behind on the title being viewed, so closing lands there.
+      link.scrollIntoView({block: 'nearest'});
+    }
+    loading();
+    var mine = ++request;
+    var url = href + (href.indexOf('?') >= 0 ? '&' : '?') + 'panel=1';
+    fetch(url, {headers: {'HX-Request': 'true'}, credentials: 'same-origin'})
+      .then(function(res) {
+        // A redirect (e.g. back to the password page) is not the panel.
+        if (!res.ok || res.redirected) throw new Error(res.status);
+        return res.text();
+      })
+      .then(function(html) {
+        if (mine !== request || !dialog.open) return;
+        body.innerHTML = html;
+        body.scrollTop = 0;
+        htmx.process(body);
+        var heading = document.getElementById('title-panel-heading');
+        if (heading && focusHeading) heading.focus({preventScroll: true});
+      })
+      .catch(function() {
+        if (mine !== request || !dialog.open) return;
+        body.innerHTML = '<div class="peek-error"><p class="mono" style="font-size:0.68rem; color:var(--muted);">Could not load this title here.</p>'
+          + '<p style="margin-top:0.6rem;"><a href="' + href + '">Open the full page</a></p></div>';
+      });
+  }
+
+  function step(by, focusHeading) {
+    var list = titles();
+    var next = list[list.indexOf(current) + by];
+    if (next) show(next, by, focusHeading);
+  }
+
+  document.addEventListener('click', function(e) {
+    var link = e.target.closest('a[data-peek]');
+    if (!link || !window.htmx || typeof dialog.showModal !== 'function') return;
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    // Normalise to the first link for this title, so stepping counts from it.
+    var same = titles().filter(function(a) { return a.getAttribute('href') === link.getAttribute('href'); })[0];
+    dialog.showModal();
+    dialog.querySelector('[data-peek-close]').focus();
+    if (!(history.state && history.state.peek)) {
+      // Going back to this entry must not restore the scroll from when the
+      // modal opened; closing lands on the last title viewed instead.
+      history.scrollRestoration = 'manual';
+      history.pushState({peek: true}, '');
+    }
+    show(same || link, 0, true);
+  });
+
+  dialog.addEventListener('click', function(e) {
+    // A click on the backdrop lands on the dialog box itself.
+    if (e.target === dialog || e.target.closest('[data-peek-close]')) { dialog.close(); return; }
+    var stepBtn = e.target.closest('[data-peek-step]');
+    if (stepBtn) step(Number(stepBtn.getAttribute('data-peek-step')), false);
+  });
+
+  // L / F / N press the title's own rating buttons (same form, same
+  // hx-post). Already set means nothing to do, so a key never clears.
+  var ratingKeys = {l: 'more', f: 'neutral', n: 'less'};
+
+  // On the document, not the dialog: a swapped-out button drops focus to body.
+  document.addEventListener('keydown', function(e) {
+    if (!dialog.open || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.target.closest('input, select, textarea, [contenteditable]')) return;
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.shiftKey) {
+      e.preventDefault();
+      step(e.key === 'ArrowRight' ? 1 : -1, true);
+      return;
+    }
+    var value = ratingKeys[e.key.toLowerCase()];
+    if (!value || e.repeat) return;
+    var btn = body.querySelector('.rating-state .rate-btn--' + value);
+    if (!btn || btn.classList.contains('is-set') || btn.closest('.htmx-request')) return;
+    e.preventDefault();
+    btn.click();
+  });
+
+  dialog.addEventListener('close', function() {
+    request++;
+    if (current && document.contains(current)) {
+      current.focus({preventScroll: true});
+      current.scrollIntoView({block: 'nearest'});
+    }
+    current = null;
+    // Drop the entry pushed on open, so Back after closing leaves the Archive.
+    if (history.state && history.state.peek) history.back();
+  });
+
+  // Back (or a phone's back gesture) closes the modal instead of leaving.
+  window.addEventListener('popstate', function() {
+    if (dialog.open) dialog.close();
+    if (!(history.state && history.state.peek)) history.scrollRestoration = 'auto';
+  });
+
+  // Rating inside the modal: copy the new state onto the matching list row
+  // so the Archive is not stale when the modal closes.
+  document.addEventListener('htmx:afterSettle', function() {
+    if (!dialog.open) return;
+    // A swap can remove the focused button; keep focus inside the modal.
+    if (!dialog.contains(document.activeElement)) {
+      var heading = document.getElementById('title-panel-heading');
+      if (heading) heading.focus({preventScroll: true});
+    }
+    var fresh = body.querySelector('.rating-state');
+    if (!fresh) return;
+    var id = fresh.querySelector('input[name="tmdb_id"]').value;
+    var ct = fresh.querySelector('input[name="content_type"]').value;
+    if (!id) return;
+    document.querySelectorAll('#view-list .rating-state').forEach(function(row) {
+      var rowId = row.querySelector('input[name="tmdb_id"]');
+      var rowCt = row.querySelector('input[name="content_type"]');
+      if (!rowId || rowId.value !== id || !rowCt || rowCt.value !== ct) return;
+      var copy = fresh.cloneNode(true);
+      copy.id = row.id;
+      copy.querySelector('form').setAttribute('hx-target', '#' + row.id);
+      row.replaceWith(copy);
+      htmx.process(copy);
+    });
+  });
 })();
 </script>
 

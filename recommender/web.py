@@ -1661,14 +1661,11 @@ def classics_page() -> str:
 
 
 _LOVED_CURRENT_KEY = "loved_current"
-# Shown once and left untapped: comes back once more in the second pass.
-_LOVED_SEEN_ONCE_KEY = "loved_seen_once"
-# Left untapped twice: done, with no rating.
-_LOVED_RETIRED_KEY = "loved_retired"
-# Skips put back into the first pass by hand: left untapped again, they are done.
-_LOVED_RESHOWN_KEY = "loved_reshown"
-# Earlier version: untapped titles were "passed". They join the second pass.
-_LOVED_OLD_PASSED_KEY = "loved_passed"
+# Titles shown and left unrated in the current round. A round goes through every
+# unrated title once; when none are left to show, the next round starts.
+_LOVED_SHOWN_KEY = "loved_round_shown"
+# Titles taken out of Rate It for good, unrated (kids' and teen titles).
+_LOVED_EXCLUDED_KEY = "loved_excluded"
 LOVED_SOURCES = [
     ("netflix", "Netflix"), ("prime", "Prime Video"), ("apple_tv", "Apple TV"), ("disney", "Disney+"),
     ("hbo", "Max"), ("plex", "Plex"), ("manual", "Downloads list"), ("archive", "Seen It"),
@@ -1711,17 +1708,6 @@ def _loved_ratings() -> dict[str, str]:
     return ratings
 
 
-def _loved_passes() -> tuple[set[str], set[str]]:
-    """Titles seen once and titles retired, folding in the earlier "passed" list."""
-    seen_once = set(_meta_json(_LOVED_SEEN_ONCE_KEY))
-    old = set(_meta_json(_LOVED_OLD_PASSED_KEY))
-    if old:
-        seen_once |= old
-        user_store.set_meta(config.EVENT_DB_PATH, _LOVED_SEEN_ONCE_KEY, json.dumps(sorted(seen_once)))
-        user_store.set_meta(config.EVENT_DB_PATH, _LOVED_OLD_PASSED_KEY, "[]")
-    return seen_once, set(_meta_json(_LOVED_RETIRED_KEY))
-
-
 def _loved_history(archive: list, ratings: dict[str, str], shown: set[str]) -> dict[str, tuple[int, int]]:
     history: dict[str, tuple[int, int]] = {}
     for t in archive:
@@ -1731,107 +1717,137 @@ def _loved_history(archive: list, ratings: dict[str, str], shown: set[str]) -> d
     return history
 
 
+def _loved_current_key(source: str, show_kids: bool = False) -> str:
+    key = f"{_LOVED_CURRENT_KEY}:{source}" if source else _LOVED_CURRENT_KEY
+    return key + ":kids" if show_kids else key
+
+
+def _loved_source(value: str | None) -> str:
+    return value if value in dict(LOVED_SOURCES) else ""
+
+
+def _loved_scope(archive: list, source: str, excluded: set[str], show_kids: bool) -> list:
+    """Titles a source shows; kids' and family titles only when show_kids is on."""
+    return [t for t in archive if (show_kids or t.key not in excluded)
+            and (not source or source in t.sources)]
+
+
+def _loved_show_kids(value: str | None) -> bool:
+    """Kids' and family titles are hidden unless ?kids=show."""
+    return value == "show"
+
+
+def _loved_page_url(source: str, show_kids: bool) -> str:
+    return url_for("loved_it_page", source=source or None, kids="show" if show_kids else None)
+
+
 @app.route("/loved-it")
 def loved_it_page() -> str:
-    """Loved It: sets of archive titles; tap the ones you loved or don't want.
+    """Rate It: sets of unrated archive titles; tap the ones you loved or don't want.
 
-    Untapped titles come back once, after everything has been shown; left
-    untapped again, they are done with no rating. The current set is saved, so
+    Each round shows every unrated title once; when the round runs out, the
+    next one starts over what is still unrated. The current set is saved, so
     reloading shows the same titles, minus any rated since. ?source= limits the
-    sets to one source, for judging a new export.
+    sets to one source.
     """
-    source = request.args.get("source") or ""
-    if source not in dict(LOVED_SOURCES):
-        source = ""
-    page = {"titles": [], "judged": 0, "total": 0, "seen": 0, "rated": 0, "error": None,
-            "second_pass": False, "source": source, "sources": []}
+    source = _loved_source(request.args.get("source"))
+    show_kids = _loved_show_kids(request.args.get("kids"))
+    page = {"titles": [], "judged": 0, "total": 0, "seen": 0, "rated": 0, "unrated": 0, "error": None,
+            "second_pass": False, "source": source, "sources": [], "show_kids": show_kids,
+            "kids_count": 0}
     try:
         archive = _loved_archive()
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        log.warning("Loved It: watch index unavailable at %s: %s", config.WATCH_INDEX_PATH, exc)
+        log.warning("Rate It: watch index unavailable at %s: %s", config.WATCH_INDEX_PATH, exc)
         page["error"] = "Watch index is missing or unreadable. Run ./recommend setup, then reload this page."
         return render_template("loved_it.html", **page)
 
     _ensure_user_store_once()
     ratings = _loved_ratings()
-    seen_once, retired = _loved_passes()
-    open_titles = [t for t in archive if t.key not in ratings and t.key not in retired]
+    excluded = set(_meta_json(_LOVED_EXCLUDED_KEY))
+    shown = set(_meta_json(_LOVED_SHOWN_KEY))
+    unrated_all = [t for t in _loved_scope(archive, "", excluded, show_kids) if t.key not in ratings]
     page["sources"] = [
-        {"value": value, "label": label, "open": sum(1 for t in open_titles if value in t.sources)}
-        for value, label in LOVED_SOURCES if any(value in t.sources for t in archive)
+        {"value": value, "label": label, "open": sum(1 for t in unrated_all if value in t.sources)}
+        for value, label in LOVED_SOURCES if any(value in t.sources for t in unrated_all)
     ]
-    scope = [t for t in archive if not source or source in t.sources]
-    open_titles = [t for t in open_titles if not source or source in t.sources]
-    page["total"] = len(scope)
-    page["judged"] = len(scope) - len(open_titles)
+    page["kids_count"] = sum(1 for t in archive if t.key in excluded)
+    scope = _loved_scope(archive, source, excluded, show_kids)
+    unrated = [t for t in scope if t.key not in ratings]
+    to_show = [t for t in unrated if t.key not in shown]
+    if not to_show and unrated:
+        # The round is done for this scope: it comes back around.
+        shown -= {t.key for t in unrated}
+        user_store.set_meta(config.EVENT_DB_PATH, _LOVED_SHOWN_KEY, json.dumps(sorted(shown)))
+        to_show = unrated
 
-    # Each source keeps its own current set, so switching sources draws a full set.
-    current_key = f"{_LOVED_CURRENT_KEY}:{source}" if source else _LOVED_CURRENT_KEY
-    fresh = [t for t in open_titles if t.key not in seen_once]
-    # Keep only cached titles that belong to the current pass: while first-pass
-    # titles remain, a title seen once under another source waits its turn.
-    by_key = {t.key: t for t in (fresh or open_titles)}
+    current_key = _loved_current_key(source, show_kids)
+    by_key = {t.key: t for t in to_show}
     titles = [by_key[k] for k in _meta_json(current_key) if k in by_key]
-    # Shown at least once, whatever the answer; rated means loved, not for me, or followed.
-    page["seen"] = len(scope) - len(fresh)
-    page["rated"] = sum(1 for t in scope if t.key in ratings)
     # Titles rated since (here or under another source) drop out; top the set back up.
-    if len(titles) < loved_it.SET_SIZE and len(open_titles) > len(titles):
+    if len(titles) < loved_it.SET_SIZE and len(to_show) > len(titles):
         in_set = {t.key for t in titles}
-        pool = [t for t in (fresh or open_titles) if t.key not in in_set]
-        titles += loved_it.next_set(pool, _loved_history(archive, ratings, seen_once | retired),
+        pool = [t for t in to_show if t.key not in in_set]
+        titles += loved_it.next_set(pool, _loved_history(scope, ratings, shown),
                                     size=loved_it.SET_SIZE - len(titles))
         user_store.set_meta(config.EVENT_DB_PATH, current_key, json.dumps([t.key for t in titles]))
-    page["second_pass"] = bool(titles) and not fresh
+
+    page["total"] = len(scope)
+    page["rated"] = len(scope) - len(unrated)
+    page["unrated"] = len(unrated)
+    # Progress through this round: rated titles plus unrated ones already shown.
+    page["seen"] = page["judged"] = len(scope) - len(to_show)
     page["titles"] = titles
     return render_template("loved_it.html", **page)
 
 
 @app.route("/loved-it/save", methods=["POST"])
 def loved_it_save():
-    """Loved becomes More like this, Not for me becomes Less like this.
+    """Loved becomes More like this, Not for me becomes Less like this; the rest
+    count as shown this round.
 
-    An untapped title moves to the second pass, or is retired with no rating
-    if this was its second time. Ratings are re-read here, so a title rated
-    elsewhere while the set was open keeps that rating.
+    Only titles still in the open set count, so a repeated submit of the same set
+    (double tap, retry) changes nothing the second time. Ratings are re-read, so
+    a title rated elsewhere while the set was open keeps that rating.
     """
     _ensure_user_store_once()
-    source = request.form.get("source") or ""
-    if source not in dict(LOVED_SOURCES):
-        source = ""
-    current_key = f"{_LOVED_CURRENT_KEY}:{source}" if source else _LOVED_CURRENT_KEY
-    # Only titles still in the open set count, so a repeated submit of the
-    # same set (double tap, retry) changes nothing the second time.
+    source = _loved_source(request.form.get("source"))
+    show_kids = _loved_show_kids(request.form.get("kids"))
+    current_key = _loved_current_key(source, show_kids)
     current = set(_meta_json(current_key))
     loved = set(request.form.getlist("loved"))
     not_for_me = set(request.form.getlist("notforme")) - loved
     by_key = {t.key: t for t in _loved_archive()}
     ratings = _loved_ratings()
-    seen_once, retired = _loved_passes()
-    reshown = set(_meta_json(_LOVED_RESHOWN_KEY))
+    shown = set(_meta_json(_LOVED_SHOWN_KEY))
     for key in request.form.getlist("shown"):
-        if key not in current:
-            continue
         title = by_key.get(key)
-        if title is None or key in ratings or key in retired:
+        if key not in current or title is None or key in ratings:
             continue
         if key in loved or key in not_for_me:
             rating = user_store.RATING_MORE if key in loved else user_store.RATING_LESS
             user_store.rate_title(config.EVENT_DB_PATH, title.title, title.content_type,
                                   rating, tmdb_id=title.tmdb_id)
-            seen_once.discard(key)
-        elif key in seen_once or key in reshown:
-            seen_once.discard(key)
-            retired.add(key)
         else:
-            seen_once.add(key)
-        reshown.discard(key)
-    user_store.set_meta(config.EVENT_DB_PATH, _LOVED_SEEN_ONCE_KEY, json.dumps(sorted(seen_once)))
-    user_store.set_meta(config.EVENT_DB_PATH, _LOVED_RETIRED_KEY, json.dumps(sorted(retired)))
-    user_store.set_meta(config.EVENT_DB_PATH, _LOVED_RESHOWN_KEY, json.dumps(sorted(reshown)))
+            shown.add(key)
+    user_store.set_meta(config.EVENT_DB_PATH, _LOVED_SHOWN_KEY, json.dumps(sorted(shown)))
     user_store.set_meta(config.EVENT_DB_PATH, current_key, "[]")
     Path(config.PROFILE_STALE_FLAG).touch()
-    return redirect(url_for("loved_it_page", source=source or None))
+    return redirect(_loved_page_url(source, show_kids))
+
+
+@app.route("/loved-it/restart", methods=["POST"])
+def loved_it_restart():
+    """Start over: every unrated title in this scope can be shown again."""
+    _ensure_user_store_once()
+    source = _loved_source(request.form.get("source"))
+    show_kids = _loved_show_kids(request.form.get("kids"))
+    excluded = set(_meta_json(_LOVED_EXCLUDED_KEY))
+    scope = {t.key for t in _loved_scope(_loved_archive(), source, excluded, show_kids)}
+    shown = set(_meta_json(_LOVED_SHOWN_KEY)) - scope
+    user_store.set_meta(config.EVENT_DB_PATH, _LOVED_SHOWN_KEY, json.dumps(sorted(shown)))
+    user_store.set_meta(config.EVENT_DB_PATH, _loved_current_key(source, show_kids), "[]")
+    return redirect(_loved_page_url(source, show_kids))
 
 
 @app.route("/classics/new", methods=["POST"])
@@ -2163,8 +2179,10 @@ def title_detail(tmdb_id: int) -> str:
     if not state["in_archive"] and meta:
         if (ct, tmdb_id) in ctx.watch_index.tmdb_keys:
             state["in_archive"] = True
+    # ?panel=1 returns just the details, for opening over the Archive without leaving it.
     return render_template(
-        "title.html", meta=meta, description=description, overview=overview,
+        "_title_panel.html" if request.args.get("panel") else "title.html",
+        meta=meta, description=description, overview=overview,
         tmdb_id=tmdb_id, ct=ct, poster=poster, user_state=state,
         tracking=_title_tracking_state(tmdb_id, ct),
     )

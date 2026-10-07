@@ -1,0 +1,133 @@
+{# The title's details, without the page around them. title.html includes this
+   for the full page; the Archive fetches it with ?panel=1 and shows it in a
+   modal, so every form and hx-target here must work in both places. #}
+<article class="title-panel"{% if poster %} style="--tp-poster:url('{{ poster }}')"{% endif %}>
+{% if meta %}
+
+<div class="tp-head" style="margin:1.75rem 0 2rem; display:flex; gap:2rem; align-items:flex-start;">
+
+  {% if poster %}
+  <div class="tp-poster" style="flex-shrink:0; width:170px;">
+    <div style="aspect-ratio:2/3; overflow:hidden; border-radius:6px; box-shadow:0 8px 30px rgba(0,0,0,0.4);">
+      <img src="{{ poster }}" alt="{{ meta.title }}" style="width:100%; height:100%; object-fit:cover;">
+    </div>
+  </div>
+  {% endif %}
+
+  <div style="flex:1; min-width:0;">
+    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem; flex-wrap:wrap;">
+      <span class="badge {{ 'badge-tv' if meta.content_type == 'tv' else 'badge-movie' }}">{{ meta.content_type }}</span>
+      {% if meta.original_language %}
+      <span class="badge" style="background:var(--surface2); color:var(--muted);">{{ meta.original_language | upper }}</span>
+      {% endif %}
+      <span class="mono" style="font-size:0.65rem; color:var(--accent2);">{{ meta.rating|rating_label(meta.rating_source) }}</span>
+      <span class="mono" style="font-size:0.58rem; color:var(--muted);">({{ "{:,}".format(meta.rating_votes) }} votes)</span>
+    </div>
+
+    <h1 id="title-panel-heading" tabindex="-1" style="outline:none; font-size:clamp(1.6rem, 3.5vw, 2.6rem); line-height:1.1; margin-bottom:0.6rem;">{{ meta.title }}</h1>
+
+    {% if meta.genres %}
+    <div style="display:flex; gap:0.35rem; flex-wrap:wrap; margin-bottom:0.85rem;">
+      {% for g in meta.genres %}
+      <span class="badge" style="background:var(--surface2); color:var(--muted);">{{ g }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div style="display:flex; align-items:center; gap:0.75rem; margin-top:0.5rem; flex-wrap:wrap;">
+      <a href="https://www.themoviedb.org/{{ 'tv' if meta.content_type == 'tv' else 'movie' }}/{{ tmdb_id }}"
+         target="_blank" rel="noopener" class="mono result-link">TMDB ↗</a>
+      <span style="color:var(--border);">·</span>
+      {% if user_state.in_archive %}
+      {% set uid = "title-" ~ tmdb_id %}
+      {% with current_rating=user_state.rating, title=meta.title, content_type=meta.content_type, tmdb_id=tmdb_id %}
+      {% include "_rating_state.html" %}
+      {% endwith %}
+      {% elif user_state.in_watchlist %}
+      <span class="mono" style="font-size:0.62rem; color:var(--yours);">In your watchlist</span>
+      {% else %}
+      <span id="title-save">
+        <form hx-post="/watchlist/save" hx-target="#title-save" hx-swap="outerHTML" style="margin:0; display:inline;">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="title" value="{{ meta.title }}">
+          <input type="hidden" name="content_type" value="{{ meta.content_type }}">
+          <input type="hidden" name="tmdb_id" value="{{ tmdb_id }}">
+          <button type="submit" class="mono" style="font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; background:none; border:none; cursor:pointer; padding:0; color:var(--yours); transition:opacity 0.15s;"
+            onmouseover="this.style.opacity='0.7'" onmouseout="this.style.opacity='1'"
+          >+ Save to watchlist</button>
+        </form>
+      </span>
+      {% endif %}
+      {% if tracking.state or tracking.can_follow %}
+      <span style="color:var(--border);">·</span>
+      {% include "_track_state.html" %}
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Overview -->
+{% if overview %}
+<div style="margin-bottom:1.5rem;">
+  <h3 style="font-size:0.85rem; font-family:'JetBrains Mono',monospace; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); font-weight:400; margin-bottom:0.5rem;">Overview</h3>
+  <p style="font-size:0.95rem; color:var(--body); line-height:1.8;">{{ overview }}</p>
+</div>
+{% endif %}
+
+<!-- AI enrichment -->
+{% if description %}
+<div style="padding:1.25rem 1.5rem; background:var(--surface); border-radius:6px; border-left:3px solid var(--lavender); margin-bottom:1.5rem;">
+  <p class="mono" style="font-size:0.58rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--lavender); margin-bottom:0.4rem;">AI Analysis</p>
+  <p style="font-size:0.9rem; color:var(--body); line-height:1.8;">{{ description }}</p>
+</div>
+{% endif %}
+
+<!-- Credits -->
+<div style="display:flex; flex-direction:column; gap:0.65rem;">
+  {% if meta.creator_or_director %}
+  <div style="display:flex; gap:1.25rem; align-items:baseline; padding-bottom:0.65rem; border-bottom:1px solid var(--border);">
+    <span class="mono" style="font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); min-width:5.5rem;">{{ "Creator" if meta.content_type == "tv" else "Director" }}</span>
+    <span style="font-size:0.9rem; color:var(--text);">{{ meta.creator_or_director }}</span>
+  </div>
+  {% endif %}
+  {% if meta.cast %}
+  <div style="display:flex; gap:1.25rem; align-items:baseline; padding-bottom:0.65rem; border-bottom:1px solid var(--border);">
+    <span class="mono" style="font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); min-width:5.5rem;">Cast</span>
+    <span style="font-size:0.9rem; color:var(--text);">{{ meta.cast | join(", ") }}</span>
+  </div>
+  {% endif %}
+  {% if meta.runtime_minutes %}
+  <div style="display:flex; gap:1.25rem; align-items:baseline; padding-bottom:0.65rem; border-bottom:1px solid var(--border);">
+    <span class="mono" style="font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); min-width:5.5rem;">Runtime</span>
+    <span style="font-size:0.9rem; color:var(--text);">{{ meta.runtime_minutes }} min</span>
+  </div>
+  {% endif %}
+</div>
+
+{% if meta.keywords %}
+<div style="margin-top:1.25rem;">
+  <p class="mono" style="font-size:0.58rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted); margin-bottom:0.5rem;">Keywords</p>
+  <div style="display:flex; gap:0.35rem; flex-wrap:wrap;">
+    {% for kw in meta.keywords %}
+    <span style="font-family:'JetBrains Mono',monospace; font-size:0.6rem; padding:2px 8px; border-radius:3px; background:var(--surface2); color:var(--muted);">{{ kw }}</span>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% else %}
+<div style="padding:5rem; text-align:center;">
+  <p class="mono" style="font-size:0.68rem; color:var(--muted);">Title not found in cache</p>
+  <p style="font-size:0.85rem; color:var(--muted); margin-top:0.4rem;">TMDB ID {{ tmdb_id }}</p>
+</div>
+{% endif %}
+</article>
+
+<style>
+  /* Narrow columns (a phone, or the Archive modal) stack less wastefully. */
+  .title-panel { container-type: inline-size; }
+  @container (max-width: 520px) {
+    .title-panel .tp-head { gap: 1.1rem !important; margin-top: 0.5rem !important; }
+    .title-panel .tp-poster { width: 108px !important; }
+  }
+</style>

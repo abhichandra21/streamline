@@ -11,6 +11,17 @@ from recommender.structured_profile import (
 from recommender.query_engine import QueryIntent
 from tests.mock_llm import make_mock_llm
 
+import pytest
+
+ONE_CLUSTER = json.dumps({"version": 1, "clusters": [{"label": "Any", "members": [1]}]})
+
+
+@pytest.fixture(autouse=True)
+def _structured_path_in_tmp(tmp_path, monkeypatch):
+    """Builds save the raw answer next to the structured profile; keep it out of the real cache."""
+    import config
+    monkeypatch.setattr(config, "STRUCTURED_TASTE_PROFILE_PATH", str(tmp_path / "structured.json"))
+
 
 def make_intent(**overrides):
     values = {
@@ -392,7 +403,7 @@ def test_select_profile_slice_includes_negative_preferences_for_selected_cluster
 def _structured_prompt(monkeypatch, signals, events, scores):
     import config
     monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", signals)
-    client = make_mock_llm(json.dumps({"version": 1, "clusters": []}))
+    client = make_mock_llm(ONE_CLUSTER)
     build_structured_profile(events, scores, {t: "x" for t in scores}, client)
     return client.generate.call_args[0][0]
 
@@ -489,7 +500,7 @@ def test_every_loved_title_is_sent_and_descriptions_are_cut(monkeypatch):
     scores = {f"L{i:03d}": 2.0 for i in range(500)} | {f"U{i:03d}": 1.0 for i in range(400)}
     import config
     monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
-    client = make_mock_llm(json.dumps({"version": 1, "clusters": []}))
+    client = make_mock_llm(ONE_CLUSTER)
     build_structured_profile([], scores, {t: "word " * 200 for t in scores}, client)
     prompt = client.generate.call_args[0][0]
     assert all(f"L{i:03d} (score" in prompt for i in range(500))
@@ -500,3 +511,10 @@ def test_every_loved_title_is_sent_and_descriptions_are_cut(monkeypatch):
 def test_descriptions_drop_the_title_heading_and_blank_lines():
     from recommender.structured_profile import _short
     assert _short("# Line of Duty\n\nA taut British\n\nprocedural.") == "A taut British procedural."
+
+
+def test_an_answer_with_no_clusters_is_a_failure_and_is_kept_for_diagnosis(tmp_path):
+    client = make_mock_llm(json.dumps({"version": 1, "clusters": []}))
+    with pytest.raises(ValueError, match="no taste clusters"):
+        build_structured_profile([], {"A": 1.0}, {"A": "x"}, client)
+    assert '"clusters": []' in (tmp_path / "structured.response.txt").read_text()

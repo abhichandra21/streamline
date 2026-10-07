@@ -1517,9 +1517,10 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                 console.print(f"  Structured taste profile saved → {config.STRUCTURED_TASTE_PROFILE_PATH}")
             except Exception as exc:
                 console.print(f"[yellow]Structured taste profile skipped: {exc}[/yellow]")
-                _remove_structured_profile(config.STRUCTURED_TASTE_PROFILE_PATH)
-        elif not using_custom_path and structured_profile_skipped:
-            _remove_structured_profile(config.STRUCTURED_TASTE_PROFILE_PATH)
+        if structured_profile is None and structured_profile_skipped:
+            # The home page and search read the structured profile, so the last good
+            # one stays in place rather than falling back to the prose profile.
+            console.print("[yellow]Previous structured taste profile kept.[/yellow]")
         if not using_custom_path:
             stale_flag = Path(config.PROFILE_STALE_FLAG)
             if stale_flag.exists():

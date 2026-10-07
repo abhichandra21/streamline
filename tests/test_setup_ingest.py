@@ -486,11 +486,11 @@ def test_structured_profile_provider_failure_does_not_block_profile_rebuild(tmp_
     )
 
     assert (tmp_path / "taste_profile.txt").read_text() == "profile text"
-    assert not structured_path.exists()
+    assert "stale" in structured_path.read_text()
 
 
-def test_structured_profile_invalid_output_removes_stale_cache(tmp_path, monkeypatch):
-    """If the new structured profile is skipped, an older structured cache must not stay active."""
+def test_structured_profile_invalid_output_keeps_the_last_good_one(tmp_path, monkeypatch):
+    """If the new structured profile is skipped, the previous one stays in place."""
     structured_path = tmp_path / "taste_profile_structured.json"
     structured_path.write_text('{"version":1,"clusters":[{"label":"stale"}]}')
 
@@ -502,7 +502,7 @@ def test_structured_profile_invalid_output_removes_stale_cache(tmp_path, monkeyp
     )
 
     assert (tmp_path / "taste_profile.txt").read_text() == "profile text"
-    assert not structured_path.exists()
+    assert "stale" in structured_path.read_text()
 
 
 def test_refresh_imdb_ratings_reports_failure_without_raising(monkeypatch):

@@ -33,12 +33,39 @@
   .lv-source-n { color: var(--muted); font-size: 0.6rem; }
   .lv-source[aria-current="page"] .lv-source-n { color: var(--body); }
 
-  .lv-note {
-    margin-bottom: 1.5rem; padding: 0.7rem 1rem; max-width: 46rem;
-    border-left: 2px solid var(--muted); background: var(--surface);
-    font-size: 0.84rem; color: var(--body); border-radius: 0 4px 4px 0;
+  /* Kids & family switch: a plain link that adds or drops ?kids=show, drawn
+     as a switch. ON (hiding) is the default, so ON is the calm state. */
+  .lv-kids {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 0.55rem;
+    padding: 0.3rem 0.2rem; font-size: 0.62rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--body); border-radius: 999px;
   }
-  .lv-note b { color: var(--text); font-weight: 500; }
+  .lv-kids:hover { color: var(--text); text-decoration: none; }
+  .lv-kids:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .lv-kids-track {
+    position: relative; width: 1.9rem; height: 1.05rem; flex-shrink: 0; border-radius: 999px;
+    background: var(--surface2); border: 1px solid var(--border); transition: background 0.15s, border-color 0.15s;
+  }
+  .lv-kids-track::after {
+    content: ''; position: absolute; top: 50%; left: 0.12rem; width: 0.72rem; height: 0.72rem;
+    border-radius: 50%; background: var(--muted); transform: translateY(-50%);
+    transition: left 0.18s cubic-bezier(0.3, 1.4, 0.5, 1), background 0.15s;
+  }
+  .lv-kids[aria-checked="true"] .lv-kids-track { background: var(--text); border-color: var(--text); }
+  .lv-kids[aria-checked="true"] .lv-kids-track::after { left: calc(100% - 0.84rem); background: var(--bg); }
+  .lv-kids-n { color: var(--muted); }
+
+  /* Start over sits under the progress, far from Save, and reads as a quiet
+     link so a fast run of taps never lands on it. */
+  .lv-restart { margin-top: 0.55rem; text-align: right; }
+  .lv-restart button {
+    background: none; border: none; padding: 0.2rem 0; cursor: pointer;
+    font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px;
+    transition: color 0.15s, text-decoration-color 0.15s;
+  }
+  .lv-restart button:hover { color: var(--text); text-decoration-color: var(--muted); }
+  .lv-restart button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
   .lv-form { counter-reset: loved nfm; }
   /* A set is 24 posters, so only column counts that divide 24 are used and a
@@ -161,7 +188,8 @@
 
   @media (max-width: 640px) {
     .lv-progress { flex-basis: 100%; }
-    .lv-progress-text, .lv-progress-sub { text-align: left; }
+    .lv-progress-text, .lv-progress-sub, .lv-restart { text-align: left; }
+    .lv-kids { margin-left: 0; flex-basis: 100%; }
     .lv-grid { gap: 1rem 0.6rem; }
     .lv-title { font-size: 0.76rem; }
     .lv-seal { width: 1.6rem; height: 1.6rem; top: 0.35rem; right: 0.35rem; }
@@ -174,26 +202,41 @@
   <div class="lv-intro">
     <a href="/history" class="mono result-link">&larr; Archive</a>
     <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.4rem;">Rate It</h1>
-    <p>Tap the ones you loved. Mark Not for me only for the ones you really don't want. Leave the rest: they come back once more, then stay unrated.</p>
+    <p>Tap the ones you loved. Mark Not for me only for real no's. Leave the rest: they come back in a later round. Rate whenever you like.</p>
   </div>
   {% if not error and total %}
   <div class="lv-progress">
-    {# Seen is the headline: it moves with every set. Done only moves once a
-       title is rated or has had its second look, so it stays the quiet number. #}
-    <div class="lv-progress-text mono"><b>{{ seen }} of {{ total }}</b> seen</div>
+    {# The headline is progress through this round; the quiet line is the standing tally. #}
+    <div class="lv-progress-text mono"><b>{{ seen }} of {{ total }}</b> this round</div>
     <div class="lv-progress-track"><div class="lv-progress-fill" style="width:{{ (seen * 100 / total) | round(1) }}%;"></div></div>
-    {# Done only differs from seen while titles wait for their second look. #}
-    <div class="lv-progress-sub mono"><span>{{ rated }} rated</span>{% if judged != seen %}<span class="lv-progress-sep" aria-hidden="true">&middot;</span><span>{{ judged }} of {{ total }} done</span>{% endif %}</div>
+    <div class="lv-progress-sub mono"><span>{{ rated }} rated</span><span class="lv-progress-sep" aria-hidden="true">&middot;</span><span>{{ unrated }} unrated</span></div>
+    <form method="post" action="/loved-it/restart" class="lv-restart">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="source" value="{{ source }}">
+      {% if show_kids %}<input type="hidden" name="kids" value="show">{% endif %}
+      <button type="submit">Start over</button>
+    </form>
   </div>
   {% endif %}
 </div>
 
-{% if not error and sources %}
+{% if not error and (sources or kids_count) %}
+{% set kids_q = "kids=show" if show_kids else "" %}
+{% set source_q = "source=" ~ (source | urlencode) if source else "" %}
 <nav class="lv-sources mono" aria-label="Filter by source">
-  <a class="lv-source" href="/loved-it"{% if not source %} aria-current="page"{% endif %}>All</a>
+  <a class="lv-source" href="/loved-it{% if kids_q %}?{{ kids_q }}{% endif %}"{% if not source %} aria-current="page"{% endif %}>All</a>
   {% for s in sources %}
-  <a class="lv-source" href="/loved-it?source={{ s.value | urlencode }}"{% if source == s.value %} aria-current="page"{% endif %}>{{ s.label }} <span class="lv-source-n">{{ s.open }}</span></a>
+  <a class="lv-source" href="/loved-it?source={{ s.value | urlencode }}{% if kids_q %}&amp;{{ kids_q }}{% endif %}"{% if source == s.value %} aria-current="page"{% endif %}>{{ s.label }} <span class="lv-source-n">{{ s.open }}</span></a>
   {% endfor %}
+  {% if kids_count %}
+  {# Flipping the switch keeps the source; on drops kids=show, off adds it. #}
+  {% if show_kids %}{% set kids_href = "/loved-it" ~ ("?" ~ source_q if source_q else "") %}
+  {% else %}{% set kids_href = "/loved-it?" ~ (source_q ~ "&" if source_q else "") ~ "kids=show" %}{% endif %}
+  <a class="lv-kids" href="{{ kids_href }}" role="switch" aria-checked="{{ 'false' if show_kids else 'true' }}">
+    <span class="lv-kids-track" aria-hidden="true"></span>
+    <span>Hide kids &amp; family{% if not show_kids %} <span class="lv-kids-n">&middot; {{ kids_count }} hidden</span>{% endif %}</span>
+  </a>
+  {% endif %}
 </nav>
 {% endif %}
 
@@ -202,12 +245,10 @@
 {% elif not titles %}
 <p class="mono" style="font-size:0.7rem; text-transform:uppercase; color:var(--muted);">You've been through them all.</p>
 {% else %}
-{% if second_pass %}
-<p class="lv-note"><b>Second look:</b> these you skipped the first time. Mark the ones you don't want; anything left untapped is done, with no rating.</p>
-{% endif %}
 <form method="post" action="/loved-it/save" class="lv-form">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
   <input type="hidden" name="source" value="{{ source }}">
+  {% if show_kids %}<input type="hidden" name="kids" value="show">{% endif %}
   <div class="lv-grid">
     {% for t in titles %}
     {% set id = "lv-" ~ loop.index %}

@@ -337,7 +337,15 @@ def build_structured_profile(
         max_tokens=config.TOKENS_PROFILE_MERGE,
         timeout=config.TIMEOUT_PROFILE_MERGE,
     )
-    return parse_structured_profile_response(response_text, scored)
+    # Kept for diagnosis: a bad answer is otherwise invisible.
+    try:
+        Path(config.STRUCTURED_TASTE_PROFILE_PATH).with_suffix(".response.txt").write_text(response_text)
+    except OSError as exc:
+        log.warning("Could not save the structured profile response: %s", exc)
+    profile = parse_structured_profile_response(response_text, scored)
+    if not profile["clusters"]:
+        raise ValueError("the model returned no taste clusters")
+    return profile
 
 
 def save_structured_profile(profile: dict[str, Any], path: str | Path) -> None:
