@@ -3512,6 +3512,13 @@ class TestLovedIt:
             template_rendered.disconnect(record, app)
         assert (ctx["seen"], ctx["rated"], ctx["total"]) == (2, 1, 3)
 
+    def test_a_put_back_skip_left_untapped_again_is_done(self, client, archive):
+        from recommender.user_store import set_meta
+        set_meta(archive, "loved_reshown", '["tv:1", "tv:2"]')
+        self._save(client, archive, ["tv:1", "tv:2"], loved=["tv:2"])
+        assert self._meta("loved_retired") == {"tv:1"} and self._meta("loved_seen_once") == set()
+        assert self._ratings(archive) == {2: "more"} and self._meta("loved_reshown") == set()
+
     def test_a_repeated_save_changes_nothing(self, client, archive):
         self._save(client, archive, ["tv:1"])
         client.post("/loved-it/save", data=_csrf_form(shown=["tv:1"]))  # same set again

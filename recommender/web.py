@@ -1658,6 +1658,8 @@ _LOVED_CURRENT_KEY = "loved_current"
 _LOVED_SEEN_ONCE_KEY = "loved_seen_once"
 # Left untapped twice: done, with no rating.
 _LOVED_RETIRED_KEY = "loved_retired"
+# Skips put back into the first pass by hand: left untapped again, they are done.
+_LOVED_RESHOWN_KEY = "loved_reshown"
 # Earlier version: untapped titles were "passed". They join the second pass.
 _LOVED_OLD_PASSED_KEY = "loved_passed"
 LOVED_SOURCES = [
@@ -1799,6 +1801,7 @@ def loved_it_save():
     by_key = {t.key: t for t in _loved_archive()}
     ratings = _loved_ratings()
     seen_once, retired = _loved_passes()
+    reshown = set(_meta_json(_LOVED_RESHOWN_KEY))
     for key in request.form.getlist("shown"):
         if key not in current:
             continue
@@ -1810,13 +1813,15 @@ def loved_it_save():
             user_store.rate_title(config.EVENT_DB_PATH, title.title, title.content_type,
                                   rating, tmdb_id=title.tmdb_id)
             seen_once.discard(key)
-        elif key in seen_once:
+        elif key in seen_once or key in reshown:
             seen_once.discard(key)
             retired.add(key)
         else:
             seen_once.add(key)
+        reshown.discard(key)
     user_store.set_meta(config.EVENT_DB_PATH, _LOVED_SEEN_ONCE_KEY, json.dumps(sorted(seen_once)))
     user_store.set_meta(config.EVENT_DB_PATH, _LOVED_RETIRED_KEY, json.dumps(sorted(retired)))
+    user_store.set_meta(config.EVENT_DB_PATH, _LOVED_RESHOWN_KEY, json.dumps(sorted(reshown)))
     user_store.set_meta(config.EVENT_DB_PATH, current_key, "[]")
     Path(config.PROFILE_STALE_FLAG).touch()
     return redirect(url_for("loved_it_page", source=source or None))
