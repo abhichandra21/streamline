@@ -120,8 +120,8 @@
       <ul>
         <li><strong>Environment variables</strong> — API keys only (<code>TMDB_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, <code>GEMINI_API_KEY</code>, <code>OPENAI_API_KEY</code>, and for Plex <code>PLEX_WEBHOOK_TOKEN</code>, <code>PLEX_URL</code>, <code>PLEX_TOKEN</code>).</li>
         <li><strong>.env</strong> — optional local convenience for setting those variables. Gitignored.</li>
-        <li><strong>config.yaml</strong> — shared repo defaults and app settings. Editable from the <a href="/settings">Settings</a> page or by hand.</li>
-        <li><strong>config.local.yaml</strong> — local overrides such as watch-history zip paths. Gitignored and loaded after <code>config.yaml</code>.</li>
+        <li><strong>config.yaml</strong> — the shipped default settings, tracked in git.</li>
+        <li><strong>config.local.yaml</strong> — your overrides, gitignored and loaded after <code>config.yaml</code>: watch-history zip paths, and everything saved from the <a href="/settings">Settings</a> page.</li>
       </ul>
       <p>Provider API keys use the standard variable names by default. Only set <span class="mono">api_key_env</span> when you need a custom variable name.</p>
       <p>The <a href="/settings">Settings</a> page lets you change provider, models, timeouts, scoring weights, and more — changes take effect immediately without a restart.</p>

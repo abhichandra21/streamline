@@ -19,7 +19,7 @@ services:
       - ./data:/app/data
       - ./recommender/cache:/app/recommender/cache
       - ./logs:/app/logs
-      # The Settings page writes config.yaml, so keep it outside the container.
-      - ./config.yaml:/app/config.yaml
+      # config.yaml holds the shipped defaults; the Settings page saves changes to config.local.yaml.
+      - ./config.yaml:/app/config.yaml:ro
       - ./config.local.yaml:/app/config.local.yaml
     restart: unless-stopped

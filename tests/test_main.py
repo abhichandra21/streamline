@@ -291,6 +291,14 @@ def test_apple_tv_parse_reports_invalid_zip(tmp_path):
         parse(str(bad_zip))
 
 
+def _saved_settings(config_path):
+    """The settings in effect after a save: config.yaml with config.local.yaml on top."""
+    from recommender import web
+    local_path = config_path.with_name("config.local.yaml")
+    local = yaml.safe_load(local_path.read_text()) if local_path.exists() else {}
+    return web._merge_settings_defaults(yaml.safe_load(config_path.read_text()) or {}, local or {})
+
+
 def _settings_test_client(tmp_path, monkeypatch, raw_cfg: dict | None = None):
     from recommender import web
 
@@ -384,7 +392,7 @@ def test_settings_page_populates_runtime_defaults_and_accepts_blank_numeric_fiel
     )
 
     assert post_response.status_code == 302
-    saved_cfg = yaml.safe_load(config_path.read_text())
+    saved_cfg = _saved_settings(config_path)
     assert saved_cfg["llm"]["timeout_fast"] == 30
     assert saved_cfg["scoring"]["weight_completion"] == 0.5
     assert saved_cfg["scoring"]["default_tv_runtime"] == 45
@@ -410,7 +418,7 @@ def test_settings_save_preserves_custom_manual_timestamp(tmp_path, monkeypatch):
     )
 
     assert post_response.status_code == 302
-    saved_cfg = yaml.safe_load(config_path.read_text())
+    saved_cfg = _saved_settings(config_path)
     assert saved_cfg["manual"]["timestamp"] == "2024-07-01"
 
 
@@ -476,10 +484,11 @@ def test_settings_save_omits_default_api_key_env_names(tmp_path, monkeypatch):
     post_response = client.post("/settings", data=_settings_form_data(web, raw_cfg))
 
     assert post_response.status_code == 302
-    saved_cfg = yaml.safe_load(config_path.read_text())
-    assert "api_key_env" not in saved_cfg["models"]["anthropic"]
-    assert "api_key_env" not in saved_cfg["models"]["gemini"]
-    assert "api_key_env" not in saved_cfg["models"]["openai"]
+    # Default names are never written as overrides, and config.yaml is left as it was.
+    local_cfg = yaml.safe_load(config_path.with_name("config.local.yaml").read_text()) or {}
+    for provider in ("anthropic", "gemini", "openai"):
+        assert "api_key_env" not in local_cfg.get("models", {}).get(provider, {})
+    assert yaml.safe_load(config_path.read_text()) == raw_cfg
 
 
 def test_settings_save_preserves_custom_api_key_env_override(tmp_path, monkeypatch):
@@ -498,7 +507,7 @@ def test_settings_save_preserves_custom_api_key_env_override(tmp_path, monkeypat
     post_response = client.post("/settings", data=_settings_form_data(web, raw_cfg))
 
     assert post_response.status_code == 302
-    saved_cfg = yaml.safe_load(config_path.read_text())
+    saved_cfg = _saved_settings(config_path)
     assert saved_cfg["models"]["openai"]["api_key_env"] == "STREAMLINE_OPENAI_KEY"
 
 
@@ -521,8 +530,9 @@ def test_settings_save_clears_custom_api_key_env_override(tmp_path, monkeypatch)
     )
 
     assert post_response.status_code == 302
-    saved_cfg = yaml.safe_load(config_path.read_text())
-    assert "api_key_env" not in saved_cfg["models"]["openai"]
+    saved_cfg = _saved_settings(config_path)
+    assert saved_cfg["models"]["openai"]["api_key_env"] == "OPENAI_API_KEY"
+    assert yaml.safe_load(config_path.read_text()) == raw_cfg
 
 
 def test_settings_save_preserves_explicit_platform_path_disables(tmp_path, monkeypatch):
@@ -538,7 +548,7 @@ def test_settings_save_preserves_explicit_platform_path_disables(tmp_path, monke
     post_response = client.post("/settings", data=_settings_form_data(web, raw_cfg))
 
     assert post_response.status_code == 302
-    saved_cfg = yaml.safe_load(config_path.read_text())
+    saved_cfg = _saved_settings(config_path)
     assert saved_cfg["platform_paths"] == {
         "netflix": None,
         "prime": "",
@@ -564,7 +574,7 @@ def test_settings_save_preserves_local_model_token_controls(tmp_path, monkeypatc
     post_response = client.post("/settings", data=_settings_form_data(web, raw_cfg))
 
     assert post_response.status_code == 302
-    saved_cfg = yaml.safe_load(config_path.read_text())
+    saved_cfg = _saved_settings(config_path)
     assert saved_cfg["models"]["local"] == raw_cfg["models"]["local"]
 
 
@@ -2134,3 +2144,41 @@ def test_rematch_state_read_failure_lists_ambiguous_candidates(monkeypatch, tmp_
     setup._print_rematch_summary(result)
     err = capsys.readouterr().err
     assert "Could not read user state" in err and "tv/1:" in err
+
+
+def test_settings_save_writes_only_changes_to_config_local(tmp_path, monkeypatch):
+    raw_cfg = {"provider": "anthropic", "default_top_n": 3}
+    client, config_path, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+    local_path = config_path.with_name("config.local.yaml")
+    local_path.write_text(yaml.safe_dump({"platform_paths": {"netflix": "data/netflix/export.zip"}}))
+    base_before = config_path.read_text()
+
+    post_response = client.post("/settings", data=_settings_form_data(web, raw_cfg, default_top_n="7"))
+
+    assert post_response.status_code == 302
+    # config.yaml is tracked in git, so the Settings page must never rewrite it.
+    assert config_path.read_text() == base_before
+    local_cfg = yaml.safe_load(local_path.read_text())
+    assert local_cfg["platform_paths"] == {"netflix": "data/netflix/export.zip"}
+    assert local_cfg["default_top_n"] == 7
+    assert "provider" not in local_cfg  # unchanged from config.yaml, so not copied
+
+    # Setting it back to config.yaml's value removes the override.
+    client.post("/settings", data=_settings_form_data(web, raw_cfg, default_top_n="3"))
+    assert "default_top_n" not in yaml.safe_load(local_path.read_text())
+
+
+def test_settings_save_clears_custom_api_key_env_set_in_config_local(tmp_path, monkeypatch):
+    raw_cfg = {"provider": "openai", "models": {"openai": {"fast": "gpt-4.1-mini", "reason": "gpt-4.1"}}}
+    client, config_path, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+    config_path.with_name("config.local.yaml").write_text(
+        yaml.safe_dump({"models": {"openai": {"api_key_env": "MY_KEY"}}}))
+    effective = _saved_settings(config_path)
+
+    post_response = client.post(
+        "/settings",
+        data=_settings_form_data(web, effective, openai_api_key_env=""),
+    )
+
+    assert post_response.status_code == 302
+    assert _saved_settings(config_path)["models"]["openai"]["api_key_env"] == "OPENAI_API_KEY"

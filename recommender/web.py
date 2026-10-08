@@ -2985,17 +2985,56 @@ _PROFILE_REBUILD_SCORING_KEYS = (
 )
 
 
-def _load_config_yaml() -> dict:
-    with open(_CONFIG_PATH) as f:
+def _read_yaml(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    with open(path) as f:
         return yaml.safe_load(f) or {}
 
 
+def _local_config_path() -> Path:
+    return _CONFIG_PATH.with_name("config.local.yaml")
+
+
+def _load_config_yaml() -> dict:
+    """The settings in effect: config.yaml with config.local.yaml on top."""
+    return _merge_settings_defaults(_read_yaml(_CONFIG_PATH), _read_yaml(_local_config_path()))
+
+
+def _local_overrides(local: dict, base: dict, cfg: dict) -> dict:
+    """Update local so that base plus local gives cfg, keeping only real differences.
+
+    Keys cfg doesn't mention (watch-history paths, profiles) are left alone.
+    """
+    for key, value in cfg.items():
+        base_value = base.get(key)
+        if isinstance(value, dict) and isinstance(base_value, dict):
+            existing = local.get(key)
+            nested = _local_overrides(existing if isinstance(existing, dict) else {}, base_value, value)
+            if nested:
+                local[key] = nested
+            else:
+                local.pop(key, None)
+        elif value != base_value:
+            local[key] = value
+        else:
+            local.pop(key, None)
+    return local
+
+
 def _save_config_yaml(cfg: dict) -> None:
-    with open(_CONFIG_PATH, "w") as f:
-        f.write("# Streamline configuration\n")
-        f.write("# Set API keys in the environment. .env is optional local convenience.\n\n")
-        f.write("# Put machine-specific watch-history paths in config.local.yaml.\n\n")
-        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    """Save settings into config.local.yaml, never config.yaml.
+
+    config.yaml is tracked in git; writing it would make the next git pull
+    fail for anyone who saved a setting. Only values that differ from
+    config.yaml are written, so later changes to its defaults still apply.
+    """
+    path = _local_config_path()
+    local = _local_overrides(_read_yaml(path), _read_yaml(_CONFIG_PATH), cfg)
+    with open(path, "w") as f:
+        f.write("# Local Streamline settings, loaded after config.yaml. Gitignored.\n")
+        f.write("# The Settings page writes here; watch-history paths live here too.\n\n")
+        yaml.dump(local, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
 def _merge_settings_defaults(target: dict, source: dict) -> dict:
@@ -3198,8 +3237,14 @@ def settings_save() -> str:
             if submitted_api_key_env is None
             else submitted_api_key_env.strip()
         )
-        if api_key_env and api_key_env != _DEFAULT_LLM_API_KEY_ENVS.get(p, ""):
+        default_env = _DEFAULT_LLM_API_KEY_ENVS.get(p, "")
+        if api_key_env and api_key_env != default_env:
             provider_cfg["api_key_env"] = api_key_env
+        elif existing.get("api_key_env") not in (None, "", default_env):
+            # Clearing a custom name: an overlay can't delete config.yaml's key, and
+            # dropping the key here would leave config.local.yaml's one in place, so
+            # name the default explicitly.
+            provider_cfg["api_key_env"] = default_env
         cfg["models"][p] = provider_cfg
     base_url = (form.get("openai_base_url") or "").strip()
     cfg["models"]["openai"]["base_url"] = base_url if base_url else None
