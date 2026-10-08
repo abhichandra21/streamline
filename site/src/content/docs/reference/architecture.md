@@ -1,10 +1,11 @@
-# Architecture
-
-## Overview
+---
+title: Architecture
+description: "How Streamline is put together: the offline setup, the online search pipeline, and every component."
+---
 
 Two-phase LLM pipeline. The offline phase runs once (or on demand) to build persistent artifacts. The online phase runs on every query.
 
-### Offline (setup)
+## Offline (setup)
 
 ```mermaid
 flowchart TD
@@ -20,7 +21,7 @@ flowchart TD
     R[("Ratings<br/>Rate It, Seen It, More/Less")] -.-> T
 ```
 
-### Online (query)
+## Online (query)
 
 ```mermaid
 flowchart TD
@@ -212,7 +213,7 @@ Flask app serving:
 - `/searches` — Query history with user state badges (watchlist, archived, dismissed) per result; recent searches are also surfaced inline in the home search suggestion row
 - `/settings`, `/logs`, `/help` — browser settings, app log, built-in guide
 - `/status`, `/healthz` — JSON status for monitoring
-- `/api/*` — read-only API for Home Assistant (`recommender/api.py`, see [home-assistant.md](home-assistant.md))
+- `/api/*` — read-only API for Home Assistant (`recommender/api.py`, see [Home Assistant](/guides/home-assistant/))
 - `/plex/webhook` — Plex plays (see Plex below)
 
 Setting `STREAMLINE_PASSWORD` puts the whole UI behind a password. All write actions need a CSRF token.
@@ -233,7 +234,7 @@ Plex plays exist only in SQLite, so setup never deletes them. Nothing is ever wr
 ### IMDb Ratings (`recommender/imdb_ratings.py`)
 
 A local SQLite copy of IMDb's daily ratings file. TMDB stays the catalogue; IMDb only supplies rating and vote count.
-Every displayed, filtered, or ranked rating uses IMDb and falls back to TMDB.
+Search results, the minimum-rating filter, and ranking use IMDb and fall back to TMDB. Find's main list is ordered by TMDB Discover and shows both ratings; its language lists are ordered by IMDb.
 Refreshed by setup, and by a background job in the web UI once the copy is a day old.
 
 Streaming provider names are consolidated server-side (`_consolidate_providers()`, mirrored client-side for filter dropdowns) so ad-tier variants and channel resells display under one canonical brand.

@@ -1,0 +1,43 @@
+---
+title: Streamline
+description: A personal streaming recommendation engine that knows your actual taste.
+template: splash
+hero:
+  tagline: Recommendations built from what you have actually watched and loved, not a generic top 10.
+  image:
+    file: ../../assets/logo.png
+  actions:
+    - text: Get started
+      link: /getting-started/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/abhichandra21/streamline
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+![The Streamline home page: a search box and the taste rows built from loved titles](../../assets/screenshots/home.jpg)
+
+Streamline reads your real watch history from Netflix, Prime Video, Apple TV, Plex, and manual lists.
+It looks every title up on TMDB, writes a short description of each with an LLM, and builds a taste profile from the titles you say you loved.
+Then you ask for something in plain English, and it answers with picks you haven't seen, explained against your own taste.
+
+It is a single-user app you run yourself, on a laptop or a home server.
+The screenshots on this site come from a demo library of famous titles, not anyone's real history.
+
+<CardGrid>
+	<Card title="Ask in plain English" icon="magnifier">
+		"Gritty British crime drama", "a smart sci-fi movie like Arrival", "why not Slow Horses?"
+	</Card>
+	<Card title="Mood Match" icon="star">
+		A few quick questions about tonight's mood, then picks.
+	</Card>
+	<Card title="On Deck" icon="seti:video">
+		Followed shows with new episodes ready, and what is coming next.
+	</Card>
+	<Card title="Your data stays local" icon="laptop">
+		History, ratings, and the taste profile live in one SQLite file on your machine.
+	</Card>
+</CardGrid>

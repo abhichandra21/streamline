@@ -1,0 +1,136 @@
+[
+ {
+  "timestamp": "2026-10-08T19:18:53.471346+00:00",
+  "query": "a smart sci-fi movie like Arrival",
+  "provider": "anthropic",
+  "results": [
+   {
+    "title": "Ex Machina",
+    "content_type": "movie",
+    "score": 0.9,
+    "vote_average": 7.7,
+    "rating_source": "imdb",
+    "genres": [
+     "Drama",
+     "Science Fiction"
+    ],
+    "explanation": "A cerebral, slow-burn sci-fi film about AI consciousness and manipulation. It shares Arrival's thoughtful tone and big-ideas focus, and its brooding, twisty psychological tension suits this user's taste for Severance and Dark.",
+    "streaming_providers": [
+     "Hulu"
+    ],
+    "tmdb_id": 264660,
+    "poster": "https://image.tmdb.org/t/p/w300/dmJW8IAKHKxFNiUnoDR7JfsK7Rp.jpg",
+    "tmdb_url": "https://www.themoviedb.org/movie/264660",
+    "imdb_url": "https://www.imdb.com/title/tt0470752/"
+   },
+   {
+    "title": "Moon",
+    "content_type": "movie",
+    "score": 0.86,
+    "vote_average": 7.8,
+    "rating_source": "imdb",
+    "genres": [
+     "Science Fiction",
+     "Drama"
+    ],
+    "explanation": "A melancholic, deliberately paced, intelligent sci-fi film about identity and isolation, very close to Arrival's emotional and philosophical register. Its quiet atmosphere and slow-burn reveals fit the user's cerebral, melancholic sci-fi leaning.",
+    "streaming_providers": [],
+    "tmdb_id": 17431,
+    "poster": "https://image.tmdb.org/t/p/w300/35IU0Mq0zFsN1mYwDGts5mKc77n.jpg",
+    "tmdb_url": "https://www.themoviedb.org/movie/17431",
+    "imdb_url": "https://www.imdb.com/title/tt1182345/"
+   },
+   {
+    "title": "Annihilation",
+    "content_type": "movie",
+    "score": 0.84,
+    "vote_average": 6.8,
+    "rating_source": "imdb",
+    "genres": [
+     "Science Fiction",
+     "Horror"
+    ],
+    "explanation": "Meticulously paced, atmospheric sci-fi built on big ideas about mutation, grief, and first-contact-style mystery, with striking visuals and a thoughtful ending. Its brooding mood suits the user's liking for Blade Runner 2049 and Dark.",
+    "streaming_providers": [
+     "Fubotv",
+     "Mgm+",
+     "Philo",
+     "Mgm Plus"
+    ],
+    "tmdb_id": 300668,
+    "poster": "https://image.tmdb.org/t/p/w300/4YRplSk6BhH6PRuE9gfyw9byUJ6.jpg",
+    "tmdb_url": "https://www.themoviedb.org/movie/300668",
+    "imdb_url": "https://www.imdb.com/title/tt2798920/"
+   }
+  ]
+ },
+ {
+  "timestamp": "2026-10-08T19:18:54.523187+00:00",
+  "query": "gritty British crime drama",
+  "provider": "anthropic",
+  "results": [
+   {
+    "title": "Mare of Easttown",
+    "content_type": "tv",
+    "score": 0.72,
+    "vote_average": 8.4,
+    "rating_source": "imdb",
+    "genres": [
+     "Drama",
+     "Crime",
+     "Mystery"
+    ],
+    "explanation": "A gritty, slow-burn murder mystery with a weathered detective and emotional depth, matching the layered-mystery taste of Broadchurch and Happy Valley, though set in Pennsylvania rather than Britain. It's the most popular and well-made crime drama here, but the American setting keeps it just short of a perfect British fit.",
+    "streaming_providers": [
+     "Hbo Max"
+    ],
+    "tmdb_id": 115004,
+    "poster": "https://image.tmdb.org/t/p/w300/78aK4Msbr22A5PGa6PZV0pAvdwf.jpg",
+    "tmdb_url": "https://www.themoviedb.org/tv/115004",
+    "imdb_url": "https://www.imdb.com/find/?q=Mare%20of%20Easttown"
+   },
+   {
+    "title": "Unforgotten",
+    "content_type": "tv",
+    "score": 0.86,
+    "vote_average": 8.4,
+    "rating_source": "imdb",
+    "genres": [
+     "Drama",
+     "Crime",
+     "Mystery"
+    ],
+    "explanation": "A methodical, understated British police drama set on grey London streets, with the patient slow-burn tension, emotional depth, and layered cold-case mysteries this user loves from Broadchurch. Highly rated and a natural next watch.",
+    "streaming_providers": [
+     "Amazon Prime Video",
+     "Pbs",
+     "Pbs Masterpiece",
+     "Thirteen"
+    ],
+    "tmdb_id": 62505,
+    "poster": "https://image.tmdb.org/t/p/w300/bfysfq7JDBWKLpkKPaOU2FpfmB.jpg",
+    "tmdb_url": "https://www.themoviedb.org/tv/62505",
+    "imdb_url": "https://www.imdb.com/find/?q=Unforgotten"
+   },
+   {
+    "title": "The Responder",
+    "content_type": "tv",
+    "score": 0.84,
+    "vote_average": 7.5,
+    "rating_source": "imdb",
+    "genres": [
+     "Drama",
+     "Crime"
+    ],
+    "explanation": "A gritty Liverpool-set crime drama with Martin Freeman as an exhausted, morally compromised cop, blending dark British humor with emotional depth. It's squarely gritty British crime and echoes the Slow Horses and Happy Valley sensibility.",
+    "streaming_providers": [
+     "BritBox"
+    ],
+    "tmdb_id": 155346,
+    "poster": "https://image.tmdb.org/t/p/w300/mU51EB4OSEL7oxMIub1Rl7N0xFB.jpg",
+    "tmdb_url": "https://www.themoviedb.org/tv/155346",
+    "imdb_url": "https://www.imdb.com/find/?q=The%20Responder"
+   }
+  ]
+ }
+]

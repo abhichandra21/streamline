@@ -52,6 +52,11 @@ python3 -m pytest tests/test_query_engine.py -v
 # Read-only JSON + iCal for Home Assistant: /api/summary, /api/on-deck,
 # /api/watchlist, /api/coming-soon.ics (see docs/home-assistant.md)
 
+# Docs site (Astro Starlight, in site/). Screenshots come from a made-up demo library, never real data
+./venv/bin/python demo/build.py /tmp/streamline-demo   # build the demo copy (needs TMDB_API_KEY, makes no LLM calls)
+(cd site && npm run screenshots -- /tmp/streamline-demo) # recapture site/src/assets/screenshots/
+(cd site && npm run dev)                                 # preview the docs
+
 # Make local an exact copy of the home server's state (backs up local first)
 ./recommend-mirror
 ./recommend-mirror --dry-run                   # show the steps, change nothing
@@ -59,6 +64,10 @@ python3 -m pytest tests/test_query_engine.py -v
 
 Required environment variables: `TMDB_API_KEY`, plus `ANTHROPIC_API_KEY` and/or `GEMINI_API_KEY` or `OPENAI_API_KEY`.
 `.env` is optional local convenience. Settings in `config.yaml`: provider, model assignments, tunables, data paths.
+
+## Docs
+
+User-facing docs live in `site/src/content/docs/`. When a change alters what a user sees or does, update the matching page in the same PR, and recapture screenshots when a page's look changes. `docs/home-assistant.md` is the owner's own deployment notes and stays out of the public site.
 
 ## Architecture
 

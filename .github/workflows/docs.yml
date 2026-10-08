@@ -1,0 +1,88 @@
+# Build the public docs site with fresh screenshots and publish it to Cloudflare Pages.
+#
+# Screenshots come from a made-up demo library (demo/build.py), never real data,
+# and the build makes no LLM calls. Pull requests get a preview link; master is
+# the live site.
+#
+# Secrets: TMDB_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID.
+name: Docs
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "site/**"
+      - "demo/**"
+      - "recommender/templates/**"
+      - "recommender/static/**"
+      - "recommender/web.py"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "site/**"
+      - "demo/**"
+      - "recommender/templates/**"
+      - "recommender/static/**"
+      - "recommender/web.py"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+        working-directory: site
+      - run: npx playwright install --with-deps chromium
+        working-directory: site
+
+      - name: Build the demo library
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+        run: python demo/build.py "$RUNNER_TEMP/streamline-demo"
+
+      - name: Capture screenshots
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          PYTHON: python
+        run: npm run screenshots -- "$RUNNER_TEMP/streamline-demo"
+        working-directory: site
+
+      - run: npm run build
+        working-directory: site
+
+      # Creates the project on the first run; fails harmlessly once it exists.
+      - name: Create the Cloudflare Pages project
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages project create streamline-docs --production-branch=master
+
+      - name: Publish to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy site/dist --project-name=streamline-docs --branch=${{ github.head_ref || github.ref_name }}
