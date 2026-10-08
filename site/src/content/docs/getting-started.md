@@ -102,11 +102,13 @@ TMDB and IMDb data are free. The only cost is the LLM, and with the default Clau
 |---|---|
 | Describing your history, once | About $1 per 1,000 titles |
 | Building the taste rows the first time | About $1.70 for a real library of a couple of thousand titles |
-| Rebuilding with the same ratings | Nothing; the answers are saved |
+| Writing the taste profile, at setup and on every `--refresh-profile` | One reasoning-model call per 200 titles plus one to combine them: $0.08 for a 90-title library, and an estimated $2 to $3 for a couple of thousand titles |
+| Rebuilding the taste rows with the same ratings | Nothing; the answers are saved |
 | A search or Mood Match run | Usually about $0.06, rarely more than $0.15 |
 | Find, On Deck, Archive, Watchlist, the API | Nothing; no LLM calls |
 
 Each terminal search prints its exact token use and cost.
+Routine `--refresh-data` runs only pay for descriptions of new titles; they never rebuild the profile.
 A local model through Ollama costs nothing at all.
 
 Everything also works from the terminal; see [Command line](/reference/cli/).

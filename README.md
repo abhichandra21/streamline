@@ -47,7 +47,7 @@ It reads your real history from Netflix, Prime Video, Apple TV, Disney+, Max, an
 - **It doesn't recommend what you've already seen,** whichever service you saw it on.
 - **It explains itself.** Every pick says why it fits *you*. Ask "why not Slow Horses?" and it tells you exactly why it was left out.
 - **It's yours.** It runs on your laptop or home server, your history lives in one SQLite file, and you choose the AI: Claude, Gemini, OpenAI, or a local model.
-- **It's cheap to run.** About $1 to describe 1,000 titles once, then roughly 6 cents a search with the default Claude models. Find, On Deck, and everything else cost nothing. [Details](https://streamline-docs.pages.dev/getting-started/#what-it-costs)
+- **It's cheap to run.** With the default Claude models, about $1 to describe 1,000 titles once, a few dollars to build a large taste profile, and roughly 6 cents a search. Find, On Deck, and the rest of the app cost nothing. [Details](https://streamline-docs.pages.dev/getting-started/#what-it-costs)
 
 ## A look around
 
