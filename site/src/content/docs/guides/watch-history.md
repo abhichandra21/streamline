@@ -14,8 +14,16 @@ The exports are legitimate, stable, and complete.
 | Netflix | `platform_paths.netflix` | Account Settings > Download your data |
 | Prime Video | `platform_paths.prime` | Account > Digital content > Request your data |
 | Apple TV | `platform_paths.apple_tv` | Apple's privacy site: Apple Media Services Information |
+| Disney+ | `platform_paths.disney` | A personal data request to Disney; the history arrives as a PDF |
+| Max | `platform_paths.hbo` | A personal data request to Warner Bros. Discovery; the history arrives as a folder of CSV files |
 
-Point each path at the zip exactly as downloaded.
+Point each path at the export exactly as downloaded: the zip for Netflix, Prime Video, and Apple TV, the PDF for Disney+, and the unzipped folder for Max.
+Each path can also be a list, for more than one export from the same service.
+
+A few differences to know:
+
+- **Disney+** exports every profile on the account. Set `disney_profiles` in `config.local.yaml` to the profile names to keep, for example `disney_profiles: ["Alex"]`.
+- **Max** exports have no watch dates, so Max titles sort last in Archive's Recently watched, and each title counts once.
 After adding a newer export, run `./recommend setup --refresh-data`.
 
 A routine data refresh never rebuilds the taste profile.

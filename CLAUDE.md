@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Streamline is a personal streaming recommendation engine. It ingests real watch history (Netflix, Prime Video, Apple TV, manual lists), enriches titles via TMDB and LLM, builds a full taste profile from all watched content, then answers natural language queries using hybrid candidate generation (TMDB Discover + LLM semantic suggestions). Supports Anthropic (Claude), Google (Gemini), and OpenAI as LLM providers.
+Streamline is a personal streaming recommendation engine. It ingests real watch history (Netflix, Prime Video, Apple TV, Disney+, Max, Plex, manual lists), enriches titles via TMDB and LLM, builds a full taste profile from all watched content, then answers natural language queries using hybrid candidate generation (TMDB Discover + LLM semantic suggestions). Supports Anthropic (Claude), Google (Gemini), and OpenAI as LLM providers.
 
 ## Product Philosophy
 
@@ -51,6 +51,10 @@ python3 -m pytest tests/test_query_engine.py -v
 ./recommend-web restart
 # Read-only JSON + iCal for Home Assistant: /api/summary, /api/on-deck,
 # /api/watchlist, /api/coming-soon.ics (see docs/home-assistant.md)
+
+# Docker: same commands inside the container; data, cache, logs and both config files are bind mounts
+docker compose run --rm streamline ./recommend setup
+docker compose up -d                           # image: ghcr.io/abhichandra21/streamline
 
 # Docs site (Astro Starlight, in site/). Screenshots come from a made-up demo library, never real data
 ./venv/bin/python demo/build.py /tmp/streamline-demo   # build the demo copy (needs TMDB_API_KEY, makes no LLM calls)

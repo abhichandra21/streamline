@@ -6,6 +6,8 @@ description: Install Streamline, run setup once, then use it from the browser.
 Streamline is used from the browser.
 The terminal is only needed to install it, to run setup, and to rebuild after big changes.
 
+Prefer Docker? Follow [Docker](/guides/docker/) instead of steps 1 to 4, then continue from step 5.
+
 ## 1. Install
 
 You need Python 3.10 or newer, a free [TMDB API key](https://www.themoviedb.org/settings/api), and a key for one LLM provider (Anthropic, Google Gemini, or OpenAI). A local OpenAI-compatible server such as Ollama also works, with no key.
@@ -91,5 +93,22 @@ The app reminds you when the profile is out of date.
 - In **Settings**, set your region and the streaming services you pay for, so results show where to watch.
 - **Follow** shows you are keeping up with, and On Deck tells you when new episodes are out.
 - Connect [Plex](/guides/plex/) to record plays as they happen.
+
+## What it costs
+
+TMDB and IMDb data are free. The only cost is the LLM, and with the default Claude models it is small:
+
+| What | Cost |
+|---|---|
+| Describing your history, once | About $1 per 1,000 titles |
+| Building the taste rows the first time | About $1.70 for a real library of a couple of thousand titles |
+| Writing the taste profile, at setup and on every `--refresh-profile` | One reasoning-model call per 200 titles plus one to combine them: $0.08 for a 90-title library, and an estimated $2 to $3 for a couple of thousand titles |
+| Rebuilding the taste rows with the same ratings | Nothing; the answers are saved |
+| A search or Mood Match run | Usually about $0.06, rarely more than $0.15 |
+| Find, On Deck, Archive, Watchlist, the API | Nothing; no LLM calls |
+
+Each terminal search prints its exact token use and cost.
+Routine `--refresh-data` runs only pay for descriptions of new titles; they never rebuild the profile.
+A local model through Ollama costs nothing at all.
 
 Everything also works from the terminal; see [Command line](/reference/cli/).

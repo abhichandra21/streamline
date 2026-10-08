@@ -31,7 +31,7 @@ export default defineConfig({
 				},
 				{
 					label: 'Connections',
-					items: ['guides/watch-history', 'guides/plex', 'guides/home-assistant', 'guides/running-as-a-service'],
+					items: ['guides/docker', 'guides/watch-history', 'guides/plex', 'guides/home-assistant', 'guides/running-as-a-service'],
 				},
 				{
 					label: 'Reference',
