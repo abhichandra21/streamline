@@ -28,7 +28,7 @@
 Streamline ingests your real watch history from Netflix, Prime Video, Apple TV, Plex, and manual lists, enriches every title via TMDB and LLM, builds a detailed taste profile from *all* your watched content, then answers natural-language queries using hybrid candidate generation. No generic "top 10" lists — recommendations are calibrated to *your* patterns.
 
 <p align="center">
-  <img src="docs/screenshot-hero.png" width="720" alt="Streamline in action">
+  <img src="site/src/assets/screenshots/home.jpg" width="720" alt="Streamline home page with a demo library">
 </p>
 
 ## Features
@@ -40,7 +40,7 @@ Streamline ingests your real watch history from Netflix, Prime Video, Apple TV, 
 - **Find** — the highest-rated titles you haven't seen, filtered by period, genre, and rating, with a Hindi list ranked by IMDb. No LLM involved
 - **On Deck** — followed shows with new episodes ready now, a Coming soon list, and suggestions worth following
 - **Plex** — plays and ratings arrive by webhook as they happen
-- **IMDb ratings** — every displayed, filtered, or ranked rating uses IMDb, falling back to TMDB
+- **IMDb ratings** — search results, filters, and ranking use IMDb ratings, falling back to TMDB. Find's main list is ordered by TMDB; its language lists by IMDb
 - **Home Assistant** — read-only JSON API and an iCal feed of upcoming episodes
 - **Hybrid candidate generation** — TMDB Discover (structured filters) + LLM semantic suggestions (creative matches)
 - **Multi-provider LLM** — Anthropic (Claude), Google (Gemini), OpenAI, and any local/self-hosted OpenAI-compatible endpoint (e.g. Ollama) with role-based model dispatch (fast/reason)
@@ -344,7 +344,7 @@ Two-phase LLM pipeline with role-based model dispatch:
 | `recommender/web.py` | Flask + HTMX web UI |
 | `recommender/main.py` | Rich CLI |
 
-See [`docs/architecture.md`](docs/architecture.md) for the full design document.
+See [the architecture page](site/src/content/docs/reference/architecture.md) for the full design document.
 
 ## Running Tests
 
@@ -359,7 +359,7 @@ python3 -m pytest tests/ -v
 
 ## Contributing
 
-Contributions are welcome! Please open an issue first to discuss what you'd like to change. See [`docs/roadmap.md`](docs/roadmap.md) for planned work.
+Contributions are welcome! Please open an issue first to discuss what you'd like to change. See [the roadmap](site/src/content/docs/reference/roadmap.md) for planned work.
 
 ## License
 

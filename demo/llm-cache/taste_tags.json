@@ -1,0 +1,462 @@
+{
+ "3 Idiots": [
+  "hindi",
+  "bollywood",
+  "campus dramedy",
+  "coming-of-age",
+  "set in india",
+  "friendship",
+  "social satire",
+  "feel-good"
+ ],
+ "Andhadhun": [
+  "hindi",
+  "bollywood",
+  "black comedy thriller",
+  "hitchcockian suspense",
+  "murder mystery",
+  "set in india",
+  "twisty",
+  "jazz score"
+ ],
+ "Andor": [
+  "star wars",
+  "slow-burn espionage",
+  "political thriller",
+  "rebellion",
+  "authoritarian dystopia",
+  "space opera",
+  "gritty",
+  "cold war paranoia"
+ ],
+ "Arrival": [
+  "first contact",
+  "cerebral sci-fi",
+  "linguistics",
+  "time-bending",
+  "melancholic",
+  "grief",
+  "denis villeneuve",
+  "slow-burn"
+ ],
+ "Better Call Saul": [
+  "breaking bad universe",
+  "legal crime drama",
+  "dark comedy",
+  "moral descent",
+  "slow-burn",
+  "set in albuquerque",
+  "sibling rivalry",
+  "tragic antihero"
+ ],
+ "Blade Runner 2049": [
+  "neo-noir sci-fi",
+  "cyberpunk",
+  "dystopian future",
+  "androids",
+  "existential",
+  "slow-burn",
+  "denis villeneuve",
+  "melancholic"
+ ],
+ "Breaking Bad": [
+  "crime saga",
+  "meth trade",
+  "antihero descent",
+  "dark comedy",
+  "set in albuquerque",
+  "slow-burn",
+  "family drama",
+  "tragedy"
+ ],
+ "Broadchurch": [
+  "british",
+  "murder mystery",
+  "small-town whodunit",
+  "coastal village",
+  "child murder",
+  "grief",
+  "slow-burn",
+  "set in dorset"
+ ],
+ "Casino Royale": [
+  "british",
+  "spy spoof",
+  "sixties psychedelia",
+  "absurdist comedy",
+  "all-star ensemble",
+  "james bond parody",
+  "madcap",
+  "retro"
+ ],
+ "Chernobyl": [
+  "historical miniseries",
+  "nuclear disaster",
+  "soviet bureaucracy",
+  "set in ukraine",
+  "cold war era",
+  "true story",
+  "bleak",
+  "procedural dread"
+ ],
+ "Dangal": [
+  "hindi",
+  "bollywood",
+  "sports biopic",
+  "wrestling",
+  "father-daughter",
+  "set in india",
+  "female empowerment",
+  "inspirational"
+ ],
+ "Dark": [
+  "german",
+  "time-travel mystery",
+  "brooding sci-fi",
+  "small-town secrets",
+  "missing children",
+  "nuclear plant",
+  "multi-generational",
+  "fatalism"
+ ],
+ "Delhi Crime": [
+  "hindi",
+  "true crime",
+  "police procedural",
+  "set in india",
+  "delhi",
+  "gender violence",
+  "institutional failure",
+  "gritty"
+ ],
+ "Dune": [
+  "epic sci-fi",
+  "desert planet",
+  "political intrigue",
+  "chosen one",
+  "denis villeneuve",
+  "space opera",
+  "prophecy",
+  "dynastic war"
+ ],
+ "Fleabag": [
+  "british",
+  "dark dramedy",
+  "fourth-wall breaking",
+  "set in london",
+  "sharp-tongued antiheroine",
+  "family dysfunction",
+  "grief",
+  "irreverent"
+ ],
+ "Grand Designs": [
+  "british",
+  "home renovation",
+  "architecture",
+  "self-build",
+  "documentary series",
+  "design",
+  "property",
+  "budget drama"
+ ],
+ "Great British Bake Off": [
+  "british",
+  "baking competition",
+  "cozy reality",
+  "feel-good",
+  "amateur bakers",
+  "gentle competition",
+  "wholesome",
+  "comfort viewing"
+ ],
+ "Happy Valley": [
+  "british",
+  "crime drama",
+  "yorkshire",
+  "police sergeant",
+  "rural noir",
+  "revenge",
+  "gritty",
+  "family trauma"
+ ],
+ "Hot Fuzz": [
+  "british",
+  "action parody",
+  "buddy cop comedy",
+  "small-town conspiracy",
+  "edgar wright",
+  "cotswolds village",
+  "cornetto trilogy",
+  "dark humor"
+ ],
+ "Inception": [
+  "heist thriller",
+  "dream worlds",
+  "mind-bending",
+  "corporate espionage",
+  "nolan",
+  "layered puzzle",
+  "sci-fi action",
+  "grief and memory"
+ ],
+ "Interstellar": [
+  "space epic",
+  "nolan",
+  "father-daughter",
+  "time dilation",
+  "dying earth",
+  "hard sci-fi",
+  "elegiac",
+  "wormhole voyage"
+ ],
+ "Knives Out": [
+  "whodunit",
+  "murder mystery",
+  "ensemble cast",
+  "wealthy family",
+  "class satire",
+  "rian johnson",
+  "quirky detective",
+  "set in massachusetts"
+ ],
+ "Last Week Tonight with John Oliver": [
+  "political satire",
+  "late-night",
+  "news comedy",
+  "investigative humor",
+  "deep-dive",
+  "talk show",
+  "outrage comedy",
+  "current affairs"
+ ],
+ "Line of Duty": [
+  "british",
+  "police corruption",
+  "police procedural",
+  "conspiracy thriller",
+  "interrogation scenes",
+  "anti-corruption unit",
+  "twisty",
+  "jed mercurio"
+ ],
+ "Mission Impossible Fallout": [
+  "mission impossible",
+  "spy thriller",
+  "globe-trotting",
+  "stunt spectacle",
+  "tom cruise",
+  "betrayal",
+  "relentless pacing",
+  "set in europe"
+ ],
+ "Only Murders in the Building": [
+  "murder mystery",
+  "dark comedy",
+  "amateur sleuths",
+  "set in new york",
+  "true-crime podcast",
+  "ensemble cast",
+  "friendship",
+  "cozy mystery"
+ ],
+ "Paddington 2": [
+  "british",
+  "kids",
+  "heist caper",
+  "feel-good",
+  "set in london",
+  "wholesome",
+  "found family",
+  "whimsical"
+ ],
+ "Panchayat": [
+  "hindi",
+  "set in india",
+  "village life",
+  "slow-burn",
+  "deadpan comedy",
+  "political satire",
+  "feel-good",
+  "bureaucracy satire"
+ ],
+ "Parasite": [
+  "korean",
+  "class satire",
+  "black comedy thriller",
+  "con artists",
+  "wealthy family",
+  "family dysfunction",
+  "twisty",
+  "set in seoul"
+ ],
+ "Planet Earth": [
+  "documentary series",
+  "nature documentary",
+  "wildlife",
+  "globe-trotting",
+  "david attenborough",
+  "british",
+  "climate",
+  "awe-inspiring"
+ ],
+ "Sacred Games": [
+  "hindi",
+  "set in india",
+  "set in mumbai",
+  "crime saga",
+  "gritty",
+  "police corruption",
+  "gangster",
+  "conspiracy thriller"
+ ],
+ "Scam 1992": [
+  "hindi",
+  "set in india",
+  "set in mumbai",
+  "true story",
+  "stock market",
+  "financial scandal",
+  "rise and fall",
+  "nineties period"
+ ],
+ "Severance": [
+  "corporate dystopia",
+  "workplace thriller",
+  "slow-burn",
+  "mind-bending",
+  "memory",
+  "brooding sci-fi",
+  "twisty",
+  "surreal"
+ ],
+ "Shogun": [
+  "historical epic",
+  "japanese",
+  "set in japan",
+  "feudal japan",
+  "political intrigue",
+  "samurai",
+  "clash of cultures",
+  "slow-burn"
+ ],
+ "Slow Horses": [
+  "british",
+  "slow-burn espionage",
+  "spy thriller",
+  "black comedy thriller",
+  "set in london",
+  "institutional failure",
+  "ensemble cast",
+  "mick herron"
+ ],
+ "Spirited Away": [
+  "japanese",
+  "anime",
+  "fantasy adventure",
+  "coming-of-age",
+  "dream worlds",
+  "studio ghibli",
+  "kids",
+  "hayao miyazaki"
+ ],
+ "Succession": [
+  "dark dramedy",
+  "wealthy family",
+  "family dysfunction",
+  "sibling rivalry",
+  "media dynasty",
+  "corporate power struggle",
+  "class satire",
+  "set in new york"
+ ],
+ "Ted Lasso": [
+  "feel-good",
+  "sports comedy",
+  "fish out of water",
+  "set in london",
+  "friendship",
+  "wholesome",
+  "soccer",
+  "workplace comedy"
+ ],
+ "The Bear": [
+  "restaurant drama",
+  "dark dramedy",
+  "grief",
+  "family trauma",
+  "set in chicago",
+  "relentless pacing",
+  "family business",
+  "working-class"
+ ],
+ "The Dark Knight": [
+  "nolan",
+  "superhero crime thriller",
+  "batman",
+  "gritty",
+  "moral dilemma",
+  "relentless pacing",
+  "vigilante",
+  "chaos villain"
+ ],
+ "The Expanse": [
+  "space opera",
+  "hard sci-fi",
+  "political intrigue",
+  "noir detective",
+  "conspiracy thriller",
+  "class tension",
+  "ensemble cast",
+  "slow-burn"
+ ],
+ "The Grand Budapest Hotel": [
+  "wes anderson",
+  "whimsical caper",
+  "melancholic",
+  "set in europe",
+  "interwar era",
+  "ensemble cast",
+  "mentor friendship",
+  "quirky"
+ ],
+ "The Night Manager": [
+  "british",
+  "spy thriller",
+  "slow-burn espionage",
+  "arms dealer",
+  "undercover",
+  "john le carr\u00e9",
+  "globe-trotting",
+  "neo-noir"
+ ],
+ "Tinker Tailor Soldier Spy": [
+  "british",
+  "slow-burn espionage",
+  "cold war paranoia",
+  "mole hunt",
+  "john le carr\u00e9",
+  "set in london",
+  "bleak",
+  "seventies period"
+ ],
+ "Top Gun Maverick": [
+  "top gun",
+  "tom cruise",
+  "aerial action",
+  "military",
+  "stunt spectacle",
+  "nostalgic sequel",
+  "legacy",
+  "mentor and prot\u00e9g\u00e9"
+ ],
+ "Zodiac": [
+  "serial killer",
+  "true crime",
+  "true story",
+  "slow-burn",
+  "newspaper investigation",
+  "set in san francisco",
+  "seventies period",
+  "david fincher"
+ ]
+}

@@ -1,0 +1,11 @@
+/* Match the app's coral accent. */
+:root {
+	--sl-color-accent-low: #3a1712;
+	--sl-color-accent: #e85d4a;
+	--sl-color-accent-high: #f7c3bb;
+}
+:root[data-theme='light'] {
+	--sl-color-accent-low: #fbd9d3;
+	--sl-color-accent: #c9412f;
+	--sl-color-accent-high: #5c1a11;
+}

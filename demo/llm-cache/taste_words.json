@@ -1,0 +1,291 @@
+{
+ "action-spectacle": {
+  "description": "Mission: Impossible Fallout, Top Gun Maverick and The Dark Knight are the cinematic equivalent of gripping your armrest. You want practical stunts, globe-hopping chases and heroes who really, truly mean it. Popcorn strongly recommended.",
+  "members": [
+   "Mission Impossible Fallout",
+   "The Dark Knight",
+   "Top Gun Maverick"
+  ],
+  "mood_states": [
+   "pumped up",
+   "wanting a thrill ride"
+  ],
+  "name": "Big-screen adrenaline rushes",
+  "positive_traits": [
+   "jaw-dropping stunts",
+   "relentless pacing",
+   "high stakes",
+   "crowd-pleasing thrills"
+  ],
+  "version": 2
+ },
+ "antihero-crime-sagas": {
+  "description": "You can't resist watching a good person go wonderfully, terribly wrong. Breaking Bad and Better Call Saul give you moral descent with a side of dark humour and some of the best-written conversations on TV. Albuquerque has never felt so tense.",
+  "members": [
+   "Better Call Saul",
+   "Breaking Bad"
+  ],
+  "mood_states": [
+   "hooked",
+   "up for a binge"
+  ],
+  "name": "Slow slides into darkness",
+  "positive_traits": [
+   "morally grey characters",
+   "sharp writing",
+   "dark humour",
+   "character transformations"
+  ],
+  "version": 2
+ },
+ "british-crime-drama": {
+  "description": "You like your Britain moody, clever and occasionally very polite. One night it's the grief-soaked tension of Broadchurch and Happy Valley, the next it's Slow Horses and The Night Manager doing spy games in drizzly corridors. And then, because you're a person of range, you cleanse the palate with Paddington 2, Great British Bake Off and a Grand Designs renovation gone gloriously over budget.",
+  "members": [
+   "Broadchurch",
+   "Casino Royale",
+   "Fleabag",
+   "Grand Designs",
+   "Great British Bake Off",
+   "Happy Valley",
+   "Hot Fuzz",
+   "Line of Duty",
+   "Paddington 2",
+   "Planet Earth",
+   "Slow Horses",
+   "The Night Manager",
+   "Tinker Tailor Soldier Spy"
+  ],
+  "mood_states": [
+   "curled up with tea",
+   "in the mood for a puzzle"
+  ],
+  "name": "Proper British Telly",
+  "positive_traits": [
+   "layered mysteries",
+   "slow-burn tension",
+   "dry British wit",
+   "emotional depth",
+   "comforting feel-good breaks"
+  ],
+  "version": 2
+ },
+ "cerebral-sci-fi": {
+  "description": "Arrival, Blade Runner 2049 and Interstellar are the kind of films that make you stare quietly at the ceiling afterwards, and you love that. You like your space and time melancholic, beautiful and just a little heartbreaking. Big ideas, bigger feelings, and a slow, hypnotic pace suit you perfectly.",
+  "members": [
+   "Arrival",
+   "Blade Runner 2049",
+   "Interstellar"
+  ],
+  "mood_states": [
+   "contemplative",
+   "late-night reflective"
+  ],
+  "name": "Sci-fi that stays with you",
+  "positive_traits": [
+   "big ideas",
+   "emotional resonance",
+   "atmospheric visuals",
+   "slow-burn pacing",
+   "thoughtful endings"
+  ],
+  "version": 2
+ },
+ "class-satire-thrillers": {
+  "description": "Rich families behaving badly is your happy place. Succession's backstabbing boardrooms, Knives Out's delicious whodunit, and Parasite's razor-sharp twist on class all land perfectly with you. You love being entertained and quietly horrified at the same time.",
+  "members": [
+   "Knives Out",
+   "Parasite",
+   "Succession"
+  ],
+  "mood_states": [
+   "gleefully cynical",
+   "in a sharp-tongued mood"
+  ],
+  "name": "Eat-the-rich entertainment",
+  "positive_traits": [
+   "sharp social satire",
+   "ensemble casts",
+   "clever twists",
+   "family dysfunction",
+   "witty dialogue"
+  ],
+  "version": 2
+ },
+ "cozy-whodunits-comedy": {
+  "description": "Only Murders in the Building is your kind of crime: a podcast, a few unlikely friends, and a murder solved with plenty of jokes. You like your mysteries charming and cosy, with the company as important as the culprit.",
+  "members": [
+   "Only Murders in the Building"
+  ],
+  "mood_states": [
+   "cosy",
+   "easygoing"
+  ],
+  "name": "Cosy mysteries with banter",
+  "positive_traits": [
+   "witty banter",
+   "found-family friendships",
+   "light mystery",
+   "quirky characters"
+  ],
+  "version": 2
+ },
+ "dark-dramedy": {
+  "description": "The Bear's kitchen is a pressure cooker of grief, family and shouting, and you love every frantic minute. The Grand Budapest Hotel adds its own dollhouse-perfect eccentricity to the mix. You like your stories stylish, messy and secretly tender underneath.",
+  "members": [
+   "The Bear",
+   "The Grand Budapest Hotel"
+  ],
+  "mood_states": [
+   "wired",
+   "in the mood for something sharp"
+  ],
+  "name": "Chaos with a lot of heart",
+  "positive_traits": [
+   "intense pacing",
+   "stylish storytelling",
+   "messy family dynamics",
+   "dark wit",
+   "hidden tenderness"
+  ],
+  "version": 2
+ },
+ "hindi-cinema-and-series": {
+  "description": "You'll laugh through 3 Idiots, cry through Dangal, and then get properly twisted up by Andhadhun's piano-and-plot-twist madness. Panchayat gives you small-town warmth, while Delhi Crime and Sacred Games pull you into the grittier side. It's a row with big heart and sharp edges, and you're clearly comfortable with both.",
+  "members": [
+   "3 Idiots",
+   "Andhadhun",
+   "Dangal",
+   "Delhi Crime",
+   "Panchayat",
+   "Sacred Games"
+  ],
+  "mood_states": [
+   "nostalgic",
+   "ready to feel everything"
+  ],
+  "name": "Hindi stories that feel like home",
+  "positive_traits": [
+   "heartfelt storytelling",
+   "friendship and family",
+   "clever twists",
+   "gritty realism",
+   "underdog triumphs"
+  ],
+  "version": 2
+ },
+ "japanese-stories": {
+  "description": "You wandered into Spirited Away and clearly never fully left the bathhouse. You love a world where nothing is explained too neatly and everything feels a little dreamlike. Miyazaki's strange, tender magic is right up your alley.",
+  "members": [
+   "Spirited Away"
+  ],
+  "mood_states": [
+   "wistful",
+   "ready to be enchanted"
+  ],
+  "name": "Ghibli-style wonder",
+  "positive_traits": [
+   "dreamlike imagination",
+   "coming-of-age wonder",
+   "hand-crafted beauty",
+   "gentle fantasy"
+  ],
+  "version": 2
+ },
+ "mind-bending-thrillers": {
+  "description": "You don't just watch Dark, Inception and Severance, you take notes on them. Timelines fold, dreams nest inside dreams, and an office job turns deeply sinister, and you're delighted by every twist. You'd happily draw a family tree on a napkin to keep up.",
+  "members": [
+   "Dark",
+   "Inception",
+   "Severance"
+  ],
+  "mood_states": [
+   "fully focused",
+   "up for a challenge"
+  ],
+  "name": "Puzzles that bend your brain",
+  "positive_traits": [
+   "intricate plotting",
+   "twisty reveals",
+   "rewatch-worthy details",
+   "brooding atmosphere"
+  ],
+  "version": 2
+ },
+ "nature-design-documentaries": {
+  "description": "Last Week Tonight is your Sunday-night ritual: a deep dive into something outrageous, delivered with fury and jokes in equal measure. You like to feel clued in and laugh at the same time. Learning has never been this entertaining.",
+  "members": [
+   "Last Week Tonight with John Oliver"
+  ],
+  "mood_states": [
+   "curious",
+   "fired up"
+  ],
+  "name": "Smart, funny, informed",
+  "positive_traits": [
+   "investigative depth",
+   "political satire",
+   "sharp humour",
+   "curiosity about the world"
+  ],
+  "version": 2
+ },
+ "space-epics": {
+  "description": "You like your galaxies packed with rebels, empires and very serious men whispering in very large rooms. Andor, Dune and The Expanse give you political chess among the stars, while Shogun brings the same intrigue to feudal Japan. Slow build, huge payoff, and you're here for all of it.",
+  "members": [
+   "Andor",
+   "Dune",
+   "Shogun",
+   "The Expanse"
+  ],
+  "mood_states": [
+   "ready for a long immersive watch",
+   "in an epic mood"
+  ],
+  "name": "Epic worlds, scheming powers",
+  "positive_traits": [
+   "rich world-building",
+   "political intrigue",
+   "rebellion stories",
+   "patient storytelling",
+   "grand scale"
+  ],
+  "version": 2
+ },
+ "true-story-dramas": {
+  "description": "Chernobyl and Zodiac both prove that real events can be more unsettling than any invention. You like your drama meticulous, bleak and deeply researched, the kind that leaves a pit in your stomach and a dozen tabs open afterwards.",
+  "members": [
+   "Chernobyl",
+   "Zodiac"
+  ],
+  "mood_states": [
+   "serious",
+   "ready to go down a rabbit hole"
+  ],
+  "name": "True stories that haunt",
+  "positive_traits": [
+   "real-life stakes",
+   "meticulous detail",
+   "creeping dread",
+   "historical depth"
+  ],
+  "version": 2
+ },
+ "wholesome-feel-good": {
+  "description": "Ted Lasso is basically a warm hug in episode form, and you know it. You're drawn to optimism, good-hearted friendships and the kind of humour that never needs to be cruel. Sometimes the best plan is a very nice man in a moustache believing in you.",
+  "members": [
+   "Ted Lasso"
+  ],
+  "mood_states": [
+   "needing a boost",
+   "feeling soft"
+  ],
+  "name": "Kindness, with a side of football",
+  "positive_traits": [
+   "warmth and optimism",
+   "found friendships",
+   "gentle humour",
+   "underdog spirit"
+  ],
+  "version": 2
+ }
+}

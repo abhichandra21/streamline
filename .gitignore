@@ -12,3 +12,6 @@ logs/
 docs/superpowers/
 .worktrees/
 /.claude
+site/node_modules/
+site/dist/
+site/.astro/
