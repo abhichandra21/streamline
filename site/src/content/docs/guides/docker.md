@@ -49,6 +49,8 @@ docker compose pull
 docker compose up -d
 ```
 
+If `git pull` says your local changes to `config.yaml` would be overwritten, see [Settings](/guides/settings/).
+
 ## Where your data lives
 
 The container keeps nothing of its own.
@@ -59,8 +61,8 @@ Everything is in the checkout folder, in the same places as a non-Docker install
 | `data/` | Your exports and `streamline.db` (history, ratings, watchlist, follows, searches) |
 | `recommender/cache/` | TMDB data, descriptions, the taste profile, IMDb ratings |
 | `logs/` | The app log |
-| `config.yaml` | Settings; the Settings page writes here |
-| `config.local.yaml` | Your export paths |
+| `config.yaml` | The shipped default settings; updated by `git pull` |
+| `config.local.yaml` | Your export paths, and anything you change on the Settings page |
 
 Back up `data/streamline.db`; Plex plays and your ratings exist only there.
 

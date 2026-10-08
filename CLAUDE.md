@@ -67,7 +67,7 @@ docker compose up -d                           # image: ghcr.io/abhichandra21/st
 ```
 
 Required environment variables: `TMDB_API_KEY`, plus `ANTHROPIC_API_KEY` and/or `GEMINI_API_KEY` or `OPENAI_API_KEY`.
-`.env` is optional local convenience. Settings in `config.yaml`: provider, model assignments, tunables, data paths.
+`.env` is optional local convenience. Defaults in `config.yaml` (tracked); overrides in `config.local.yaml` (gitignored): export paths, and whatever the Settings page saves, which writes only the values that differ from `config.yaml`.
 
 ## Docs
 
