@@ -40,11 +40,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      # Screenshots only change when the app's pages or the demo do, so reuse the
+      # last capture for docs-only changes. A cache miss captures a fresh set.
+      - id: screenshots
+        uses: actions/cache@v4
         with:
-          python-version: "3.12"
-          cache: pip
-      - run: pip install -r requirements.txt
+          path: site/src/assets/screenshots
+          key: screenshots-${{ hashFiles('recommender/templates/**', 'recommender/static/**', 'recommender/web.py', 'demo/**', 'site/scripts/screenshots.mjs', 'requirements.txt') }}
 
       - uses: actions/setup-node@v4
         with:
@@ -53,19 +55,35 @@ jobs:
           cache-dependency-path: site/package-lock.json
       - run: npm ci
         working-directory: site
-      - run: npx playwright install --with-deps chromium
+
+      - if: steps.screenshots.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - if: steps.screenshots.outputs.cache-hit != 'true'
+        run: pip install -r requirements.txt
+      - if: steps.screenshots.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
         working-directory: site
 
       - name: Build the demo library
+        if: steps.screenshots.outputs.cache-hit != 'true'
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: python demo/build.py "$RUNNER_TEMP/streamline-demo"
 
       - name: Capture screenshots
+        if: steps.screenshots.outputs.cache-hit != 'true'
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           PYTHON: python
         run: npm run screenshots -- "$RUNNER_TEMP/streamline-demo"
+        working-directory: site
+
+      # Also publish them at stable URLs, which the README uses.
+      - name: Publish screenshots at stable URLs
+        run: mkdir -p public/screenshots && cp src/assets/screenshots/*.jpg public/screenshots/
         working-directory: site
 
       - run: npm run build

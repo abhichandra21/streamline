@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="site/src/assets/screenshots/home.jpg" width="860" alt="Streamline home page: ask for anything, and see the tastes it learned from what you loved">
+  <img src="https://streamline-docs.pages.dev/screenshots/home.jpg" width="860" alt="Streamline home page: ask for anything, and see the tastes it learned from what you loved">
 </p>
 
 ---
@@ -53,16 +53,16 @@ It reads your real history from Netflix, Prime Video, Apple TV, Disney+, Max, an
 
 <table>
   <tr>
-    <td width="50%"><img src="site/src/assets/screenshots/searches.jpg" alt="Search results with explanations"><br><strong>Ask anything.</strong> Plain English in, explained picks out, with where to stream them.</td>
-    <td width="50%"><img src="site/src/assets/screenshots/mood-match.jpg" alt="Mood Match"><br><strong>Mood Match.</strong> Can't decide? A few quick questions about tonight, then picks.</td>
+    <td width="50%"><img src="https://streamline-docs.pages.dev/screenshots/searches.jpg" alt="Search results with explanations"><br><strong>Ask anything.</strong> Plain English in, explained picks out, with where to stream them.</td>
+    <td width="50%"><img src="https://streamline-docs.pages.dev/screenshots/mood-match.jpg" alt="Mood Match"><br><strong>Mood Match.</strong> Can't decide? A few quick questions about tonight, then picks.</td>
   </tr>
   <tr>
-    <td><img src="site/src/assets/screenshots/on-deck.jpg" alt="On Deck"><br><strong>On Deck.</strong> Every show you follow, and which ones have new episodes ready.</td>
-    <td><img src="site/src/assets/screenshots/find.jpg" alt="Find"><br><strong>Find.</strong> The best-rated titles you haven't seen, filtered your way. Instant, no AI.</td>
+    <td><img src="https://streamline-docs.pages.dev/screenshots/on-deck.jpg" alt="On Deck"><br><strong>On Deck.</strong> Every show you follow, and which ones have new episodes ready.</td>
+    <td><img src="https://streamline-docs.pages.dev/screenshots/find.jpg" alt="Find"><br><strong>Find.</strong> The best-rated titles you haven't seen, filtered your way. Instant, no AI.</td>
   </tr>
   <tr>
-    <td><img src="site/src/assets/screenshots/rate-it.jpg" alt="Rate It"><br><strong>Rate It.</strong> Tap the posters you loved. That's how it learns.</td>
-    <td><img src="site/src/assets/screenshots/archive.jpg" alt="Archive"><br><strong>Archive.</strong> Everything you've ever watched, from every service, in one wall of posters.</td>
+    <td><img src="https://streamline-docs.pages.dev/screenshots/rate-it.jpg" alt="Rate It"><br><strong>Rate It.</strong> Tap the posters you loved. That's how it learns.</td>
+    <td><img src="https://streamline-docs.pages.dev/screenshots/archive.jpg" alt="Archive"><br><strong>Archive.</strong> Everything you've ever watched, from every service, in one wall of posters.</td>
   </tr>
 </table>
 
