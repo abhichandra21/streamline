@@ -3225,7 +3225,6 @@ def settings_save() -> str:
 
     cfg["provider"] = form.get("provider", "anthropic")
     cfg.setdefault("models", {})
-    base_models = _read_yaml(_CONFIG_PATH).get("models") or {}
     for p in ["anthropic", "gemini", "openai"]:
         existing = cfg["models"].get(p, {})
         provider_cfg = {
@@ -3241,8 +3240,10 @@ def settings_save() -> str:
         default_env = _DEFAULT_LLM_API_KEY_ENVS.get(p, "")
         if api_key_env and api_key_env != default_env:
             provider_cfg["api_key_env"] = api_key_env
-        elif base_models.get(p, {}).get("api_key_env") not in (None, "", default_env):
-            # config.local.yaml can't delete config.yaml's custom name, so name the default.
+        elif existing.get("api_key_env") not in (None, "", default_env):
+            # Clearing a custom name: an overlay can't delete config.yaml's key, and
+            # dropping the key here would leave config.local.yaml's one in place, so
+            # name the default explicitly.
             provider_cfg["api_key_env"] = default_env
         cfg["models"][p] = provider_cfg
     base_url = (form.get("openai_base_url") or "").strip()

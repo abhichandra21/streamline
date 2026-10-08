@@ -2166,3 +2166,19 @@ def test_settings_save_writes_only_changes_to_config_local(tmp_path, monkeypatch
     # Setting it back to config.yaml's value removes the override.
     client.post("/settings", data=_settings_form_data(web, raw_cfg, default_top_n="3"))
     assert "default_top_n" not in yaml.safe_load(local_path.read_text())
+
+
+def test_settings_save_clears_custom_api_key_env_set_in_config_local(tmp_path, monkeypatch):
+    raw_cfg = {"provider": "openai", "models": {"openai": {"fast": "gpt-4.1-mini", "reason": "gpt-4.1"}}}
+    client, config_path, web = _settings_test_client(tmp_path, monkeypatch, raw_cfg)
+    config_path.with_name("config.local.yaml").write_text(
+        yaml.safe_dump({"models": {"openai": {"api_key_env": "MY_KEY"}}}))
+    effective = _saved_settings(config_path)
+
+    post_response = client.post(
+        "/settings",
+        data=_settings_form_data(web, effective, openai_api_key_env=""),
+    )
+
+    assert post_response.status_code == 302
+    assert _saved_settings(config_path)["models"]["openai"]["api_key_env"] == "OPENAI_API_KEY"
