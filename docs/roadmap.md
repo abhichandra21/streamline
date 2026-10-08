@@ -10,6 +10,20 @@ Out of scope:
 - Multi-user profiles
 - Team or enterprise administration
 
+## Shipped
+
+These were on this roadmap and are now in the app:
+
+- gunicorn behind a systemd unit (`streamline-web.service`)
+- Password protection (`STREAMLINE_PASSWORD`) and CSRF protection for all write actions
+- `/healthz` and `/status`, reporting provider, models, cache counts, last profile build, IMDb refresh, and running jobs
+- A note when the taste profile is out of date
+- Result card actions: Save, Seen it, Not interested, and More like this / It was fine / Less like this
+- Watchlist page and a searchable history of past recommendations
+- Plex: plays and ratings arrive by webhook (nothing is written to Plex)
+- On Deck: followed shows with new episodes ready, and a Coming soon list
+- Home Assistant: read-only API and an iCal feed
+
 ## Phase 1: Release Gate
 
 These items should be finished before calling the app a solid homeserver release.
@@ -18,21 +32,17 @@ These items should be finished before calling the app a solid homeserver release
 
 - Ship a `Dockerfile` and a documented Compose setup
 - Persist `data/`, `config.yaml`, and cache directories with mounted volumes
-- Replace the Flask development server with a production entrypoint such as `gunicorn` or `waitress`
 - Keep the systemd unit as an optional deployment path, not the primary one
 
 ### Safety and access control
 
-- Add a simple app auth mode for direct deployments
 - Support a documented reverse-proxy-auth mode for users who already protect apps at the proxy layer
-- Add CSRF protection for all write actions
 - Keep localhost-first defaults
 
 ### Background jobs and status
 
 - Move setup, profile rebuild, and provider refresh work out of the request thread
 - Add a job status view with current state, last run time, duration, and error output
-- Show whether the taste profile is stale and why
 
 ### Reliability
 
@@ -44,8 +54,7 @@ These items should be finished before calling the app a solid homeserver release
 
 ### Operations
 
-- Add `/healthz` and `/status`
-- Report current provider, cache status, last import time, last profile build time, and last failure
+- Add last import time and last failure to `/status`
 - Expose version/build information in the UI
 
 ## Phase 2: Strong v1.0 Features
@@ -54,13 +63,10 @@ These features make the app materially more useful for daily homeserver use.
 
 ### Feedback loop
 
-- Add `like`, `dislike`, `hide`, `mark watched`, and `save for later` actions directly on result cards
 - Let users review and undo recent feedback from the web UI
 
 ### Recommendation workflow
 
-- Add a dedicated watchlist page for saved recommendations
-- Keep recommendation history easy to revisit and reuse
 - Show clear result states:
   - in your library
   - available on your streaming services
@@ -84,7 +90,6 @@ These integrations are the highest-value expansion path for a homeserver audienc
 
 ### Media servers
 
-- Plex import and watch-state sync
 - Jellyfin import and watch-state sync
 - Emby import and watch-state sync
 
@@ -107,7 +112,6 @@ These integrations are the highest-value expansion path for a homeserver audienc
 
 1. Deployment and runtime hardening
 2. Background jobs and status visibility
-3. Web-native feedback actions
-4. Library-aware recommendation states
-5. Plex and Jellyfin import
-6. Radarr and Sonarr handoff
+3. Library-aware recommendation states
+4. Jellyfin import
+5. Radarr and Sonarr handoff

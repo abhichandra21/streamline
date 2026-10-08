@@ -19,13 +19,13 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10+-blue?logo=python&logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/LLM-Claude%20%7C%20Gemini%20%7C%20OpenAI%20%7C%20Local-blueviolet" alt="LLM Support">
-  <img src="https://img.shields.io/badge/tests-657%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-pytest-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
 </p>
 
 ---
 
-Streamline ingests your real watch history from Netflix, Prime Video, Apple TV, and manual lists, enriches every title via TMDB and LLM, builds a detailed taste profile from *all* your watched content, then answers natural-language queries using hybrid candidate generation. No generic "top 10" lists — recommendations are calibrated to *your* patterns.
+Streamline ingests your real watch history from Netflix, Prime Video, Apple TV, Plex, and manual lists, enriches every title via TMDB and LLM, builds a detailed taste profile from *all* your watched content, then answers natural-language queries using hybrid candidate generation. No generic "top 10" lists — recommendations are calibrated to *your* patterns.
 
 <p align="center">
   <img src="docs/screenshot-hero.png" width="720" alt="Streamline in action">
@@ -35,11 +35,17 @@ Streamline ingests your real watch history from Netflix, Prime Video, Apple TV, 
 
 - **Natural language search** — "paranoid spy thriller like The Night Manager", "feel-good Bollywood comedy", "why not Slow Horses?"
 - **Mood Match wizard** — a guided alternative to free-text search: an instant content-type tap, then a short adaptive question loop grounded in your taste profile that narrows tone, pace, and intensity before recommending. Refine results in place ("shorter", "lighter", "surprise me") without restarting.
-- **Taste profile** — built from your entire watch history (2000+ titles), organized into 15+ genre clusters with deep analysis
+- **Taste profile** — built from the titles you say you loved, grouped into named rows ("What you love to watch") that stay the same between rebuilds
+- **Rate It and Seen It** — tap posters to mark titles Loved / Fine / Not for me, or to catch up on famous titles you've already seen
+- **Find** — the highest-rated titles you haven't seen, filtered by period, genre, and rating, with a Hindi list ranked by IMDb. No LLM involved
+- **On Deck** — followed shows with new episodes ready now, a Coming soon list, and suggestions worth following
+- **Plex** — plays and ratings arrive by webhook as they happen
+- **IMDb ratings** — every displayed, filtered, or ranked rating uses IMDb, falling back to TMDB
+- **Home Assistant** — read-only JSON API and an iCal feed of upcoming episodes
 - **Hybrid candidate generation** — TMDB Discover (structured filters) + LLM semantic suggestions (creative matches)
 - **Multi-provider LLM** — Anthropic (Claude), Google (Gemini), OpenAI, and any local/self-hosted OpenAI-compatible endpoint (e.g. Ollama) with role-based model dispatch (fast/reason)
 - **Web UI** — Flask + HTMX with editorial design: search, taste profile dashboard, poster archive, watchlist management, search history, settings
-- **Rich CLI** — interactive REPL, conversational context ("more like that"), feedback system, usage/cost tracking
+- **Rich CLI** — interactive REPL, conversational context ("more like that"), ratings, usage/cost tracking
 - **Streaming availability** — annotated results with platform filtering (Netflix, Prime, etc.)
 - **Quality filters** — configurable minimum rating, release year, and vote count
 - **Title intelligence** — guessit classification, rapidfuzz dedup, manual overrides, IMDB/TMDB links
@@ -51,7 +57,7 @@ Streamline ingests your real watch history from Netflix, Prime Video, Apple TV, 
   <img src="docs/how-it-works.png" width="800" alt="Streamline offline setup and online query pipeline">
 </p>
 
-1. **Setup (run once)** — parses your watch history, fetches metadata from TMDB, enriches each title with a semantic description (fast model), and builds a full taste profile (reasoning model) from all enriched titles in batches.
+1. **Setup (run once, then refresh as needed)** — parses your watch history, fetches metadata from TMDB, enriches each title with a semantic description (fast model), and builds the taste profile (reasoning model). After the first build, the profile is rebuilt only when you ask for it, so routine data refreshes cost nothing in LLM calls.
 2. **Query (any time)** — ask anything in natural language. The reasoning model parses your intent, finds candidates via TMDB Discover + semantic suggestions, filters out what you've already watched, annotates streaming availability, and ranks results against your taste profile.
 
 ## Quick Start
@@ -96,12 +102,16 @@ Everything goes through `./recommend`:
 ./recommend setup                               # first-time setup
 ./recommend setup --refresh-data                # re-fetch TMDB + rebuild everything
 ./recommend setup --refresh-profile             # rebuild taste profile only
+./recommend setup --rethink-themes              # regroup the taste rows from scratch (paid LLM calls)
+./recommend setup --ingest-only                 # check the configured export zips
 ./recommend setup --refresh-imdb                # re-download IMDb ratings, rebuild Find's language lists
 
-# Feedback
-./recommend --liked "Tinker Tailor Soldier Spy"
-./recommend --disliked "The Long Season"
+# Ratings and history
+./recommend --more "Tinker Tailor Soldier Spy"  # more like this
+./recommend --fine "The Night Agent"            # it was fine
+./recommend --less "The Long Season"            # less like this
 ./recommend --add "Shetland" --type tv
+./recommend plex ratings                        # bring Plex rating changes into Streamline
 ./recommend --history                           # show recent query history
 
 # Options
@@ -132,11 +142,16 @@ source completions/_recommend.zsh    # zsh
 ```
 
 The web UI includes:
-- **Home** — natural language search with HTMX, suggestion pills, recent searches
+- **Home** — natural language search, recent searches, and your taste profile as expandable rows
 - **Mood Match** — guided wizard (`/wizard`): content-type tap, adaptive taste-grounded questions, review step, and in-place result refinement
+- **Find** — unwatched titles by rating (`/find`), paged as far as TMDB goes, plus Hindi films and shows ranked by IMDb
 - **Searches** — expandable history of past queries with cached results and watchlist actions
-- **Archive** — full watch history with poster grid, list, and compact views; sortable A-Z/Z-A
-- **Watchlist** — save/unsave titles from any page, CSV export
+- **Watchlist** — save titles from any page, mark them Seen it or Not interested, CSV export
+- **On Deck** — followed shows (`/shows`): episodes ready now, Coming soon, and shows worth following. Air times come from TVmaze
+- **Archive** — full watch history with poster grid, list, and compact views; sort A-Z, Z-A, or recently watched. Links to:
+  - **Seen It** (`/classics`) — sets of famous titles to mark as seen or not interested
+  - **Rate It** (`/loved-it`) — sets of unrated archive titles to mark Loved or Not for me; this is what the taste profile is built from
+- **Title pages** — poster, overview, AI analysis, credits, and links for any title
 - **Settings** — edit all configuration from the browser with live reload
 - **Help** — built-in usage guide
 - **Logs & status** — `/logs` tails the app log from the browser; `/status` and `/healthz` report provider, cache, and last-run state for monitoring
@@ -201,7 +216,7 @@ Only add `models.<provider>.api_key_env` in config when you need a non-standard 
 ### Quality Filters
 
 ```yaml
-min_rating: 6.5      # minimum TMDB rating (0 to disable)
+min_rating: 6.5      # minimum rating, IMDb first, TMDB fallback (0 to disable)
 min_year: 2000        # minimum release year (0 to disable)
 min_vote_count: 20    # filter obscure titles
 ```
@@ -244,6 +259,7 @@ All shared settings in `config.yaml`:
 **Scoring:**
 | Setting | Default | Description |
 |---------|---------|-------------|
+| `scoring.use_viewing_signals` | false | Off: every watched title counts the same. On: use the completion/rewatch/recency weights below |
 | `scoring.weight_completion` | 0.5 | Weight for watch completion rate |
 | `scoring.weight_rewatch` | 0.3 | Weight for rewatch bonus |
 | `scoring.weight_recency` | 0.2 | Weight for recency (must sum to 1.0) |
@@ -255,7 +271,7 @@ All shared settings in `config.yaml`:
 |---------|---------|-------------|
 | `default_top_n` | 3 | Default results per query |
 | `min_vote_count` | 20 | Minimum TMDB votes for discover candidates |
-| `min_rating` | 6.5 | Minimum TMDB rating (0 to disable) |
+| `min_rating` | 6.5 | Minimum rating, IMDb first, TMDB fallback (0 to disable) |
 | `min_year` | 2000 | Minimum release year (0 to disable) |
 | `recency_half_life_days` | 90 | Days until recency score halves |
 | `watch_region` | US | Region for streaming availability |
@@ -316,10 +332,15 @@ Two-phase LLM pipeline with role-based model dispatch:
 | `recommender/llm.py` | Provider abstraction (Anthropic/Gemini/OpenAI/local), token tracking, rate limit retry |
 | `recommender/query_engine.py` | Online pipeline: intent parsing, hybrid candidates, ranking |
 | `recommender/wizard.py` / `wizard_flow.py` | Mood Match: deterministic content-type tap + LLM-led adaptive question loop, synthesizes a `QueryIntent` |
-| `recommender/taste_profile_builder.py` | Batched profile build with cache, truncation detection |
+| `recommender/taste_profile_builder.py` | Batched prose profile build with cache, truncation detection |
+| `recommender/taste_tags.py` / `taste_themes.py` / `taste_rows.py` | Taste rows: tags per loved title, themes, placement, and row names, all cached |
+| `recommender/show_tracker.py` / `tvmaze.py` | On Deck: followed shows, new episodes, air times |
+| `recommender/imdb_ratings.py` / `language_catalog.py` | Local IMDb ratings copy and Find's language lists |
+| `recommender/plex.py` | Plex webhook and rating sync |
+| `recommender/api.py` | Read-only API for Home Assistant |
 | `recommender/tmdb_client.py` | TMDB metadata, discover endpoint, streaming providers |
 | `recommender/enricher.py` | LLM enrichment with caching |
-| `recommender/signals.py` | Engagement scoring (completion, rewatch, recency) |
+| `recommender/signals.py` | Title weights (equal by default; optional completion, rewatch, recency) |
 | `recommender/web.py` | Flask + HTMX web UI |
 | `recommender/main.py` | Rich CLI |
 

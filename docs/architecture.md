@@ -8,12 +8,16 @@ Two-phase LLM pipeline. The offline phase runs once (or on demand) to build pers
 
 ```mermaid
 flowchart TD
-    A["Watch History CSVs"] --> B["Ingestion<br/>Netflix / Prime / Apple TV / Manual"]
-    B --> C["TMDB Metadata Fetch<br/>cached, title-cleanup fallback"]
+    A["Export zips + manual lists"] --> B["Ingestion<br/>Netflix / Prime / Apple TV / Manual"]
+    P["Plex webhook<br/>plays as they happen"] --> S
+    B --> S[("Event store<br/>SQLite")]
+    S --> C["TMDB Metadata Fetch<br/>cached, title-cleanup fallback"]
     C --> D["Watch Index<br/>TMDB ID + normalized title"]
-    D --> E["Claude Haiku Enrichment<br/>only cached on success"]
-    E --> F["Engagement Scoring<br/>completion + rewatch + recency"]
-    F --> G["Taste Profile - Claude Sonnet<br/>batched, merged prose"]
+    D --> E["Enrichment - fast model<br/>only cached on success"]
+    E --> F["Title weights<br/>equal by default"]
+    F --> G["Prose taste profile - reason model<br/>batched, merged"]
+    E --> T["Taste rows from loved titles<br/>tags, themes, placement, words"]
+    R[("Ratings<br/>Rate It, Seen It, More/Less")] -.-> T
 ```
 
 ### Online (query)
@@ -50,7 +54,11 @@ All parsers emit `WatchEvent` dataclasses (defined in `base.py`). Manual entries
 
 ### Signals (`recommender/signals.py`)
 
-Computes a score per unique title from raw watch events:
+By default (`scoring.use_viewing_signals: false`) every watched title gets the same weight, 1.0, however many times or for how long it was watched.
+More like this and Less like this ratings still raise or lower a title.
+Tied titles sort by their most recent real watch date.
+
+With `use_viewing_signals: true`, it computes a score per unique title from raw watch events:
 
 - **Completion ratio** (50%) — `watched_duration / runtime` (uses TMDB runtime when available, falls back to 45min TV / 90min movie)
 - **Rewatch bonus** (30%) — log-scale multiplier for titles watched more than once
@@ -68,7 +76,7 @@ Four roles:
 
 4. **Watch providers** (`get_watch_providers`) — looks up flatrate streaming availability by region. Cached at `recommender/cache/providers/`.
 
-Genre name -> TMDB ID mappings are stored as module-level dicts. TV has no "thriller" genre; it maps to Mystery (9648).
+Genre name -> TMDB ID mappings are stored as module-level dicts. TV has no "thriller" genre, so for TV it is left out of the Discover genre filter instead of mapping to Mystery.
 
 ### Watch Index (`recommender/watch_index.py`)
 
@@ -94,19 +102,34 @@ Processes ALL enriched titles (no limit) in batches of 200. Each batch produces 
 
 Previous profiles are auto-backed up with timestamps before rebuild.
 
-Negative preferences from the feedback system are included in the prompt, generating a "What you don't enjoy" section.
+Less like this ratings are included in the prompt, generating a "What you don't enjoy" section.
+
+The profile is rebuilt only on request: `setup --refresh-profile`, `setup --rethink-themes`, or a first install with no profile.
+A routine `setup --refresh-data` refreshes data only and makes no taste-profile LLM calls.
+
+### Taste Rows (`recommender/taste_tags.py`, `taste_themes.py`, `taste_rows.py`)
+
+The home page's "What you love to watch" rows, and the structured profile that search and Mood Match read, come from titles marked Loved (in Rate It, or by following a show), not from everything watched.
+The AI makes each judgement once per title, and code does the rest, so the same ratings give the same rows in the same order.
+
+1. **Tags** — each loved title gets 5-8 specific taste tags from its enrichment, written once by the reasoning model and saved in `taste_tags.json`.
+2. **Themes** — one reasoning call maps tags to 10-16 themes, saved in `taste_themes.json`. New tags are filed into existing themes; themes are rethought only with `setup --rethink-themes`.
+3. **Placement** — code puts each title in the theme with the strongest tag vote. Unclear cases are placed once by the AI and saved in `taste_placements.json`. Region rows (British, Hindi) also require TMDB to agree on origin.
+4. **Words** — row names and descriptions are saved in `taste_words.json` and rewritten only when a row's members change by more than 20%.
+
+An unchanged rebuild makes no LLM calls and writes an identical profile.
 
 The merged output is capped at 15 clusters. Family/kids/seasonal clusters (Disney, Pixar, Christmas, holiday, children's content, etc.) are sorted after personal-taste clusters so a cap never silently drops a genre the user actually cares about in favor of shared/family viewing. Markdown section headings are renumbered sequentially after merging so a dropped or reordered cluster doesn't leave gaps.
 
 ### User Store (`recommender/user_store.py`)
 
-SQLite storage (`events.db`) for user-managed state:
+SQLite storage (`data/streamline.db`) for user-managed state:
 
 - **Watchlist** (`saved_titles` with status `watchlist`) — save/unsave from any UI page, CSV export
 - **Dismissed** (`saved_titles` with status `dismissed`) — excluded from recommendations
-- **Ratings** (`title_ratings`) — liked/disliked, applied as score multipliers during profile rebuild
-- **Manual archive** (`manual_archive_entries`) — titles added via CLI or web UI
-- Disliked titles inform negative preference prompting in the taste profile
+- **Ratings** (`title_ratings`) — More like this (Loved), It was fine, Less like this (Not for me). Used as weights in the profile rebuild, and sent fresh into every search (see Query Engine)
+- **Manual archive** (`manual_archive_entries`) — titles added via CLI or web UI, and Seen It marks
+- Less like this titles inform negative preference prompting in the taste profile
 
 All lookups use TMDB-ID-first matching with normalized-title fallback. `UserStateIndex` (in `user_state.py`) provides a read-only snapshot for fast matching in query filtering and UI rendering.
 
@@ -148,6 +171,10 @@ The online pipeline:
 
 **5. Ranking** — Claude Sonnet ranks with query relevance as primary signal, taste profile as tiebreaker. Returns JSON with title, explanation, and score.
 
+**6. Refill** — if too few results survive ranking, up to 2 extra rounds fetch more. The requested content type and years are enforced on every source, and titles shown in the last 20 searches are excluded.
+
+Every search also reads the current ratings (up to 30 More like this and 10 Less like this) and adds them to the suggestion and ranking prompts, so a new rating counts immediately without a rebuild.
+
 **Special modes:**
 - `"why not X?"` — traces a title through the pipeline and explains exactly where it was filtered
 - `"abandoned"` queries — checks watch history for partial viewing and advises whether to continue
@@ -170,21 +197,50 @@ The flow is a hybrid of deterministic and LLM-led turns:
 ### Web UI (`recommender/web.py`)
 
 Flask app serving:
-- `/` — Home: search bar (HTMX-powered), taste profile clusters (expandable, markdown-rendered), archive poster wall
+- `/` — Home: search bar (HTMX-powered), recent searches, and the taste rows (top six shown, the rest behind "Show N more")
 - `/wizard` — Mood Match guided wizard (see the wizard section above)
-- `/history` — Watch archive with switchable views (list, poster grid, compact). Search + type filter + source-provider filter + rating filter + A-Z/Z-A/recently-watched sort.
+- `/find` — highest-rated unwatched titles for a period, genre, and rating, plus original-language lists (Hindi) ranked by IMDb. No LLM; talks only to TMDB and the local IMDb copy
+- `/shows` — On Deck: followed shows with episodes ready now, Coming soon, and Worth following. See On Deck below
+- `/history` — Watch archive with switchable views (list, poster grid, compact). Search + type filter + source-provider filter + rating filter + A-Z/Z-A/recently-watched sort. "Recently watched" uses real watch dates only.
+- `/classics` — Seen It: sets of famous titles to mark Seen it or Not interested
+- `/loved-it` — Rate It: sets of unrated archive titles to mark Loved or Not for me; the source of the taste rows
 - `/title/:id` — Title detail with poster, TMDB overview, AI analysis, credits, keywords, TMDB link
 - `/recommend` — Standalone discover page
 - `/watchlist` — Saved titles rendered as rich cards (cached poster, rating, genres, streaming availability, TMDB/IMDB links), CSV export via `/watchlist/export`
 - `/watchlist/save`, `/watchlist/unsave`, `/watchlist/dismiss`, `/watchlist/remove`, `/watchlist/watched` — HTMX toggle/transition endpoints for inline management from any page
 - `/archive/add` — Manual add; `/archive/resolve` and `/archive/confirm` handle disambiguation when the added title is ambiguous or already recorded (see above)
 - `/searches` — Query history with user state badges (watchlist, archived, dismissed) per result; recent searches are also surfaced inline in the home search suggestion row
+- `/settings`, `/logs`, `/help` — browser settings, app log, built-in guide
+- `/status`, `/healthz` — JSON status for monitoring
+- `/api/*` — read-only API for Home Assistant (`recommender/api.py`, see [home-assistant.md](home-assistant.md))
+- `/plex/webhook` — Plex plays (see Plex below)
+
+Setting `STREAMLINE_PASSWORD` puts the whole UI behind a password. All write actions need a CSRF token.
+
+### On Deck (`recommender/show_tracker.py`, `recommender/tvmaze.py`)
+
+Tracks followed shows and groups them by what to do next: episodes ready now, Coming soon, and shows worth following.
+TMDB gives episode air dates without a time, so each followed show's regular air time comes from TVmaze (cached in `cache/tvmaze/`, re-checked weekly).
+An episode counts as aired at its air date plus that time; streaming shows with no set time count from midnight Central.
+TVmaze data is CC BY-SA 4.0 and is credited on the page.
+
+### Plex (`recommender/plex.py`)
+
+`POST /plex/webhook?token=` saves each finished movie or episode as a `plex` watch event with an exact TMDB ID.
+After each play, and with `./recommend plex ratings`, Plex rating changes are brought over, newer wins.
+Plex plays exist only in SQLite, so setup never deletes them. Nothing is ever written to Plex.
+
+### IMDb Ratings (`recommender/imdb_ratings.py`)
+
+A local SQLite copy of IMDb's daily ratings file. TMDB stays the catalogue; IMDb only supplies rating and vote count.
+Every displayed, filtered, or ranked rating uses IMDb and falls back to TMDB.
+Refreshed by setup, and by a background job in the web UI once the copy is a day old.
 
 Streaming provider names are consolidated server-side (`_consolidate_providers()`, mirrored client-side for filter dropdowns) so ad-tier variants and channel resells display under one canonical brand.
 
 ### LLM Abstraction (`recommender/llm.py`)
 
-ABC-based `LLMClient` with `AnthropicClient` and `GeminiClient`. Call sites use roles instead of model names:
+ABC-based `LLMClient` with `AnthropicClient`, `GeminiClient`, and `OpenAIClient` (which also serves `local`, any OpenAI-compatible endpoint such as Ollama). Call sites use roles instead of model names:
 - `role="fast"` — enrichment (high volume, simple descriptions)
 - `role="reason"` — intent parsing, ranking, taste profile, suggestions (complex reasoning)
 
@@ -209,7 +265,7 @@ Token usage and cost tracking via `UsageStats` — accumulated per query, printe
 
 ### CLI (`recommender/main.py`)
 
-Rich-powered output with spinners during API calls and panel-formatted results. Stderr/stdout separation for pipe-friendly usage. Interactive REPL with conversational context and inline feedback commands (`+liked`, `+disliked`, `+add`). Token usage and cost printed after each query.
+Rich-powered output with spinners during API calls and panel-formatted results. Stderr/stdout separation for pipe-friendly usage. Interactive REPL with conversational context and inline commands (`+more`, `+fine`, `+less`, `+add`; the old `+liked` / `+disliked` still work). Token usage and cost printed after each query.
 
 ### Mirror Tooling (`./recommend-mirror`)
 
@@ -232,11 +288,22 @@ recommender/cache/
   profile_batches/               Intermediate batch profiles (auto-cleaned after merge)
     fingerprint.txt              SHA-256 of scored title list (staleness check)
     batch_01.txt ... batch_NN.txt
+  find/                          Find page: now-playing ids (6h TTL), language_<code>.json lists
+  releases/                      Followed shows' episode snapshots (On Deck)
+  tvmaze/                        Followed shows' regular air times
+  imdb_ratings.db                Local copy of IMDb ratings
   watch_index.json               [{tmdb_id, title, content_type}, ...]
   taste_profile.txt              LLM-generated prose output
   taste_profile_*.txt            Timestamped backups
-  feedback.json                  User ratings and additions
+  taste_profile_structured.json  Structured profile read by search, Mood Match, and the home page
+  taste_tags.json                Taste tags per loved title
+  taste_themes.json              Theme map
+  taste_placements.json          AI placements for unclear titles
+  taste_words.json               Row names and descriptions
+  feedback.json                  Deprecated; migrated to SQLite
 ```
+
+Watch events, ratings, watchlist, manual archive, and query history live in one SQLite database, `data/streamline.db` (`event_db_path` in config).
 
 ## Configuration
 
@@ -249,6 +316,9 @@ Secrets come from the environment. Shared application settings live in
 - `ANTHROPIC_API_KEY` — Anthropic API key
 - `GEMINI_API_KEY` — Google Gemini API key (AIza* for AI Studio, AQ.* for Vertex AI)
 - `OPENAI_API_KEY` — OpenAI-compatible API key
+- `PLEX_WEBHOOK_TOKEN`, `PLEX_URL`, `PLEX_TOKEN` — Plex webhook and rating sync
+- `STREAMLINE_PASSWORD` — optional password for the web UI
+- `STREAMLINE_API_TOKEN` — optional bearer token for `GET /api/*`
 
 **`.env`** — optional local convenience for setting those variables (gitignored)
 
