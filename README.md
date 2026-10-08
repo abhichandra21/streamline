@@ -57,7 +57,7 @@ Streamline ingests your real watch history from Netflix, Prime Video, Apple TV, 
   <img src="docs/how-it-works.png" width="800" alt="Streamline offline setup and online query pipeline">
 </p>
 
-1. **Setup (run once, then refresh as needed)** — parses your watch history, fetches metadata from TMDB, enriches each title with a semantic description (fast model), and builds the taste profile (reasoning model). After the first build, the profile is rebuilt only when you ask for it, so routine data refreshes cost nothing in LLM calls.
+1. **Setup (run once, then refresh as needed)** — parses your watch history, fetches metadata from TMDB, enriches each title with a semantic description (fast model), and builds the taste profile (reasoning model). After the first build, the profile is rebuilt only when you ask for it, so routine data refreshes make no taste-profile LLM calls; only new titles are enriched.
 2. **Query (any time)** — ask anything in natural language. The reasoning model parses your intent, finds candidates via TMDB Discover + semantic suggestions, filters out what you've already watched, annotates streaming availability, and ranks results against your taste profile.
 
 ## Quick Start
