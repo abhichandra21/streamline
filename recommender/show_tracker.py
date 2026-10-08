@@ -4,7 +4,9 @@ import json
 import logging
 import time
 from datetime import date, datetime, timedelta, timezone
+from datetime import time as clock_time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from recommender.tmdb_client import TmdbRateLimitError
 
@@ -15,6 +17,8 @@ DISCOVERY_REFRESH_AGE = timedelta(days=7)
 REQUEST_INTERVAL_SECONDS = 0.5
 RATE_LIMIT_FALLBACK_SECONDS = 5.0
 FAILED_REFRESH_AGE = timedelta(hours=24)
+# A date-only episode counts as aired from midnight here.
+HOME_TIMEZONE = ZoneInfo("America/Chicago")
 
 
 def _parse_date(value: str | None) -> date | None:
@@ -126,6 +130,11 @@ def _snapshot_is_fresh(snapshot: dict | None, now: datetime, max_age: timedelta)
     return bool(fetched_at and now - fetched_at < max_age)
 
 
+def _followed_is_fresh(snapshot: dict | None, now: datetime) -> bool:
+    # A followed show saved without a show time could alert at midnight, so it is due now.
+    return _snapshot_is_fresh(snapshot, now, FOLLOWED_REFRESH_AGE) and "air_time" in snapshot
+
+
 def _failed_refresh_ids(manifest: dict) -> set[int]:
     return {
         tmdb_id
@@ -182,7 +191,7 @@ def refresh_is_due(
         if row.get("state") != "following" or tmdb_id not in eligible:
             continue
         if (
-            not _snapshot_is_fresh(snapshots.get(tmdb_id), now, FOLLOWED_REFRESH_AGE)
+            not _followed_is_fresh(snapshots.get(tmdb_id), now)
             and (tmdb_id not in failed_ids or failed_retry_due)
         ):
             return True
@@ -324,11 +333,13 @@ def refresh_release_cache(
     sleep=time.sleep,
     lookback_days: int = 730,
     progress=None,
+    tvmaze=None,
 ) -> dict:
     """Refresh due release snapshots, preserving cached data on failures.
 
     progress, when given, is called with (completed, total) after each show so
-    callers can surface how far along the refresh is.
+    callers can surface how far along the refresh is. tvmaze, when given, adds
+    each followed show's regular air time to its snapshot.
     """
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     manifest = _read_json(_manifest_path(cache_dir)) or {}
@@ -343,12 +354,11 @@ def refresh_release_cache(
     if full_scan:
         targets = []
         for tmdb_id in eligible:
-            max_age = (
-                FOLLOWED_REFRESH_AGE
-                if (tracking.get(tmdb_id) or {}).get("state") == "following"
-                else DISCOVERY_REFRESH_AGE
-            )
-            if not _snapshot_is_fresh(snapshots.get(tmdb_id), now, max_age):
+            if (tracking.get(tmdb_id) or {}).get("state") == "following":
+                fresh = _followed_is_fresh(snapshots.get(tmdb_id), now)
+            else:
+                fresh = _snapshot_is_fresh(snapshots.get(tmdb_id), now, DISCOVERY_REFRESH_AGE)
+            if not fresh:
                 targets.append(tmdb_id)
     else:
         targets = []
@@ -356,7 +366,7 @@ def refresh_release_cache(
             if row.get("state") != "following" or tmdb_id not in eligible:
                 continue
             if (
-                not _snapshot_is_fresh(snapshots.get(tmdb_id), now, FOLLOWED_REFRESH_AGE)
+                not _followed_is_fresh(snapshots.get(tmdb_id), now)
                 and (tmdb_id not in previous_failed_ids or failed_retry_due)
             ):
                 targets.append(tmdb_id)
@@ -395,6 +405,10 @@ def refresh_release_cache(
             if progress:
                 progress(completed, total)
             continue
+        if (tracking.get(tmdb_id) or {}).get("state") == "following":
+            snapshot["air_time"] = tvmaze.show_time(
+                tmdb_id, lambda: paced.call(client.fetch_tv_external_ids, tmdb_id)
+            ) if tvmaze is not None else None
         _write_json(_snapshot_path(cache_dir, tmdb_id), snapshot)
         snapshots[tmdb_id] = snapshot
         result["refreshed"] += 1
@@ -415,11 +429,23 @@ def refresh_release_cache(
     return result
 
 
+def _ready_at(air_date: date, air_time: dict | None) -> datetime:
+    """When an episode counts as aired: the show's regular time, else midnight at home."""
+    if air_time:
+        try:
+            clock = clock_time.fromisoformat(air_time["time"])
+            return datetime.combine(air_date, clock, ZoneInfo(air_time["timezone"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            log.warning("Ignoring unreadable air time %r: %s", air_time, exc)
+    return datetime.combine(air_date, clock_time(), HOME_TIMEZONE)
+
+
 def _following_card(
     entry: dict,
     tracked: dict,
     snapshot: dict,
     today: date,
+    now: datetime | None = None,
 ) -> tuple[str, dict] | None:
     tracking_from = tracked["tracking_from_season"]
     marker = None
@@ -441,7 +467,11 @@ def _following_card(
             if not air_date:
                 continue
             item = (air_date, season_number, episode_number)
-            if air_date <= today:
+            if now is None:
+                is_aired = air_date <= today
+            else:
+                is_aired = now >= _ready_at(air_date, snapshot.get("air_time"))
+            if is_aired:
                 aired.append(item)
             else:
                 future.append(item)
@@ -531,7 +561,9 @@ def build_sections(
     snapshots: dict[int, dict],
     today: date,
     lookback_days: int,
+    now: datetime | None = None,
 ) -> dict[str, list[dict]]:
+    """now, when given, decides which followed episodes have aired, to the minute."""
     sections: dict[str, list[dict]] = {
         "ready_now": [],
         "coming_soon": [],
@@ -569,7 +601,7 @@ def build_sections(
         if not snapshot:
             continue
         if tracked:
-            result = _following_card(entry, tracked, snapshot, today)
+            result = _following_card(entry, tracked, snapshot, today, now)
             if result:
                 section, card = result
                 sections[section].append(card)
