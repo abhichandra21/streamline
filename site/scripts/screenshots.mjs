@@ -26,7 +26,10 @@ const pages = [
 	['home', '/'],
 	['mood-match', '/wizard'],
 	['find', '/find'],
-	['on-deck', '/shows'],
+	['on-deck', '/shows', async (page) => {
+		// Opening On Deck starts a refresh; the page polls until it finishes.
+		await page.waitForSelector('.shows-spinner', { state: 'detached', timeout: 600_000 });
+	}],
 	['archive', '/history'],
 	['rate-it', '/loved-it'],
 	['seen-it', '/classics'],
@@ -57,10 +60,6 @@ async function waitFor(check, what, timeoutMs) {
 
 try {
 	await waitFor(async () => (await fetch(`${base}/healthz`)).ok, 'the web app to start', 60_000);
-	// The first visit starts the On Deck refresh; capture only once it is done.
-	await waitFor(async () => !/checking \d+ of/i.test(await (await fetch(`${base}/shows`)).text()),
-		'On Deck to finish refreshing', 600_000);
-
 	mkdirSync(outDir, { recursive: true });
 	const browser = await chromium.launch();
 	const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1.5 });
