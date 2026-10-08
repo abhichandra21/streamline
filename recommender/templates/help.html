@@ -18,7 +18,7 @@
     </summary>
     <div class="help-body">
       <p>Streamline is a two-phase recommendation engine built on your real watch history.</p>
-      <p><strong>Setup (offline)</strong> — Parses your Netflix, Prime Video, and manual watch history. Fetches metadata from TMDB, enriches each title with a semantic description, then builds a detailed taste profile from everything you've watched.</p>
+      <p><strong>Setup (offline)</strong> — Parses your Netflix, Prime Video, Apple TV, Plex, and manual watch history. Fetches metadata from TMDB, enriches each title with a semantic description, then builds your taste profile from the titles you've marked Loved.</p>
       <p><strong>Search (online)</strong> — Ask anything in natural language. The engine parses your intent, finds candidates via TMDB Discover + AI semantic suggestions, filters out what you've seen, checks streaming availability, and ranks results against your taste profile.</p>
     </div>
   </details>
@@ -56,7 +56,7 @@
         <li><code>./recommend --more "Title"</code>, <code>--fine</code>, <code>--less</code>, <code>--add</code>, and <code>--history</code> are CLI commands.</li>
       </ul>
       <p><strong>Runtime note</strong> — ordinary recommendations run from the cached watch index and taste profile after setup. Abandoned-watch queries depend on raw watch events, so they are less useful if your provider zips are no longer available at runtime.</p>
-      <p>Results show the title, TMDB rating, genres, a personalized explanation of why it matches your taste, and where it's streaming.</p>
+      <p>Results show the title, rating (IMDb, or TMDB when IMDb has none), genres, a personalized explanation of why it matches your taste, and where it's streaming.</p>
     </div>
   </details>
 
@@ -100,7 +100,7 @@
 
       <p style="margin-top:1rem;">Web server:</p>
       <table class="help-table">
-        <tr><td><code>./recommend-web start</code></td><td>Start web UI (default port 5050)</td></tr>
+        <tr><td><code>./recommend-web start</code></td><td>Start web UI (default port 5051)</td></tr>
         <tr><td><code>./recommend-web stop</code></td><td>Stop the server</td></tr>
         <tr><td><code>./recommend-web restart</code></td><td>Restart</td></tr>
         <tr><td><code>./recommend-web status</code></td><td>Check if running</td></tr>
@@ -118,7 +118,7 @@
     <div class="help-body">
       <p>Settings live in a few places:</p>
       <ul>
-        <li><strong>Environment variables</strong> — API keys only (<code>TMDB_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, <code>GEMINI_API_KEY</code>, <code>OPENAI_API_KEY</code>).</li>
+        <li><strong>Environment variables</strong> — API keys only (<code>TMDB_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, <code>GEMINI_API_KEY</code>, <code>OPENAI_API_KEY</code>, and for Plex <code>PLEX_WEBHOOK_TOKEN</code>, <code>PLEX_URL</code>, <code>PLEX_TOKEN</code>).</li>
         <li><strong>.env</strong> — optional local convenience for setting those variables. Gitignored.</li>
         <li><strong>config.yaml</strong> — shared repo defaults and app settings. Editable from the <a href="/settings">Settings</a> page or by hand.</li>
         <li><strong>config.local.yaml</strong> — local overrides such as watch-history zip paths. Gitignored and loaded after <code>config.yaml</code>.</li>
@@ -173,7 +173,7 @@
       <span class="help-heading">LLM providers</span>
     </summary>
     <div class="help-body">
-      <p>Streamline supports two LLM providers. Each uses two model roles:</p>
+      <p>Streamline supports four LLM providers: Anthropic, Gemini, OpenAI, and a local OpenAI-compatible endpoint (for example Ollama). Each uses two model roles:</p>
       <ul>
         <li><strong>Fast</strong> — used for enrichment (high volume, simple task). Default: Haiku / Flash.</li>
         <li><strong>Reason</strong> — used for intent parsing, ranking, taste profile (complex reasoning). Default: Sonnet / Pro.</li>
