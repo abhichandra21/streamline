@@ -9,7 +9,7 @@ Two-phase LLM pipeline. The offline phase runs once (or on demand) to build pers
 
 ```mermaid
 flowchart TD
-    A["Export zips + manual lists"] --> B["Ingestion<br/>Netflix / Prime / Apple TV / Manual"]
+    A["Export zips + manual lists"] --> B["Ingestion<br/>Netflix / Prime / Apple TV / Disney+ / Max / Manual"]
     P["Plex webhook<br/>plays as they happen"] --> S
     B --> S[("Event store<br/>SQLite")]
     S --> C["TMDB Metadata Fetch<br/>cached, title-cleanup fallback"]

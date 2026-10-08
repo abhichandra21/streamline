@@ -33,7 +33,7 @@ Every streaming app recommends from its own catalogue, to keep you on its own se
 None of them know you also watched three seasons of a British cop show somewhere else, or that you gave up on the drama everyone loved.
 
 **Streamline does.**
-It reads your real history from Netflix, Prime Video, Apple TV, and Plex, learns what you love, and recommends across every service, with a reason for every pick.
+It reads your real history from Netflix, Prime Video, Apple TV, Disney+, Max, and Plex, learns what you love, and recommends across every service, with a reason for every pick.
 
 > **You:** gritty British crime drama
 >
