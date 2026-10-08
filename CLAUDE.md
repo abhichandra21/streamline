@@ -52,6 +52,10 @@ python3 -m pytest tests/test_query_engine.py -v
 # Read-only JSON + iCal for Home Assistant: /api/summary, /api/on-deck,
 # /api/watchlist, /api/coming-soon.ics (see docs/home-assistant.md)
 
+# Docker: same commands inside the container; data, cache, logs and both config files are bind mounts
+docker compose run --rm streamline ./recommend setup
+docker compose up -d                           # image: ghcr.io/abhichandra21/streamline
+
 # Docs site (Astro Starlight, in site/). Screenshots come from a made-up demo library, never real data
 ./venv/bin/python demo/build.py /tmp/streamline-demo   # build the demo copy (needs TMDB_API_KEY, makes no LLM calls)
 (cd site && npm run screenshots -- /tmp/streamline-demo) # recapture site/src/assets/screenshots/

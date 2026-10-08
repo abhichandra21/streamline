@@ -47,6 +47,7 @@ It reads your real history from Netflix, Prime Video, Apple TV, and Plex, learns
 - **It doesn't recommend what you've already seen,** whichever service you saw it on.
 - **It explains itself.** Every pick says why it fits *you*. Ask "why not Slow Horses?" and it tells you exactly why it was left out.
 - **It's yours.** It runs on your laptop or home server, your history lives in one SQLite file, and you choose the AI: Claude, Gemini, OpenAI, or a local model.
+- **It's cheap to run.** About $1 to describe 1,000 titles once, then roughly 6 cents a search with the default Claude models. Find, On Deck, and everything else cost nothing. [Details](https://streamline-docs.pages.dev/getting-started/#what-it-costs)
 
 ## A look around
 
@@ -73,21 +74,33 @@ It reads your real history from Netflix, Prime Video, Apple TV, and Plex, learns
 - **Plex** plays and ratings arrive as they happen
 - **IMDb ratings** on search results, with TMDB as the fallback
 - **Home Assistant** sensors and a calendar of upcoming episodes
+- **Docker images** for x86 and ARM, Raspberry Pi included
 - **A full command line**, with an interactive mode that remembers the conversation ("more like #2", "but lighter")
 
 ## Quick start
 
-```bash
-git clone https://github.com/abhichandra21/streamline.git
-cd streamline
-python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+With Docker:
 
-# Keys: a free TMDB key, plus one LLM provider
+```bash
+git clone https://github.com/abhichandra21/streamline.git && cd streamline
+mkdir -p data recommender/cache logs
+cp config.local.example.yaml config.local.yaml      # then point it at your exports in data/
 printf 'TMDB_API_KEY=...\nANTHROPIC_API_KEY=...\n' > .env
 
-# Copy config.local.example.yaml to config.local.yaml and point it at your exports
+docker compose run --rm streamline ./recommend setup
+docker compose up -d                                # open http://localhost:5051
+```
+
+Or with Python 3.10+:
+
+```bash
+git clone https://github.com/abhichandra21/streamline.git && cd streamline
+python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+cp config.local.example.yaml config.local.yaml      # then point it at your exports
+printf 'TMDB_API_KEY=...\nANTHROPIC_API_KEY=...\n' > .env
+
 ./recommend setup
-./recommend-web start      # open http://localhost:5051
+./recommend-web start                               # open http://localhost:5051
 ```
 
 The [Getting started guide](https://streamline-docs.pages.dev/getting-started/) walks through every step, including where to download each service's history.
@@ -108,7 +121,7 @@ Everything else is on the docs site, **[streamline-docs.pages.dev](https://strea
 
 - [Getting started](https://streamline-docs.pages.dev/getting-started/)
 - [Using each page](https://streamline-docs.pages.dev/guides/search/)
-- [Watch history exports](https://streamline-docs.pages.dev/guides/watch-history/), [Plex](https://streamline-docs.pages.dev/guides/plex/), [Home Assistant](https://streamline-docs.pages.dev/guides/home-assistant/)
+- [Docker](https://streamline-docs.pages.dev/guides/docker/), [watch history exports](https://streamline-docs.pages.dev/guides/watch-history/), [Plex](https://streamline-docs.pages.dev/guides/plex/), [Home Assistant](https://streamline-docs.pages.dev/guides/home-assistant/)
 - [Command line](https://streamline-docs.pages.dev/reference/cli/) and [configuration](https://streamline-docs.pages.dev/reference/configuration/)
 
 ## Contributing

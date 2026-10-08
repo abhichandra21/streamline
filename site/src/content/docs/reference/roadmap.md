@@ -18,6 +18,7 @@ Out of scope:
 These were on this roadmap and are now in the app:
 
 - gunicorn behind a systemd unit (`streamline-web.service`)
+- A Docker image (amd64 and arm64) and a Compose setup with mounted data, cache, and config
 - Password protection (`STREAMLINE_PASSWORD`) and CSRF protection for all write actions
 - `/healthz` and `/status`, reporting provider, models, cache counts, last profile build, IMDb refresh, and running jobs
 - A note when the taste profile is out of date
@@ -33,8 +34,6 @@ These items should be finished before calling the app a solid homeserver release
 
 ### Deployment and runtime
 
-- Ship a `Dockerfile` and a documented Compose setup
-- Persist `data/`, `config.yaml`, and cache directories with mounted volumes
 - Keep the systemd unit as an optional deployment path, not the primary one
 
 ### Safety and access control
