@@ -1296,3 +1296,11 @@ def test_tv_thriller_is_not_forced_to_mystery():
             client.search_by_filters(content_type="tv", genres=["thriller"], size=1)
 
         assert "with_genres" not in mock_get.call_args_list[0][1]['params']
+
+
+def test_fetch_tv_external_ids_uses_raw_endpoint_without_cache(tmp_path):
+    client = make_client(tmp_path)
+    with patch.object(client, "_get", return_value={"imdb_id": "tt1"}) as mock_get:
+        assert client.fetch_tv_external_ids(42) == {"imdb_id": "tt1"}
+
+    mock_get.assert_called_once_with("tv/42/external_ids")

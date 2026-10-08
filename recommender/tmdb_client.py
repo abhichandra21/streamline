@@ -546,6 +546,10 @@ class TmdbClient:
         """Fetch raw TV-series release data without using the metadata cache."""
         return self._get(f"tv/{tmdb_id}")
 
+    def fetch_tv_external_ids(self, tmdb_id: int) -> dict:
+        """Fetch a TV show's raw external IDs (IMDb, TVDB) without caching."""
+        return self._get(f"tv/{tmdb_id}/external_ids")
+
     def fetch_tv_season_details(self, tmdb_id: int, season_number: int) -> dict:
         """Fetch raw episode release data without using the metadata cache."""
         return self._get(f"tv/{tmdb_id}/season/{season_number}")

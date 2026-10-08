@@ -44,6 +44,7 @@ from recommender import loved_it
 from recommender import wizard
 from recommender import wizard_flow
 from recommender.structured_profile import load_structured_profile
+from recommender.tvmaze import TvmazeClient
 from recommender.tmdb_client import (
     MOVIE_GENRE_IDS, TV_GENRE_IDS, CatalogTitle, TmdbClient, TmdbRateLimitError,
 )
@@ -368,6 +369,7 @@ def _show_page_data() -> tuple[list[dict], list[dict], dict[str, list[dict]]]:
         show_tracker.load_snapshots(config.RELEASE_CACHE_DIR),
         today=datetime.now(ZoneInfo("America/Chicago")).date(),
         lookback_days=config.RETURNING_SHOWS_LOOKBACK_DAYS,
+        now=datetime.now(timezone.utc),
     )
     return archive_entries, tracking_rows, sections
 
@@ -390,6 +392,7 @@ def _run_show_refresh(
         config.RELEASE_CACHE_DIR,
         progress=report,
         lookback_days=config.RETURNING_SHOWS_LOOKBACK_DAYS,
+        tvmaze=TvmazeClient(config.TVMAZE_CACHE_DIR),
     )
 
 
