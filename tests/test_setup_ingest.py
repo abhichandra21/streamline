@@ -855,6 +855,23 @@ def test_profile_scores_drop_every_alias_of_a_less_rated_title(monkeypatch):
     assert _profile_scores(events, {}, index, ratings, []) == {}
 
 
+def test_profile_scores_drop_event_titles_that_share_a_less_rated_tmdb_id(monkeypatch):
+    """One show can arrive under several episode-prefixed names that all match the same TMDB title."""
+    import config
+    from types import SimpleNamespace
+    from recommender.setup import _profile_scores
+
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    names = ["Delhi to the Foothills-Tough Rides: India", "Southern India-Tough Rides: India"]
+    events = [_make_event(title=n, series_name=n) for n in names]
+    events.append(_make_event(title="Vera S1E1", series_name="Vera"))
+    metadata = {(n, "tv"): SimpleNamespace(content_type="tv", tmdb_id=86002) for n in names}
+    index = [{"title": names[0], "content_type": "tv", "tmdb_id": 86002}]
+    ratings = [{"title": "Tough Rides: India", "content_type": "tv", "tmdb_id": 86002, "rating": "less"}]
+
+    assert _profile_scores(events, metadata, index, ratings, []) == {"Vera": 1.0}
+
+
 def test_a_data_refresh_never_rebuilds_the_taste_profile_on_its_own(tmp_path, monkeypatch):
     """The profile rebuilds only on request (--refresh-profile), not when overrides or archive entries change."""
     import os
