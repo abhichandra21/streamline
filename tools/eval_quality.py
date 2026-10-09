@@ -3,12 +3,14 @@
 
 Usage:
     venv/bin/python -m tools.eval_quality [--searches FILE] [--skip-profile] [--code DIR]
+                                          [--set KEY=VALUE ...]
 
 Copies the code, data and caches to a scratch folder, rebuilds the taste profile
 there, runs each search in FILE (one per line, default data/evals/searches.txt),
 and saves everything to data/evals/runs/<timestamp>/ for /grade-quality to score.
 The real library is never written to. --code takes the code from another
 checkout, such as a fix worktree, while the data still comes from this one.
+--set changes a top-level setting in the copy's config.local.yaml only.
 
 Every LLM call goes through ClaudeCodeClient below, so it uses the Claude
 subscription of the logged-in `claude` CLI and no API key. TMDB_API_KEY is needed.
@@ -121,6 +123,21 @@ def _copy_code(code_dir: Path, root: Path) -> None:
     # The checkout under test may not have the eval tool, or may have an older one.
     (root / "tools").mkdir(exist_ok=True)
     shutil.copy2(Path(__file__), root / "tools/eval_quality.py")
+
+
+def _apply_settings(root: Path, settings: list[str]) -> dict:
+    import yaml
+    path = root / "config.local.yaml"
+    local = (yaml.safe_load(path.read_text()) or {}) if path.exists() else {}
+    applied = {}
+    for item in settings:
+        key, sep, value = item.partition("=")
+        if not sep or not key.strip():
+            raise SystemExit(f"--set needs KEY=VALUE, got {item!r}")
+        applied[key.strip()] = yaml.safe_load(value) if value.strip() else ""
+    local.update(applied)
+    path.write_text(yaml.safe_dump(local, sort_keys=False, allow_unicode=True))
+    return applied
 
 
 def _copy_library(code_dir: Path, root: Path) -> None:
@@ -252,6 +269,8 @@ def main() -> None:
     parser.add_argument("--skip-profile", action="store_true", help="Run the searches only")
     parser.add_argument("--code", type=Path, default=REPO,
                         help="Checkout whose code is evaluated (default: this one)")
+    parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                        help="Override a top-level setting in the scratch copy only")
     args = parser.parse_args()
     args.code = args.code.resolve()
 
@@ -276,6 +295,8 @@ def main() -> None:
         root = Path(tmp)
         print(f"Copying the library to {root}")
         _copy_library(args.code, root)
+        if args.set:
+            meta["settings"] = _apply_settings(root, args.set)
         if not args.skip_profile:
             print("Rebuilding the taste profile (several minutes)")
             meta.update(_run_profile(root, run_dir))

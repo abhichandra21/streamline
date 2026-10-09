@@ -33,6 +33,16 @@ Grade the newest run folder. Files: `searches.json` (results and code checks), `
 
 Ground every judgment in the library. Name the titles that support it. Claude ranked these results, so be strict about mistakes Claude tends to make: plausible but wrong facts in explanations, generic taste claims, and picking famous titles over fitting ones.
 
+**Trust failures come first.** The goal is an app the owner can trust, and one bad pick is what they remember, so judge every result on its own. A trust failure is any one of:
+- A result that does not fit the request, or breaks a stated constraint (type, decade, platform, length). Count each such result, wherever it sits in the list. Filler the explanation admits is off-request counts.
+- A search that returns nothing, or fewer results than it could have found.
+- An already-watched title.
+- A result the owner said they don't want: a "less" title, something close to one, or something the profile note rules out.
+- An explanation with a wrong fact, or a taste claim `library.json` does not support (for example calling a watched-but-unrated title one they "like").
+- In the profile: a "less" title described as a taste, or a taste the history does not support.
+
+List each failure with the search or profile section, the title, and the reason. A clean run has zero. Scores below are secondary.
+
 **Each search, 1 to 5 per line:**
 - Relevance: does each result fit what was asked, including any constraint?
 - Taste fit: do the results lean toward what the owner rates "more" and away from "less"?
@@ -52,8 +62,8 @@ Then compare it with `profile_current.txt` and give one verdict, better, same or
 
 ## 4. Record
 
-Write `grades.md` in the run folder: one table for searches, one for the profile, the data notes, and a short list of the worst problems with the search or profile section each came from.
-Append one JSON line to `data/evals/scores.jsonl`: `{"run": ..., "commit": ..., "dirty": ..., "search_avg": ..., "profile_avg": ..., "per_search": {query: avg}, "profile": {line: score}, "vs_current_profile": ...}`.
-If an earlier line exists, compare with it.
+Write `grades.md` in the run folder: the trust failures first, then one table for searches, one for the profile, and the data notes.
+Append one JSON line to `data/evals/scores.jsonl`: `{"run": ..., "commit": ..., "dirty": ..., "settings": ..., "trust_failures": [{"where": ..., "title": ..., "reason": ...}], "search_avg": ..., "profile_avg": ..., "per_search": {query: avg}, "profile": {line: score}, "vs_current_profile": ...}`.
+If an earlier line exists, compare with it: which trust failures are gone, which are new.
 
-Reply to the owner in a few plain lines: the two averages, the change since the last run, the worst problems. Point to `grades.md` for detail.
+Reply to the owner in a few plain lines: the trust failure count and what they were, what changed since the last run, then the two averages. Point to `grades.md` for detail.

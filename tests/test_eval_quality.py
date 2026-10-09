@@ -54,3 +54,13 @@ def test_eval_env_replaces_the_api_key_so_stray_api_calls_fail(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "real-key")
 
     assert eval_quality._env()["ANTHROPIC_API_KEY"] != "real-key"
+
+
+def test_set_changes_only_the_scratch_copy_config(tmp_path):
+    (tmp_path / "config.local.yaml").write_text("min_year: 1990\n")
+
+    applied = eval_quality._apply_settings(tmp_path, ["profile_note=No horror, like It", "min_rating=7"])
+
+    assert applied == {"profile_note": "No horror, like It", "min_rating": 7}
+    text = (tmp_path / "config.local.yaml").read_text()
+    assert "min_year: 1990" in text and "No horror, like It" in text
