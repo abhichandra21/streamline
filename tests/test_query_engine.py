@@ -1600,3 +1600,41 @@ def test_feedback_cap_keeps_just_changed_rating(ratings_db):
     conn.commit()
     conn.close()
     assert "Old One (film)" in build_feedback_block()
+
+
+def test_ask_requested_decade_replaces_min_year(monkeypatch):
+    import recommender.query_engine as qe
+
+    monkeypatch.setattr(qe.config, "MIN_YEAR", 2000)
+    nineties = make_meta("Nineties Film", tmdb_id=60, content_type="movie")
+    nineties.release_year = 1995
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = []
+    tmdb.get_metadata.return_value = nineties
+    llm = make_mock_llm_sequence([json.dumps(["Nineties Film"]), _ranked("Nineties Film")])
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        results = ask("q", _request_ctx(tmdb, llm),
+                      intent_override=_request_intent(year_from=1990, year_to=1999, top_n=1))
+
+    assert tmdb.search_by_filters.call_args.kwargs["year_from"] == 1990
+    assert [r.title for r in results] == ["Nineties Film"]
+
+
+def test_ask_min_year_still_applies_when_no_years_are_requested(monkeypatch):
+    import recommender.query_engine as qe
+
+    monkeypatch.setattr(qe.config, "MIN_YEAR", 2000)
+    nineties = make_meta("Nineties Film", tmdb_id=60, content_type="movie")
+    nineties.release_year = 1995
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = []
+    tmdb.get_metadata.return_value = nineties
+    llm = make_mock_llm(json.dumps(["Nineties Film"]))
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}) as enrich:
+        results = ask("q", _request_ctx(tmdb, llm), intent_override=_request_intent(top_n=1))
+
+    assert tmdb.search_by_filters.call_args.kwargs["year_from"] == 2000
+    assert results == []
+    enrich.assert_not_called()

@@ -662,6 +662,11 @@ def _matches_request(candidate: TmdbMetadata, intent: "QueryIntent") -> bool:
     return True
 
 
+def _min_year_applies(intent: "QueryIntent | None") -> bool:
+    """The min_year setting is a default; a request that names years replaces it."""
+    return config.MIN_YEAR > 0 and not (intent and (intent.year_from or intent.year_to))
+
+
 def _candidate_allowed(
     candidate: TmdbMetadata,
     ctx: "RecommendContext",
@@ -678,7 +683,7 @@ def _candidate_allowed(
         return False
     if ctx.user_state and ctx.user_state.is_dismissed(candidate):
         return False
-    if config.MIN_YEAR > 0 and candidate.release_year and candidate.release_year < config.MIN_YEAR:
+    if _min_year_applies(intent) and candidate.release_year and candidate.release_year < config.MIN_YEAR:
         return False
     return True
 
@@ -779,10 +784,7 @@ def ask(
     if not run_discover:
         log.debug("Skipping unfiltered TMDB Discover for similar_to-only query")
 
-    # Use the more restrictive of intent year_from and config MIN_YEAR
-    effective_year_from = intent.year_from
-    if config.MIN_YEAR > 0:
-        effective_year_from = max(config.MIN_YEAR, intent.year_from or 0) or config.MIN_YEAR
+    effective_year_from = config.MIN_YEAR if _min_year_applies(intent) else intent.year_from
 
     discover_cts = list(content_types) if run_discover else []
 
