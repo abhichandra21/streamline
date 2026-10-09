@@ -1166,6 +1166,30 @@ class TestSettingsSaveRebuild:
     @patch("recommender.web._reload_app_config")
     @patch("recommender.web._save_config_yaml")
     @patch("recommender.web._load_config_yaml")
+    def test_save_profile_note_applies_without_a_rebuild(self, mock_load, mock_save, mock_reload, client):
+        """The note goes into search prompts at query time, so saving it asks for no rebuild."""
+        mock_reload.return_value = True
+        mock_load.return_value = {"provider": "anthropic"}
+
+        resp = client.post("/settings", data=_csrf_form(
+            provider="anthropic",
+            weight_completion="0.5", weight_rewatch="0.3", weight_recency="0.2",
+            default_top_n="3", min_vote_count="20", min_rating="0", min_year="0",
+            recency_half_life_days="90",
+            profile_note="  No horror, like The Ring or It  ",
+            watch_region="US", streaming_platforms="",
+            log_level="WARNING",
+            manual_timestamp_mode="now",
+            manual_tv_duration="45", manual_movie_duration="120",
+        ))
+
+        assert resp.status_code == 302
+        assert "refresh-profile" not in resp.headers["Location"]
+        assert mock_save.call_args.args[0]["profile_note"] == "No horror, like The Ring or It"
+
+    @patch("recommender.web._reload_app_config")
+    @patch("recommender.web._save_config_yaml")
+    @patch("recommender.web._load_config_yaml")
     def test_save_rebuild_required_settings_shows_cli_command(self, mock_load, mock_save, mock_reload, client):
         """Changing scoring weights should show the profile rebuild CLI command."""
         mock_reload.return_value = True

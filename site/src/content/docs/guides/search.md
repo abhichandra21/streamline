@@ -29,6 +29,7 @@ Two special questions:
 5. The reasoning model ranks what is left. How well a title fits the request comes first; your taste profile breaks ties.
 
 Every search also includes your current ratings, so a new **More like this** or **Less like this** counts straight away, without a rebuild.
+The same goes for the **Not for me** note in [Settings](/guides/settings/).
 
 ## Results
 

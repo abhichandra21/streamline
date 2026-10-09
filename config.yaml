@@ -41,6 +41,9 @@ default_top_n: 3
 min_vote_count: 20
 min_rating: 6.5
 min_year: 2000
+# In your own words, what you don't want recommended, e.g. "No horror, like The Ring or It".
+# Searches use it right away; the written taste profile picks it up on its next rebuild.
+profile_note: ""
 recency_half_life_days: 90
 returning_shows_lookback_days: 730
 wizard:

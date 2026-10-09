@@ -619,6 +619,11 @@ def _format_cluster(cluster: dict[str, Any]) -> str:
     )
 
 
+def owner_note_line() -> str:
+    """The owner's profile_note setting as a profile line, read at query time so a save applies at once."""
+    return f"- in the owner's own words: {config.PROFILE_NOTE}" if config.PROFILE_NOTE else ""
+
+
 def structured_profile_text(profile: dict[str, Any] | None) -> str:
     """The whole structured profile as prompt text, strongest cluster first."""
     if not profile or not profile.get("clusters"):
@@ -628,6 +633,8 @@ def structured_profile_text(profile: dict[str, Any] | None) -> str:
     lines.extend(_format_cluster(cluster) for cluster in normalized["clusters"])
     lines.extend(_format_named_item("negative preference", item)
                  for item in normalized["negative_preferences"][:6])
+    if owner_note_line():
+        lines.append(owner_note_line())
     return "\n".join(lines)
 
 
@@ -721,4 +728,7 @@ def select_profile_slice(intent: Any, profile: dict[str, Any] | None, max_cluste
             continue
         lines.append(_format_named_item("negative preference", item))
 
+    # Unlike the listed dislikes, the note applies to every search.
+    if owner_note_line():
+        lines.append(owner_note_line())
     return "\n".join(lines)

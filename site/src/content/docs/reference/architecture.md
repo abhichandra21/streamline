@@ -103,7 +103,7 @@ Processes ALL enriched titles (no limit) in batches of 200. Each batch produces 
 
 Previous profiles are auto-backed up with timestamps before rebuild.
 
-Less like this ratings are included in the prompt, generating a "What you don't enjoy" section.
+Less like this ratings and the `profile_note` setting are included in the prompt (the merge prompt, when there is more than one batch), generating a "What you tend to skip" section that is kept out of the cluster cap.
 
 The profile is rebuilt only on request: `setup --refresh-profile`, `setup --rethink-themes`, or a first install with no profile.
 A routine `setup --refresh-data` refreshes data only and makes no taste-profile LLM calls.

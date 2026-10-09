@@ -2967,7 +2967,7 @@ _SETTINGS_DEFAULTS = {
         "weight_completion": 0.5, "weight_rewatch": 0.3, "weight_recency": 0.2,
         "default_tv_runtime": 45, "default_movie_runtime": 90, "rewatch_saturation": 5,
     },
-    "default_top_n": 3, "min_vote_count": 20, "min_rating": 0, "min_year": 0,
+    "default_top_n": 3, "min_vote_count": 20, "min_rating": 0, "min_year": 0, "profile_note": "",
     "recency_half_life_days": 90, "watch_region": "US", "streaming_platforms": [],
     "manual": {"timestamp": "now", "tv_duration_minutes": 45, "movie_duration_minutes": 120},
     "log_level": "WARNING",
@@ -3254,6 +3254,7 @@ def settings_save() -> str:
     scoring = cfg.setdefault("scoring", {})
     scoring.update(scoring_values)
     cfg.update(recommendation_values)
+    cfg["profile_note"] = form.get("profile_note", current_cfg["profile_note"]).strip()
     cfg["watch_region"] = form.get("watch_region", "US").strip().upper()
     platforms_str = form.get("streaming_platforms", "").strip()
     cfg["streaming_platforms"] = [p.strip() for p in platforms_str.split(",") if p.strip()] if platforms_str else []
