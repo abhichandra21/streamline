@@ -31,6 +31,8 @@ _FAMILY_CLUSTER_PATTERNS = (
 )
 
 
+_SKIP_HEADING = "What you tend to skip"
+
 # Cluster order should follow how much of the history each cluster covers, so
 # every prompt that describes clusters asks for an approximate title count.
 _CLUSTER_COUNT_NOTE = (
@@ -247,9 +249,37 @@ def _cap_markdown_sections(text: str, max_sections: int = _MAX_PROFILE_CLUSTERS)
     return "\n".join(parts).strip()
 
 
+def _skip_section_note(negative_prefs: list[str] | None) -> str:
+    """Prompt text asking for a skip section from the Less titles."""
+    if not negative_prefs:
+        return ""
+    titles_str = ", ".join(f'"{t}"' for t in negative_prefs)
+    # The signal is "I would not seek out more like this", not "I hated
+    # it" -- these are titles the user watched to the end. Overstating
+    # it to the model produces a harsher anti-pattern than the evidence
+    # supports.
+    return (
+        f"\n\nThe user has asked to see less like these titles: {titles_str}. "
+        "They watched them; this is a preference against more of the same, "
+        f"not a verdict that they were bad. Add a brief '{_SKIP_HEADING}' section "
+        "capturing the patterns they point to."
+    )
+
+
+def _split_skip_section(text: str) -> tuple[str, str]:
+    """Separate the skip section so the cluster cap neither counts nor drops it."""
+    preamble, sections = _split_markdown_sections(text)
+    skip = [s for s in sections if _SKIP_HEADING.casefold() in s.splitlines()[0].casefold()]
+    if not skip:
+        return text, ""
+    rest = [s for s in sections if s not in skip]
+    return "\n".join(([preamble] if preamble else []) + rest).strip(), skip[0]
+
+
 def _merge_profiles(
     batch_profiles: list[str],
     client: LLMClient,
+    negative_section: str = "",
 ) -> str:
     """Merge multiple batch profiles into one consolidated taste profile.
 
@@ -302,10 +332,15 @@ def _merge_profiles(
         "- Be specific about titles and what connects them, not generic\n"
         "- IMPORTANT: You MUST complete every section. If running low on space, "
         "make later sections shorter rather than cutting off mid-sentence.\n"
+        + (f"- After the cluster sections, write one more section, '## {_SKIP_HEADING}', "
+           "without a number. It is the one exception to the no-extra-sections rule."
+           f"{negative_section}\n" if negative_section else "")
     )
     profile_text = client.generate(prompt, role="reason", max_tokens=config.TOKENS_PROFILE_MERGE,
                                    timeout=config.TIMEOUT_PROFILE_MERGE).strip()
-    return _cap_markdown_sections(profile_text)
+    clusters_part, skip_part = _split_skip_section(profile_text)
+    capped = _cap_markdown_sections(clusters_part)
+    return f"{capped}\n\n{skip_part}" if skip_part else capped
 
 
 def build(
@@ -331,19 +366,7 @@ def build(
     if not scored:
         return "No watch history available for taste profiling."
 
-    negative_section = ""
-    if negative_prefs:
-        titles_str = ", ".join(f'"{t}"' for t in negative_prefs)
-        negative_section = (
-            # The signal is "I would not seek out more like this", not "I hated
-            # it" -- these are titles the user watched to the end. Overstating
-            # it to the model produces a harsher anti-pattern than the evidence
-            # supports.
-            f"\n\nThe user has asked to see less like these titles: {titles_str}. "
-            "They watched them; this is a preference against more of the same, "
-            "not a verdict that they were bad. Add a brief 'What you tend to "
-            "skip' section capturing the patterns they point to."
-        )
+    negative_section = _skip_section_note(negative_prefs)
 
     # Single batch — no need for merge or caching
     if len(scored) <= config.PROFILE_BATCH_SIZE:
@@ -423,7 +446,7 @@ def build(
         raise
 
     log.info("Merging %d batch profiles...", len(batch_profiles))
-    result = _merge_profiles(batch_profiles, client)
+    result = _merge_profiles(batch_profiles, client, negative_section)
 
     if client.was_truncated:
         log.error(

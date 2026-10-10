@@ -1078,7 +1078,22 @@ def _profile_scores(
     if config.USE_VIEWING_SIGNALS:
         return user_store.apply_rating_multipliers(scores, ratings, key_for_tmdb)
     less = keys_rated(user_store.RATING_LESS)
-    return {key: score for key, score in scores.items() if key not in less}
+    # One show can arrive under several event titles (episode-prefixed names) that all
+    # match the same TMDB title, so a Less rating also drops every title with its TMDB ID.
+    less_ids = {
+        (r["content_type"], r["tmdb_id"]) for r in ratings
+        if user_store.normalize_rating(r["rating"]) == user_store.RATING_LESS and r.get("tmdb_id")
+    }
+
+    def tmdb_identity(key: str) -> tuple[str, int] | None:
+        # The matched type, since TMDB can correct an imported movie to a show or back.
+        for meta in (metadata.get((key, "tv")), metadata.get((key, "movie")), metadata.get(key)):
+            if meta and meta.tmdb_id:
+                return meta.content_type, meta.tmdb_id
+        return None
+
+    return {key: score for key, score in scores.items()
+            if key not in less and tmdb_identity(key) not in less_ids}
 
 
 def _archive_events() -> list[WatchEvent]:

@@ -268,3 +268,35 @@ def test_archive_id_does_not_rewrite_provider_title_hint():
     archive.tmdb_id_hint = 999
     assert setup._build_tmdb_id_hints([watched, archive]) == {}
     assert setup._build_tmdb_id_hints([archive]) == {("Casablanca", "movie"): 999}
+
+
+def test_batched_merge_gets_less_titles(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "PROFILE_BATCH_SIZE", 1)
+    monkeypatch.setattr("recommender.taste_profile_builder._load_cached_batches", lambda fp, total: [None] * total)
+    monkeypatch.setattr("recommender.taste_profile_builder._save_batch", lambda *a: None)
+    monkeypatch.setattr("recommender.taste_profile_builder._clear_batch_cache", lambda: None)
+    scores = {"A": 1.0, "B": 1.0}
+    enrichments = {"A": "a", "B": "b"}
+    client = make_mock_llm_sequence(["batch one", "batch two", "1. Crime (~2 titles)",
+                                     "## 1. Crime\ntext\n\n## What you tend to skip\nHorror."])
+    client.was_truncated = False
+
+    result = build([], scores, enrichments, client, negative_prefs=["The Conjuring"])
+
+    merge_prompt = client.generate.call_args_list[-1].args[0]
+    assert '"The Conjuring"' in merge_prompt
+    assert result.endswith("## What you tend to skip\nHorror.")
+
+
+def test_merge_keeps_the_skip_section_when_clusters_are_capped():
+    cluster_list = "\n".join(f"{i}. Cluster {i}" for i in range(1, 16))
+    final_profile = "\n".join(f"## {i}. Cluster {i}\nYou like pattern {i}." for i in range(1, 16))
+    final_profile += "\n## What you tend to skip\nHorror."
+    client = make_mock_llm_sequence([cluster_list, final_profile])
+
+    result = _merge_profiles(["batch profile"], client, negative_section="\n\nLess: x.")
+
+    headings = [line for line in result.splitlines() if line.startswith("## ")]
+    assert len(headings) == 16
+    assert headings[-1] == "## What you tend to skip"
