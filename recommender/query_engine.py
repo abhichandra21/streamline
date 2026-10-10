@@ -890,12 +890,13 @@ def ask(
         candidates = [c for c in candidates if c.rating >= config.MIN_RATING]
 
     def _rank_pool(candidates: list[TmdbMetadata], context_note: str | None,
-                   first_round: bool = True) -> list[Recommendation]:
+                   first_round: bool = True, platform_first: bool = True) -> list[Recommendation]:
         """Runtime-filter, trim, enrich, rank, and platform-filter one pool of candidates.
 
         Only the first round may relax the runtime limit or the platform filter;
         a refill must not sneak in titles the request rules out.
         """
+        pool, pool_note = candidates, context_note   # for the unfiltered retry below
         # Runtime is a hard filter when known, applied once over the whole pool so a
         # fallback is possible. If every candidate with a known runtime exceeds the
         # ceiling (e.g. "movie under an hour" — feature films are rarely that short),
@@ -921,7 +922,8 @@ def ask(
         requested_platforms = [
             PLATFORM_ALIASES.get(p.lower(), p) for p in (intent.platforms or [])
         ] or [PLATFORM_ALIASES.get(p.lower(), p) for p in config.STREAMING_PLATFORMS]
-        if ctx.providers_cache_dir and requested_platforms and candidates:
+        narrowed = False
+        if platform_first and ctx.providers_cache_dir and requested_platforms and candidates:
             providers = _parallel_fetch(
                 lambda c: ctx.tmdb_client.get_watch_providers(
                     c.tmdb_id, c.content_type, ctx.watch_region, ctx.providers_cache_dir),
@@ -933,6 +935,7 @@ def ask(
             # The first round keeps the whole pool when nothing is on the
             # platforms, so the unfiltered fallback below still has results.
             if on_platform or not first_round:
+                narrowed = len(on_platform) < len(candidates)
                 candidates = on_platform
 
         if log.isEnabledFor(logging.DEBUG) and candidates:
@@ -997,6 +1000,12 @@ def ask(
                 annotated.append(rec)
                 if len(annotated) == intent.top_n:
                     break
+
+            # Nothing on the platforms survived ranking: rank the whole pool once
+            # more, so the unfiltered fallback still has off-platform picks to show.
+            if first_round and not annotated and narrowed:
+                log.debug("No on-platform pick survived ranking; ranking the whole pool")
+                return _rank_pool(pool, pool_note, platform_first=False)
 
             # If platform filter removed everything, fall back to unfiltered results
             if first_round and not annotated and unfiltered and requested_platforms:
