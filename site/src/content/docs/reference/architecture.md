@@ -104,6 +104,7 @@ Processes ALL enriched titles (no limit) in batches of 200. Each batch produces 
 Previous profiles are auto-backed up with timestamps before rebuild.
 
 Less like this ratings are included in the prompt (the merge prompt, when there is more than one batch), generating a "What you tend to skip" section that is kept out of the cluster cap.
+The structured profile carries that section next to the list of Not for me titles, and every search prompt gets both, whatever the query.
 
 The profile is rebuilt only on request: `setup --refresh-profile`, `setup --rethink-themes`, or a first install with no profile.
 A routine `setup --refresh-data` refreshes data only and makes no taste-profile LLM calls.
@@ -168,7 +169,7 @@ The online pipeline:
 
 **3. Watch filter** — Content-type-aware exclusion via watch index.
 
-**4. Streaming availability** — Each candidate annotated with flatrate providers for the configured region. Optionally filtered to user's subscribed platforms.
+**4. Streaming availability** — Each candidate annotated with flatrate providers for the configured region. When a platform is asked for (or subscribed platforms are set), the pool is cut to titles on it before ranking, so off-platform titles cannot fill every ranked slot.
 
 **5. Ranking** — Claude Sonnet ranks with query relevance as primary signal, taste profile as tiebreaker. Returns JSON with title, explanation, and score.
 

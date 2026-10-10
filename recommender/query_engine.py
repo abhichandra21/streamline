@@ -915,6 +915,26 @@ def ask(
                       "Runtime does not count against fits_request for this query."
                 ).strip()
 
+        # Keep only what is on the requested services before ranking. Ranking
+        # first and filtering after let a pool mostly on other services fill
+        # every ranked slot, leaving nothing on the service the user asked for.
+        requested_platforms = [
+            PLATFORM_ALIASES.get(p.lower(), p) for p in (intent.platforms or [])
+        ] or [PLATFORM_ALIASES.get(p.lower(), p) for p in config.STREAMING_PLATFORMS]
+        if ctx.providers_cache_dir and requested_platforms and candidates:
+            providers = _parallel_fetch(
+                lambda c: ctx.tmdb_client.get_watch_providers(
+                    c.tmdb_id, c.content_type, ctx.watch_region, ctx.providers_cache_dir),
+                candidates)
+            on_platform = [c for c, names in zip(candidates, providers)
+                           if any(p in (names or []) for p in requested_platforms)]
+            log.debug("On requested platforms %s: %d of %d candidates",
+                      requested_platforms, len(on_platform), len(candidates))
+            # The first round keeps the whole pool when nothing is on the
+            # platforms, so the unfiltered fallback below still has results.
+            if on_platform or not first_round:
+                candidates = on_platform
+
         if log.isEnabledFor(logging.DEBUG) and candidates:
             log.debug("Final candidate pool (%d): %s",
                        len(candidates),
@@ -951,9 +971,6 @@ def ask(
         # Annotate results with streaming provider data (and optionally filter by platform).
         if ctx.providers_cache_dir:
             meta_by_title = {c.title: c for c in candidates}
-            requested_platforms = [
-                PLATFORM_ALIASES.get(p.lower(), p) for p in (intent.platforms or [])
-            ] or [PLATFORM_ALIASES.get(p.lower(), p) for p in config.STREAMING_PLATFORMS]
 
             # Rank with a larger pool when platform filtering is active, so we have
             # enough candidates after discarding titles not on the requested service.

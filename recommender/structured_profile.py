@@ -264,12 +264,19 @@ def merge_region_clusters(profile: dict[str, Any]) -> dict[str, Any]:
     return {**profile, "clusters": merged}
 
 
-def explicit_dislikes(titles: list[str] | None, shown: int = 25) -> list[dict[str, Any]]:
-    """The household's own Not for me titles, as the only negative preference."""
+def explicit_dislikes(titles: list[str] | None, shown: int = 25, patterns: str = "") -> list[dict[str, Any]]:
+    """The household's own Not for me titles, as the only negative preference.
+
+    patterns is the prose profile's reading of what those titles share, so a
+    search can avoid an unlisted title of the same kind, not only the listed ones.
+    """
     if not titles:
         return []
     listed = ", ".join(titles[:shown]) + (f" and {len(titles) - shown} more" if len(titles) > shown else "")
-    return [{"id": "not-for-me", "label": f"Titles marked Not for me: {listed}", "weight": 1.0}]
+    items = [{"id": "not-for-me", "label": f"Titles marked Not for me: {listed}", "weight": 1.0}]
+    if patterns:
+        items.insert(0, {"id": "skip-patterns", "label": f"What they tend to skip: {patterns}", "weight": 1.0})
+    return items
 
 
 def apply_member_weights(profile: dict[str, Any], scores: dict[str, float]) -> dict[str, Any]:
@@ -714,11 +721,8 @@ def select_profile_slice(intent: Any, profile: dict[str, Any] | None, max_cluste
             continue
         lines.append(_format_named_item("language/region affinity", item))
 
+    # Dislikes go into every slice: a pick can hit one whatever the query asked for.
     for item in normalized["negative_preferences"][:6]:
-        applies_to = _item_refs(item, "applies_to")
-        item_clusters = _item_refs(item, "clusters")
-        if query_has_terms and not (terms & applies_to) and not (selected_cluster_refs & item_clusters):
-            continue
         lines.append(_format_named_item("negative preference", item))
 
     return "\n".join(lines)
