@@ -814,6 +814,98 @@ class TestStatusObservability:
         assert "ingestion_errors" not in payload
 
 
+class TestStreamingServices:
+    """On Deck and the title page say where a show streams, from the providers cache."""
+
+    def _cache_providers(self, tmdb_id, names):
+        import json
+        from pathlib import Path
+        path = Path(web.config.PROVIDERS_CACHE_DIR) / "tv" / web.config.WATCH_REGION / f"{tmdb_id}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"providers": names}))
+
+    def _on_deck(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "tmdb")
+        monkeypatch.setattr(web.config, "CACHE_DIR", str(tmp_path / "tmdb"))
+        monkeypatch.setattr(web, "_show_page_data", lambda: ([], [], _show_sections()))
+        monkeypatch.setattr(web.show_tracker, "refresh_is_due", lambda *_args: False)
+
+    def test_on_deck_cards_show_cached_services_with_no_tmdb_call(self, client, monkeypatch, tmp_path):
+        self._on_deck(monkeypatch, tmp_path)
+        self._cache_providers(10, ["Apple TV", "Apple TV Amazon Channel"])
+        self._cache_providers(20, ["Netflix"])
+        tmdb_get = MagicMock(side_effect=AssertionError("TMDB called"))
+        monkeypatch.setattr(web.TmdbClient, "_get", tmdb_get)
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert '<p class="show-where mono">Apple TV+</p>' in body
+        assert '<p class="show-where mono">Netflix</p>' in body
+        assert 'shows-credit--justwatch' in body
+        tmdb_get.assert_not_called()
+
+    def test_show_with_no_services_says_nothing(self, client, monkeypatch, tmp_path):
+        self._on_deck(monkeypatch, tmp_path)
+        self._cache_providers(10, [])
+        self._cache_providers(20, [])
+        monkeypatch.setattr(web.TmdbClient, "_get", MagicMock(side_effect=AssertionError("TMDB called")))
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert 'class="show-where' not in body
+        assert "justwatch.com" not in body
+        assert "not available" not in body.lower()
+
+    def test_uncached_show_is_looked_up_once_then_read_from_cache(self, client, monkeypatch, tmp_path):
+        self._on_deck(monkeypatch, tmp_path)
+        self._cache_providers(20, [])
+        tmdb_get = MagicMock(return_value={"results": {"US": {"flatrate": [{"provider_name": "Apple TV"}]}}})
+        monkeypatch.setattr(web.TmdbClient, "_get", tmdb_get)
+
+        first = client.get("/shows").get_data(as_text=True)
+        second = client.get("/shows").get_data(as_text=True)
+
+        assert tmdb_get.call_count == 1
+        assert '<p class="show-where mono">Apple TV+</p>' in first
+        assert '<p class="show-where mono">Apple TV+</p>' in second
+
+    @patch("recommender.web._load_enrichments", return_value={})
+    @patch("recommender.web._load_user_state")
+    @patch("recommender.web._get_context")
+    def test_title_page_shows_services_and_credit(
+        self, mock_ctx, mock_user_state, _mock_enrichments, client, monkeypatch
+    ):
+        from recommender.tmdb_client import TmdbMetadata
+
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "tmdb")
+        monkeypatch.setattr(web, "_title_tracking_state", lambda *_args: {
+            "state": None, "from_season": None, "can_follow": False})
+        user_state = MagicMock()
+        user_state.is_manually_watched.return_value = False
+        user_state.is_in_watchlist.return_value = False
+        user_state.is_dismissed.return_value = False
+        user_state.get_rating.return_value = None
+        mock_user_state.return_value = user_state
+        tmdb_client = MagicMock()
+        tmdb_client.get_cached_by_id.return_value = TmdbMetadata(tmdb_id=10, content_type="tv", title="Ready Show")
+        tmdb_client.get_watch_providers.return_value = ["Apple TV"]
+        mock_ctx.return_value = MagicMock(
+            tmdb_client=tmdb_client,
+            watch_index=MagicMock(tmdb_keys=set()),
+        )
+
+        html = client.get("/title/10?type=tv").get_data(as_text=True)
+
+        assert '<p class="tp-providers mono">Apple TV+</p>' in html
+        assert 'class="justwatch-credit mono"' in html
+
+        tmdb_client.get_watch_providers.return_value = []
+        html = client.get("/title/10?type=tv").get_data(as_text=True)
+
+        assert 'class="tp-providers' not in html
+        assert "justwatch.com" not in html
+
+
 class TestTitleDetailFallback:
     @patch("recommender.web._load_enrichments", return_value={})
     @patch("recommender.web._load_user_state")

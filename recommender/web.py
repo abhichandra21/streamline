@@ -641,6 +641,7 @@ def _render_shows_content(
     progress=None,
     template: str = "_shows_content.html",
 ) -> str:
+    _attach_show_providers(sections)
     soon_sort = _soon_sort()
     soon_dated, soon_undated = _split_coming_soon(sections["coming_soon"], soon_sort)
     return render_template(
@@ -1182,6 +1183,7 @@ def shows_page() -> str:
 def coming_soon_section() -> str:
     """Re-render just the Coming soon section, for the sort control."""
     _, _, sections = _show_page_data()
+    _attach_show_providers(sections)
     soon_sort = _soon_sort()
     soon_dated, soon_undated = _split_coming_soon(sections["coming_soon"], soon_sort)
     return render_template(
@@ -2296,6 +2298,7 @@ def title_detail(tmdb_id: int) -> str:
         meta=meta, description=description, overview=overview,
         tmdb_id=tmdb_id, ct=ct, poster=poster, user_state=state,
         tracking=_title_tracking_state(tmdb_id, ct),
+        streaming_providers=_streaming_providers(tmdb_id, ct, ctx.tmdb_client) if meta else [],
     )
 
 
@@ -2450,6 +2453,35 @@ def _consolidate_providers(names: list[str]) -> list[str]:
             seen.add(label)
             out.append(label)
     return out
+
+
+def _streaming_providers(tmdb_id: int | None, content_type: str | None, tmdb=None) -> list[str]:
+    """Where a title streams in the watch region, as clean brand names.
+
+    Reads the providers cache; only a title never looked up costs a TMDB call,
+    the same as search results. Without an API key only cached titles show.
+    """
+    if not (tmdb_id and content_type and config.TMDB_API_KEY):
+        return []
+    tmdb = tmdb or TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+    try:
+        return _consolidate_providers(tmdb.get_watch_providers(
+            tmdb_id, content_type, config.WATCH_REGION, config.PROVIDERS_CACHE_DIR))[:4]
+    except Exception as exc:
+        log.debug("Watch providers lookup failed for %s/%s: %s", content_type, tmdb_id, exc)
+        return []
+
+
+def _attach_show_providers(sections: dict[str, list[dict]]) -> None:
+    """Add streaming services to the On Deck cards the page shows."""
+    tmdb = None
+    for name in ("ready_now", "might_be_back", "coming_soon"):
+        for card in sections.get(name, []):
+            if "streaming_providers" in card:
+                continue
+            if tmdb is None and config.TMDB_API_KEY:
+                tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+            card["streaming_providers"] = _streaming_providers(card.get("tmdb_id"), "tv", tmdb)
 
 
 def _decorate_saved_item(item: dict, ctx) -> None:
