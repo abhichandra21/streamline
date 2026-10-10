@@ -194,6 +194,14 @@
   .show-card--ready h3 { font-size: 1.12rem; }
   .show-card-copy { color: var(--muted); font-size: 0.8rem; }
   .show-card-detail { color: var(--body); }
+  /* Where it streams: a quiet secondary line, same tone as search results. */
+  .show-where {
+    color: var(--muted);
+    font-size: 0.58rem;
+    line-height: 1.5;
+    margin-top: 0.2rem;
+    overflow-wrap: anywhere;
+  }
   .show-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.4rem; flex-wrap: wrap; }
   .show-actions button { padding: 0.42rem 0.7rem; white-space: nowrap; }
   .show-inline-form { display: inline; margin: 0; }
@@ -420,6 +428,7 @@
   .soon-date { color: var(--body); font-size: 0.68rem; letter-spacing: 0.03em; }
   .soon-title { color: var(--text); font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .soon-slug { color: var(--muted); font-size: 0.6rem; letter-spacing: 0.06em; }
+  .soon-where { letter-spacing: 0; opacity: 0.85; }
   .soon-row--undated .soon-date { color: var(--muted); }
   .soon-row .show-inline-form {
     opacity: 0;
@@ -461,7 +470,12 @@
     text-transform: uppercase;
   }
   .shows-credit a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
-  .shows-credit a:hover { color: var(--text); }
+  @media (hover: hover) {
+    .shows-credit a:hover { color: var(--text); }
+  }
+  /* The JustWatch credit is the last thing inside #shows-content, so the
+     TVmaze credit below it tucks up underneath as one credits block. */
+  #shows-content:has(.shows-credit--justwatch) + .shows-credit { margin-top: 0.35rem; }
 
   @media (max-width: 640px) {
     .show-card { grid-template-columns: 48px minmax(0, 1fr); }

@@ -13,6 +13,10 @@ description: Follow shows and see when new episodes are ready to watch.
 
 Follow a show from **Worth following?** or from the show's title page.
 
+Each show also says where it streams in your region, such as Apple TV+, and so does its title page.
+A show with no known streaming service shows nothing there.
+Streaming data comes from [JustWatch](https://www.justwatch.com) through TMDB.
+
 ## When an episode counts as aired
 
 TMDB gives an episode's air date but not its time.

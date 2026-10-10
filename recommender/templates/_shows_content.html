@@ -8,6 +8,9 @@
     <p class="show-card-copy">
       <span class="show-card-detail mono">S{{ show.season_number }}</span> · {{ show.reason }}{% if show.air_date %} {{ show.air_date|human_date }}{% endif %}
     </p>
+    {% if show.streaming_providers %}
+    <p class="show-where mono">{{ show.streaming_providers | join("  ·  ") }}</p>
+    {% endif %}
   </div>
   <div class="show-actions">
     <form class="show-inline-form" action="/shows/follow" method="post"
@@ -88,6 +91,9 @@
             through S{{ show.season_number }}E{{ show.latest_aired_episode }}
             {% if show.next_air_date %} · next {{ show.next_air_date|human_date }}{% endif %}
           </p>
+          {% if show.streaming_providers %}
+          <p class="show-where mono">{{ show.streaming_providers | join("  ·  ") }}</p>
+          {% endif %}
         </div>
         <div class="show-actions">
           <form class="show-inline-form" action="/shows/caught-up" method="post"
@@ -200,5 +206,15 @@
       {% endfor %}
     </div>
   </details>
+  {% endif %}
+
+  {# TMDB requires a JustWatch credit wherever provider names show. It lives
+     inside #shows-content so the refresh poll re-renders it with the cards. #}
+  {% set where = namespace(shown=false) %}
+  {% for show in sections.ready_now + sections.might_be_back + sections.coming_soon %}
+  {% if show.streaming_providers %}{% set where.shown = true %}{% endif %}
+  {% endfor %}
+  {% if where.shown %}
+  <p class="shows-credit shows-credit--justwatch mono">Streaming data from <a href="https://www.justwatch.com" target="_blank" rel="noopener">JustWatch</a></p>
   {% endif %}
 </div>
