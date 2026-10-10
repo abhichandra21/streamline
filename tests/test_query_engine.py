@@ -1653,3 +1653,20 @@ def test_rank_candidates_drops_a_high_score_pick_that_misses_part_of_the_request
 
     assert [r.title for r in results] == ["The Spy"]
     assert "fits_request" in client.generate.call_args.args[0]
+
+
+def test_ask_relaxed_runtime_tells_the_ranker_runtime_does_not_fail_the_fit_check():
+    long_film = make_meta("Long Film", tmdb_id=70, content_type="movie")
+    long_film.runtime_minutes = 130
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = [long_film]
+    tmdb.get_metadata.return_value = None
+    llm = make_mock_llm_sequence(["[]", _ranked("Long Film")])
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        results = ask("q", _request_ctx(tmdb, llm),
+                      intent_override=_request_intent(max_runtime_minutes=60, top_n=1))
+
+    rank_prompt = llm.generate.call_args_list[-1].args[0]
+    assert "Runtime does not count against fits_request" in rank_prompt
+    assert [r.title for r in results] == ["Long Film"]

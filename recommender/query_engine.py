@@ -348,7 +348,7 @@ def rank_candidates(
         f'- Return the {top_n} best. If fewer truly fit, return fewer. '
         'Never include weak matches just to fill the count.\n'
         '- One pick that misses the request costs more trust than a shorter list. '
-        'Check every part of the query (genre, mood, pace, who it is for, type, platform, era). '
+        'Check every part of the query (genre, mood, pace, who it is for, type, era). '
         'If you would have to qualify the explanation, as in "only partly a spy show", '
         '"more propulsive than slow-burn" or "better for older kids", it does not fit.\n\n'
         'Return ONLY valid JSON: a list of objects with fields:\n'
@@ -911,7 +911,8 @@ def ask(
                 context_note = (
                     (context_note or "")
                     + f"\nRuntime limit ({intent.max_runtime_minutes} min) was too restrictive; "
-                      "prefer the shortest strong matches and note if a pick runs longer."
+                      "prefer the shortest strong matches and note if a pick runs longer. "
+                      "Runtime does not count against fits_request for this query."
                 ).strip()
 
         if log.isEnabledFor(logging.DEBUG) and candidates:
