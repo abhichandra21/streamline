@@ -1670,3 +1670,21 @@ def test_ask_relaxed_runtime_tells_the_ranker_runtime_does_not_fail_the_fit_chec
     rank_prompt = llm.generate.call_args_list[-1].args[0]
     assert "Runtime does not count against fits_request" in rank_prompt
     assert [r.title for r in results] == ["Long Film"]
+
+
+def test_ask_end_year_only_lets_titles_before_min_year_in(monkeypatch):
+    import recommender.query_engine as qe
+
+    monkeypatch.setattr(qe.config, "MIN_YEAR", 2000)
+    nineties = make_meta("Nineties Film", tmdb_id=60, content_type="movie")
+    nineties.release_year = 1995
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = []
+    tmdb.get_metadata.return_value = nineties
+    llm = make_mock_llm_sequence([json.dumps(["Nineties Film"]), _ranked("Nineties Film")])
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        results = ask("q", _request_ctx(tmdb, llm), intent_override=_request_intent(year_to=2010, top_n=1))
+
+    assert tmdb.search_by_filters.call_args.kwargs["year_from"] is None
+    assert [r.title for r in results] == ["Nineties Film"]
