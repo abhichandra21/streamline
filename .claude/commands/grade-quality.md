@@ -29,13 +29,13 @@ If it fails, show the last lines of the log in the run folder and stop.
 
 ## 3. Grade
 
-Grade the newest run folder. Files: `searches.json` (results and code checks), `library.json` (ratings, follows, every watched title, data checks), `profile_new.txt`, `profile_current.txt`, `searches.log` and `profile_build.log` (TMDB matching warnings), `meta.json`.
+Grade the newest run folder. Files: `searches.json` (results and code checks), `library.json` (ratings, follows, every watched title, data checks), `profile_new.txt`, `profile_current.txt`, `profile_structured_new.json` and `profile_structured_current.json`, `searches.log` and `profile_build.log` (TMDB matching warnings), `meta.json`.
 
 Ground every judgment in the library. Name the titles that support it. Claude ranked these results, so be strict about mistakes Claude tends to make: plausible but wrong facts in explanations, generic taste claims, and picking famous titles over fitting ones.
 
 **Trust failures come first.** The goal is an app the owner can trust, and one bad pick is what they remember, so judge every result on its own. A trust failure is any one of:
 - A result that does not fit the request, or breaks a stated constraint (type, decade, platform, length). Count each such result, wherever it sits in the list. Filler the explanation admits is off-request counts.
-- A search that returns nothing, or fewer results than it could have found.
+- A search that returns nothing, or fewer results than it could have found. A search that asks for a number of results ("5 ...") and gets fewer, when good fits clearly exist, counts.
 - An already-watched title.
 - A result the owner said they don't want: a "less" title, something close to one, or something the profile note rules out.
 - An explanation with a wrong fact, or a taste claim `library.json` does not support (for example calling a watched-but-unrated title one they "like").
@@ -57,6 +57,8 @@ List each failure with the search or profile section, the title, and the reason.
 - Specificity: would this profile describe this owner and not a generic viewer?
 
 Then compare it with `profile_current.txt` and give one verdict, better, same or worse, with the two biggest differences.
+
+**Structured profile, same four lines**, for `profile_structured_new.json` (or `profile_structured_current.json` on a searches-only run). This is the profile search and the home page actually use, so weigh it above the written one. Check its clusters, their order and weights, the titles each one names, and its negative preferences. A "less" title named as a member of a taste cluster is a trust failure.
 
 **Data:** count the titles with no TMDB match, and the rejected or low-confidence matches in the logs. Name any that look like real titles matched wrongly.
 

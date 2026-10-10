@@ -168,6 +168,9 @@ def _run_profile(root: Path, run_dir: Path) -> dict:
     if proc.returncode != 0:
         raise SystemExit(f"Profile build failed, see {run_dir / 'profile_build.log'}")
     shutil.copy2(root / "recommender/cache/taste_profile.txt", run_dir / "profile_new.txt")
+    structured = root / "recommender/cache/taste_profile_structured.json"
+    if structured.exists():
+        shutil.copy2(structured, run_dir / "profile_structured_new.json")
     return {"profile_seconds": round(time.monotonic() - t0)}
 
 
@@ -255,6 +258,10 @@ def _library_context(run_dir: Path) -> None:
     current = Path(config.TASTE_PROFILE_PATH)
     if current.exists():
         shutil.copy2(current, run_dir / "profile_current.txt")
+    # Search and the home page read the structured profile, so it is graded too.
+    structured = Path(config.STRUCTURED_TASTE_PROFILE_PATH)
+    if structured.exists():
+        shutil.copy2(structured, run_dir / "profile_structured_current.json")
 
 
 def main() -> None:
