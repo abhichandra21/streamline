@@ -270,10 +270,9 @@ def test_archive_id_does_not_rewrite_provider_title_hint():
     assert setup._build_tmdb_id_hints([archive]) == {("Casablanca", "movie"): 999}
 
 
-def test_batched_merge_gets_less_titles_and_owner_note(monkeypatch):
+def test_batched_merge_gets_less_titles(monkeypatch):
     import config
     monkeypatch.setattr(config, "PROFILE_BATCH_SIZE", 1)
-    monkeypatch.setattr(config, "PROFILE_NOTE", "No horror")
     monkeypatch.setattr("recommender.taste_profile_builder._load_cached_batches", lambda fp, total: [None] * total)
     monkeypatch.setattr("recommender.taste_profile_builder._save_batch", lambda *a: None)
     monkeypatch.setattr("recommender.taste_profile_builder._clear_batch_cache", lambda: None)
@@ -287,7 +286,6 @@ def test_batched_merge_gets_less_titles_and_owner_note(monkeypatch):
 
     merge_prompt = client.generate.call_args_list[-1].args[0]
     assert '"The Conjuring"' in merge_prompt
-    assert '"No horror"' in merge_prompt
     assert result.endswith("## What you tend to skip\nHorror.")
 
 

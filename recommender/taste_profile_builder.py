@@ -250,25 +250,20 @@ def _cap_markdown_sections(text: str, max_sections: int = _MAX_PROFILE_CLUSTERS)
 
 
 def _skip_section_note(negative_prefs: list[str] | None) -> str:
-    """Prompt text asking for a skip section from Less titles and the owner's own note."""
-    parts = []
-    if negative_prefs:
-        titles_str = ", ".join(f'"{t}"' for t in negative_prefs)
-        # The signal is "I would not seek out more like this", not "I hated
-        # it" -- these are titles the user watched to the end. Overstating
-        # it to the model produces a harsher anti-pattern than the evidence
-        # supports.
-        parts.append(
-            f"The user has asked to see less like these titles: {titles_str}. "
-            "They watched them; this is a preference against more of the same, "
-            "not a verdict that they were bad."
-        )
-    if config.PROFILE_NOTE:
-        parts.append(f"In their own words, they do not want: \"{config.PROFILE_NOTE}\". Take this as stated.")
-    if not parts:
+    """Prompt text asking for a skip section from the Less titles."""
+    if not negative_prefs:
         return ""
-    return ("\n\n" + " ".join(parts) + f" Add a brief '{_SKIP_HEADING}' section "
-            "capturing the patterns they point to.")
+    titles_str = ", ".join(f'"{t}"' for t in negative_prefs)
+    # The signal is "I would not seek out more like this", not "I hated
+    # it" -- these are titles the user watched to the end. Overstating
+    # it to the model produces a harsher anti-pattern than the evidence
+    # supports.
+    return (
+        f"\n\nThe user has asked to see less like these titles: {titles_str}. "
+        "They watched them; this is a preference against more of the same, "
+        f"not a verdict that they were bad. Add a brief '{_SKIP_HEADING}' section "
+        "capturing the patterns they point to."
+    )
 
 
 def _split_skip_section(text: str) -> tuple[str, str]:

@@ -128,7 +128,6 @@ MAX_ENRICH_CANDIDATES = int(_cfg.get("max_enrich_candidates", 40))
 MIN_VOTE_COUNT = _cfg.get("min_vote_count", 20)
 MIN_RATING = float(_cfg.get("min_rating", 0))
 MIN_YEAR = int(_cfg.get("min_year", 0))
-PROFILE_NOTE = str(_cfg.get("profile_note") or "").strip()
 RECENCY_HALF_LIFE_DAYS = _cfg.get("recency_half_life_days", 90)
 
 # ── Returning shows ──

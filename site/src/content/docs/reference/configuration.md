@@ -49,7 +49,6 @@ Only add `models.<provider>.api_key_env` in config when you need a non-standard 
 ```yaml
 min_rating: 6.5      # minimum rating, IMDb first, TMDB fallback (0 to disable)
 min_year: 2000        # minimum release year (0 to disable)
-profile_note: ""      # what you don't want, in your own words
 min_vote_count: 20    # filter obscure titles
 ```
 
@@ -93,7 +92,6 @@ All shared settings in `config.yaml`:
 | `min_vote_count` | 20 | Minimum TMDB votes for discover candidates |
 | `min_rating` | 6.5 | Minimum rating, IMDb first, TMDB fallback (0 to disable) |
 | `min_year` | 2000 | Minimum release year (0 to disable) |
-| `profile_note` | "" | What you don't want recommended, in your own words. Searches use it at once; the written taste profile on its next rebuild |
 | `recency_half_life_days` | 90 | Days until recency score halves |
 | `watch_region` | US | Region for streaming availability |
 | `streaming_platforms` | [] | Your subscribed platforms |

@@ -609,19 +609,3 @@ def test_a_failed_second_call_keeps_the_first_answer(monkeypatch):
     client = make_mock_llm_sequence([ONE_CLUSTER, "not json"])
     profile = build_structured_profile([], {"A": 2.0, "B": 1.0}, {"A": "x", "B": "y"}, client)
     assert profile["clusters"][0]["members"] == ["A"]
-
-
-def test_owner_note_reaches_every_search_profile_text(monkeypatch):
-    import config
-    from recommender.structured_profile import structured_profile_text
-
-    monkeypatch.setattr(config, "PROFILE_NOTE", "No horror, like The Ring or It")
-    profile = _parse([_cluster("British crime", [1])], SCORED)
-
-    # A query with terms that match no negative preference still carries the note.
-    sliced = select_profile_slice(make_intent(genres=["crime"]), profile)
-    assert "in the owner's own words: No horror, like The Ring or It" in sliced
-    assert "No horror, like The Ring or It" in structured_profile_text(profile)
-
-    monkeypatch.setattr(config, "PROFILE_NOTE", "")
-    assert "own words" not in select_profile_slice(make_intent(genres=["crime"]), profile)
