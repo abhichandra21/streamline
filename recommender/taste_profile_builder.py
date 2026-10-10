@@ -276,6 +276,13 @@ def _split_skip_section(text: str) -> tuple[str, str]:
     return "\n".join(([preamble] if preamble else []) + rest).strip(), skip[0]
 
 
+def skip_patterns(profile_text: str) -> str:
+    """The skip section's text as one plain line, or "" when the profile has none."""
+    _, skip = _split_skip_section(profile_text)
+    body = "\n".join(skip.splitlines()[1:])
+    return " ".join(body.replace("*", "").split())
+
+
 def _merge_profiles(
     batch_profiles: list[str],
     client: LLMClient,

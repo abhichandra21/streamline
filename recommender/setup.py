@@ -40,7 +40,7 @@ from recommender.enricher import (
     enrichment_key_from_parts,
     is_identity_enrichment_index,
 )
-from recommender.taste_profile_builder import build as build_taste_profile
+from recommender.taste_profile_builder import build as build_taste_profile, skip_patterns
 from recommender.structured_profile import save_structured_profile
 from recommender.taste_rows import build_tag_profile
 from recommender.llm import create_client
@@ -1512,6 +1512,7 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                     structured_profile, warnings = build_tag_profile(
                         loves, enrichments, index.entries, collections, llm,
                         negative_prefs or None, rethink=rethink_themes,
+                        skip_patterns=skip_patterns(profile),
                     )
                     for warning in warnings:
                         console.print(f"[yellow]{warning}[/yellow]")

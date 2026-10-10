@@ -1440,6 +1440,43 @@ def test_refill_never_falls_back_to_off_platform_titles():
     assert [r.title for r in results] == ["Off A"]
 
 
+def test_ranking_sees_only_titles_on_the_requested_platform():
+    off = [make_meta(f"Off {i}", tmdb_id=i, content_type="movie") for i in range(1, 4)]
+    on = make_meta("On Netflix", tmdb_id=9, content_type="movie")
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = off + [on]
+    tmdb.get_metadata.return_value = None
+    tmdb.get_watch_providers.side_effect = lambda tmdb_id, *a: ["Netflix"] if tmdb_id == 9 else ["Hulu"]
+    llm = make_mock_llm_sequence(["[]", _ranked("On Netflix")])
+    ctx = _request_ctx(tmdb, llm)
+    ctx.providers_cache_dir = "/tmp/test_providers"
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        results = ask("q", ctx, intent_override=_request_intent(top_n=1, platforms=["Netflix"]))
+
+    rank_prompt = llm.generate.call_args_list[1].args[0]
+    assert "On Netflix" in rank_prompt and "Off 1" not in rank_prompt
+    assert [r.title for r in results] == ["On Netflix"]
+
+
+def test_off_platform_fallback_survives_when_no_on_platform_pick_fits():
+    off = make_meta("Spy Film", tmdb_id=1, content_type="movie")
+    on = make_meta("Netflix Misfit", tmdb_id=9, content_type="movie")
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = [off, on]
+    tmdb.get_metadata.return_value = None
+    tmdb.get_watch_providers.side_effect = lambda tmdb_id, *a: ["Netflix"] if tmdb_id == 9 else ["Hulu"]
+    # The on-platform ranking rejects the misfit; the whole-pool ranking picks the spy film.
+    llm = make_mock_llm_sequence(["[]", "[]", _ranked("Spy Film"), "[]", "[]", "[]", "[]"])
+    ctx = _request_ctx(tmdb, llm)
+    ctx.providers_cache_dir = "/tmp/test_providers"
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        results = ask("q", ctx, intent_override=_request_intent(top_n=1, platforms=["Netflix"]))
+
+    assert [r.title for r in results] == ["Spy Film"]
+
+
 def test_refill_prompt_names_suggestions_that_were_filtered_out():
     gone = make_meta("Gone Film", tmdb_id=7, content_type="movie")
     tmdb = MagicMock()

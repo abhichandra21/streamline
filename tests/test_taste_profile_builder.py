@@ -300,3 +300,10 @@ def test_merge_keeps_the_skip_section_when_clusters_are_capped():
     headings = [line for line in result.splitlines() if line.startswith("## ")]
     assert len(headings) == 16
     assert headings[-1] == "## What you tend to skip"
+
+
+def test_skip_patterns_returns_the_skip_section_as_plain_text():
+    from recommender.taste_profile_builder import skip_patterns
+    text = "## Spy thrillers\n\nTradecraft.\n\n## What you tend to skip\n\nMostly **horror**,\nlike *It*.\n"
+    assert skip_patterns(text) == "Mostly horror, like It."
+    assert skip_patterns("## Spy thrillers\n\nTradecraft.\n") == ""

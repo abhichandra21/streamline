@@ -2,6 +2,7 @@ import json
 
 from recommender.structured_profile import (
     build_structured_profile,
+    explicit_dislikes,
     load_structured_profile,
     parse_structured_profile_response,
     save_structured_profile,
@@ -398,6 +399,27 @@ def test_select_profile_slice_includes_negative_preferences_for_selected_cluster
     text = select_profile_slice(make_intent(genres=["crime"]), profile)
 
     assert "negative preference: glossy cop wish fulfillment" in text
+
+
+def test_select_profile_slice_keeps_dislikes_for_an_unrelated_query():
+    profile = validate_structured_profile({
+        "clusters": [
+            {"id": "spy", "label": "Spy thrillers", "weight": 0.9, "co_viewing": "personal",
+             "positive_traits": ["tradecraft"], "representative_titles": ["Slow Horses"]},
+        ],
+        "negative_preferences": explicit_dislikes(["The Conjuring"], patterns="Horror and jump scares."),
+    })
+
+    text = select_profile_slice(make_intent(genres=["spy"]), profile)
+
+    assert "What they tend to skip: Horror and jump scares." in text
+    assert "Titles marked Not for me: The Conjuring" in text
+
+
+def test_explicit_dislikes_puts_the_pattern_before_the_titles():
+    items = explicit_dislikes(["It"], patterns="Horror.")
+    assert [i["id"] for i in items] == ["skip-patterns", "not-for-me"]
+    assert explicit_dislikes([], patterns="Horror.") == []
 
 
 def _structured_prompt(monkeypatch, signals, events, scores):
