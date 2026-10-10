@@ -15,7 +15,7 @@ from .ingestion.base import WatchEvent
 from .llm import LLMClient
 from .models import Recommendation
 from .tmdb_client import TmdbClient, TmdbMetadata
-from .structured_profile import owner_note_line, select_profile_slice, structured_profile_text
+from .structured_profile import select_profile_slice, structured_profile_text
 from .user_state import UserStateIndex
 from .watch_index import WatchIndex
 
@@ -121,20 +121,14 @@ class RecommendContext:
         return self._events_resolved
 
 
-def _with_owner_note(profile_text: str) -> str:
-    """Every search profile carries the owner's Not for me note, whichever profile it came from."""
-    note = owner_note_line()
-    return "\n".join(part for part in (profile_text, note) if part)
-
-
 def _profile_for_prompt(ctx: RecommendContext, intent: "QueryIntent") -> str:
     profile_slice = select_profile_slice(intent, ctx.structured_profile)
-    return _with_owner_note(profile_slice or ctx.taste_profile)
+    return profile_slice or ctx.taste_profile
 
 
 def whole_profile(ctx: RecommendContext) -> str:
     """The profile the home page shows, for prompts that need all of it; prose if none."""
-    return _with_owner_note(structured_profile_text(ctx.structured_profile) or ctx.taste_profile or "")
+    return structured_profile_text(ctx.structured_profile) or ctx.taste_profile or ""
 
 
 @dataclass

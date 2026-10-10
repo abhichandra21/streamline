@@ -1086,11 +1086,12 @@ def _profile_scores(
     }
 
     def tmdb_identity(key: str) -> tuple[str, int] | None:
-        # The matched type, since TMDB can correct an imported movie to a show or back.
-        for meta in (metadata.get((key, "tv")), metadata.get((key, "movie")), metadata.get(key)):
+        for content_type in ("tv", "movie"):
+            meta = metadata.get((key, content_type))
             if meta and meta.tmdb_id:
-                return meta.content_type, meta.tmdb_id
-        return None
+                return content_type, meta.tmdb_id
+        meta = metadata.get(key)
+        return (meta.content_type, meta.tmdb_id) if meta and meta.tmdb_id else None
 
     return {key: score for key, score in scores.items()
             if key not in less and tmdb_identity(key) not in less_ids}

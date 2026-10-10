@@ -611,21 +611,17 @@ def test_a_failed_second_call_keeps_the_first_answer(monkeypatch):
     assert profile["clusters"][0]["members"] == ["A"]
 
 
-def test_owner_note_reaches_every_search_profile_including_the_prose_fallback(monkeypatch):
+def test_owner_note_reaches_every_search_profile_text(monkeypatch):
     import config
-    from types import SimpleNamespace
-    from recommender.query_engine import _profile_for_prompt, whole_profile
+    from recommender.structured_profile import structured_profile_text
 
-    monkeypatch.setattr(config, "PROFILE_NOTE", "slasher films, like Scream")
-    note = "not for me, in the owner's own words: slasher films, like Scream"
+    monkeypatch.setattr(config, "PROFILE_NOTE", "No horror, like The Ring or It")
     profile = _parse([_cluster("British crime", [1])], SCORED)
-    structured = SimpleNamespace(structured_profile=profile, taste_profile="prose")
-    prose_only = SimpleNamespace(structured_profile=None, taste_profile="prose")
 
-    assert note in _profile_for_prompt(structured, make_intent(genres=["crime"]))
-    assert note in whole_profile(structured)
-    assert note in _profile_for_prompt(prose_only, make_intent(genres=["crime"]))
-    assert note in whole_profile(prose_only)
+    # A query with terms that match no negative preference still carries the note.
+    sliced = select_profile_slice(make_intent(genres=["crime"]), profile)
+    assert "in the owner's own words: No horror, like The Ring or It" in sliced
+    assert "No horror, like The Ring or It" in structured_profile_text(profile)
 
     monkeypatch.setattr(config, "PROFILE_NOTE", "")
-    assert whole_profile(prose_only) == "prose"
+    assert "own words" not in select_profile_slice(make_intent(genres=["crime"]), profile)
