@@ -91,7 +91,7 @@ All shared settings in `config.yaml`:
 | `default_top_n` | 3 | Default results per query |
 | `min_vote_count` | 20 | Minimum TMDB votes for discover candidates |
 | `min_rating` | 6.5 | Minimum rating, IMDb first, TMDB fallback (0 to disable) |
-| `min_year` | 2000 | Minimum release year (0 to disable) |
+| `min_year` | 2000 | Minimum release year (0 to disable). A search that names years, such as "from the 1990s", uses those years instead |
 | `recency_half_life_days` | 90 | Days until recency score halves |
 | `watch_region` | US | Region for streaming availability |
 | `streaming_platforms` | [] | Your subscribed platforms |

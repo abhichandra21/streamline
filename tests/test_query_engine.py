@@ -1600,3 +1600,91 @@ def test_feedback_cap_keeps_just_changed_rating(ratings_db):
     conn.commit()
     conn.close()
     assert "Old One (film)" in build_feedback_block()
+
+
+def test_ask_requested_decade_replaces_min_year(monkeypatch):
+    import recommender.query_engine as qe
+
+    monkeypatch.setattr(qe.config, "MIN_YEAR", 2000)
+    nineties = make_meta("Nineties Film", tmdb_id=60, content_type="movie")
+    nineties.release_year = 1995
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = []
+    tmdb.get_metadata.return_value = nineties
+    llm = make_mock_llm_sequence([json.dumps(["Nineties Film"]), _ranked("Nineties Film")])
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        results = ask("q", _request_ctx(tmdb, llm),
+                      intent_override=_request_intent(year_from=1990, year_to=1999, top_n=1))
+
+    assert tmdb.search_by_filters.call_args.kwargs["year_from"] == 1990
+    assert [r.title for r in results] == ["Nineties Film"]
+
+
+def test_ask_min_year_still_applies_when_no_years_are_requested(monkeypatch):
+    import recommender.query_engine as qe
+
+    monkeypatch.setattr(qe.config, "MIN_YEAR", 2000)
+    nineties = make_meta("Nineties Film", tmdb_id=60, content_type="movie")
+    nineties.release_year = 1995
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = []
+    tmdb.get_metadata.return_value = nineties
+    llm = make_mock_llm(json.dumps(["Nineties Film"]))
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}) as enrich:
+        results = ask("q", _request_ctx(tmdb, llm), intent_override=_request_intent(top_n=1))
+
+    assert tmdb.search_by_filters.call_args.kwargs["year_from"] == 2000
+    assert results == []
+    enrich.assert_not_called()
+
+
+def test_rank_candidates_drops_a_high_score_pick_that_misses_part_of_the_request():
+    candidates = [make_meta("The Spy", tmdb_id=1), make_meta("Messiah", tmdb_id=2)]
+    ranked = [
+        {"title": "The Spy", "fits_request": True, "explanation": "A Mossad spy drama.", "score": 0.97},
+        {"title": "Messiah", "fits_request": False,
+         "explanation": "A geopolitical thriller, though only partly a spy series.", "score": 0.82},
+    ]
+    client = make_mock_llm(json.dumps(ranked))
+
+    results = rank_candidates("spy series on Netflix", "profile", candidates, {}, client, top_n=3)
+
+    assert [r.title for r in results] == ["The Spy"]
+    assert "fits_request" in client.generate.call_args.args[0]
+
+
+def test_ask_relaxed_runtime_tells_the_ranker_runtime_does_not_fail_the_fit_check():
+    long_film = make_meta("Long Film", tmdb_id=70, content_type="movie")
+    long_film.runtime_minutes = 130
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = [long_film]
+    tmdb.get_metadata.return_value = None
+    llm = make_mock_llm_sequence(["[]", _ranked("Long Film")])
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        results = ask("q", _request_ctx(tmdb, llm),
+                      intent_override=_request_intent(max_runtime_minutes=60, top_n=1))
+
+    rank_prompt = llm.generate.call_args_list[-1].args[0]
+    assert "Runtime does not count against fits_request" in rank_prompt
+    assert [r.title for r in results] == ["Long Film"]
+
+
+def test_ask_end_year_only_lets_titles_before_min_year_in(monkeypatch):
+    import recommender.query_engine as qe
+
+    monkeypatch.setattr(qe.config, "MIN_YEAR", 2000)
+    nineties = make_meta("Nineties Film", tmdb_id=60, content_type="movie")
+    nineties.release_year = 1995
+    tmdb = MagicMock()
+    tmdb.search_by_filters.return_value = []
+    tmdb.get_metadata.return_value = nineties
+    llm = make_mock_llm_sequence([json.dumps(["Nineties Film"]), _ranked("Nineties Film")])
+
+    with patch("recommender.query_engine.enrich_batch", return_value={}):
+        results = ask("q", _request_ctx(tmdb, llm), intent_override=_request_intent(year_to=2010, top_n=1))
+
+    assert tmdb.search_by_filters.call_args.kwargs["year_from"] is None
+    assert [r.title for r in results] == ["Nineties Film"]

@@ -346,9 +346,14 @@ def rank_candidates(
         'for tonight over niche or obscure ones, unless the query or notes ask for lesser-known picks.\n'
         '- Score 0-1 on query fit, nudged by taste fit.\n'
         f'- Return the {top_n} best. If fewer truly fit, return fewer. '
-        'Never include weak matches just to fill the count.\n\n'
+        'Never include weak matches just to fill the count.\n'
+        '- One pick that misses the request costs more trust than a shorter list. '
+        'Check every part of the query (genre, mood, pace, who it is for, type, era). '
+        'If you would have to qualify the explanation, as in "only partly a spy show", '
+        '"more propulsive than slow-burn" or "better for older kids", it does not fit.\n\n'
         'Return ONLY valid JSON: a list of objects with fields:\n'
         '- title: string (exact title from candidates)\n'
+        '- fits_request: boolean (true only if it fits every part of the query)\n'
         '- explanation: string (1-2 sentences why this fits the query and this user)\n'
         '- score: float 0-1\n'
     )
@@ -368,6 +373,9 @@ def rank_candidates(
         title = item.get('title', '')
         if title not in meta_by_title:
             log.debug("Ranked title not in candidates, skipping: %r", title)
+            continue
+        if item.get('fits_request') is False:
+            log.debug("Ranker says title misses part of the request, skipping: %r", title)
             continue
         score = float(item.get('score', 0))
         if score < MIN_QUERY_MATCH_SCORE:
@@ -662,6 +670,11 @@ def _matches_request(candidate: TmdbMetadata, intent: "QueryIntent") -> bool:
     return True
 
 
+def _min_year_applies(intent: "QueryIntent | None") -> bool:
+    """The min_year setting is a default; a request that names years replaces it."""
+    return config.MIN_YEAR > 0 and not (intent and (intent.year_from or intent.year_to))
+
+
 def _candidate_allowed(
     candidate: TmdbMetadata,
     ctx: "RecommendContext",
@@ -678,7 +691,7 @@ def _candidate_allowed(
         return False
     if ctx.user_state and ctx.user_state.is_dismissed(candidate):
         return False
-    if config.MIN_YEAR > 0 and candidate.release_year and candidate.release_year < config.MIN_YEAR:
+    if _min_year_applies(intent) and candidate.release_year and candidate.release_year < config.MIN_YEAR:
         return False
     return True
 
@@ -779,10 +792,7 @@ def ask(
     if not run_discover:
         log.debug("Skipping unfiltered TMDB Discover for similar_to-only query")
 
-    # Use the more restrictive of intent year_from and config MIN_YEAR
-    effective_year_from = intent.year_from
-    if config.MIN_YEAR > 0:
-        effective_year_from = max(config.MIN_YEAR, intent.year_from or 0) or config.MIN_YEAR
+    effective_year_from = config.MIN_YEAR if _min_year_applies(intent) else intent.year_from
 
     discover_cts = list(content_types) if run_discover else []
 
@@ -901,7 +911,8 @@ def ask(
                 context_note = (
                     (context_note or "")
                     + f"\nRuntime limit ({intent.max_runtime_minutes} min) was too restrictive; "
-                      "prefer the shortest strong matches and note if a pick runs longer."
+                      "prefer the shortest strong matches and note if a pick runs longer. "
+                      "Runtime does not count against fits_request for this query."
                 ).strip()
 
         if log.isEnabledFor(logging.DEBUG) and candidates:
