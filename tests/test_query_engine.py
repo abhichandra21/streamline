@@ -1638,3 +1638,18 @@ def test_ask_min_year_still_applies_when_no_years_are_requested(monkeypatch):
     assert tmdb.search_by_filters.call_args.kwargs["year_from"] == 2000
     assert results == []
     enrich.assert_not_called()
+
+
+def test_rank_candidates_drops_a_high_score_pick_that_misses_part_of_the_request():
+    candidates = [make_meta("The Spy", tmdb_id=1), make_meta("Messiah", tmdb_id=2)]
+    ranked = [
+        {"title": "The Spy", "fits_request": True, "explanation": "A Mossad spy drama.", "score": 0.97},
+        {"title": "Messiah", "fits_request": False,
+         "explanation": "A geopolitical thriller, though only partly a spy series.", "score": 0.82},
+    ]
+    client = make_mock_llm(json.dumps(ranked))
+
+    results = rank_candidates("spy series on Netflix", "profile", candidates, {}, client, top_n=3)
+
+    assert [r.title for r in results] == ["The Spy"]
+    assert "fits_request" in client.generate.call_args.args[0]

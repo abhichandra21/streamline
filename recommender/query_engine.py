@@ -346,9 +346,14 @@ def rank_candidates(
         'for tonight over niche or obscure ones, unless the query or notes ask for lesser-known picks.\n'
         '- Score 0-1 on query fit, nudged by taste fit.\n'
         f'- Return the {top_n} best. If fewer truly fit, return fewer. '
-        'Never include weak matches just to fill the count.\n\n'
+        'Never include weak matches just to fill the count.\n'
+        '- One pick that misses the request costs more trust than a shorter list. '
+        'Check every part of the query (genre, mood, pace, who it is for, type, platform, era). '
+        'If you would have to qualify the explanation, as in "only partly a spy show", '
+        '"more propulsive than slow-burn" or "better for older kids", it does not fit.\n\n'
         'Return ONLY valid JSON: a list of objects with fields:\n'
         '- title: string (exact title from candidates)\n'
+        '- fits_request: boolean (true only if it fits every part of the query)\n'
         '- explanation: string (1-2 sentences why this fits the query and this user)\n'
         '- score: float 0-1\n'
     )
@@ -368,6 +373,9 @@ def rank_candidates(
         title = item.get('title', '')
         if title not in meta_by_title:
             log.debug("Ranked title not in candidates, skipping: %r", title)
+            continue
+        if item.get('fits_request') is False:
+            log.debug("Ranker says title misses part of the request, skipping: %r", title)
             continue
         score = float(item.get('score', 0))
         if score < MIN_QUERY_MATCH_SCORE:
