@@ -6,6 +6,7 @@
   <span class="soon-slug mono">
     {%- if show.next_episode_number %}S{{ show.season_number }}E{{ show.next_episode_number }}
     {%- else %}S{{ show.season_number }}{% endif %}
+    {%- if show.streaming_providers %}<span class="soon-where"> · {{ show.streaming_providers | join("  ·  ") }}</span>{% endif %}
   </span>
   <form class="show-inline-form" action="/shows/unfollow" method="post"
         hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">

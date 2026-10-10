@@ -61,3 +61,13 @@ def _isolate_find_cache_dir(tmp_path, monkeypatch):
     The path keeps its real suffix for tests that check the configured name.
     """
     monkeypatch.setattr(config, "FIND_CACHE_DIR", str(tmp_path / "recommender/cache/find"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_providers_cache_dir(tmp_path, monkeypatch):
+    """Point PROVIDERS_CACHE_DIR at a per-test directory.
+
+    On Deck and the title page read streaming services from it. Without this,
+    a route test would show the user's real cached providers.
+    """
+    monkeypatch.setattr(config, "PROVIDERS_CACHE_DIR", str(tmp_path / "providers"))
