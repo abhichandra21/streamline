@@ -872,6 +872,21 @@ def test_profile_scores_drop_event_titles_that_share_a_less_rated_tmdb_id(monkey
     assert _profile_scores(events, metadata, index, ratings, []) == {"Vera": 1.0}
 
 
+def test_profile_scores_use_the_type_tmdb_matched_when_dropping_less_titles(monkeypatch):
+    """TMDB can match a name imported as a movie to a show; the Less rating is for the show."""
+    import config
+    from types import SimpleNamespace
+    from recommender.setup import _profile_scores
+
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    events = [_make_event(title="Southern India-Tough Rides: India", content_type="movie",
+                          series_name="Southern India-Tough Rides: India")]
+    metadata = {("Southern India-Tough Rides: India", "movie"): SimpleNamespace(content_type="tv", tmdb_id=86002)}
+    ratings = [{"title": "Tough Rides: India", "content_type": "tv", "tmdb_id": 86002, "rating": "less"}]
+
+    assert _profile_scores(events, metadata, [], ratings, []) == {}
+
+
 def test_a_data_refresh_never_rebuilds_the_taste_profile_on_its_own(tmp_path, monkeypatch):
     """The profile rebuilds only on request (--refresh-profile), not when overrides or archive entries change."""
     import os
