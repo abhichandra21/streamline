@@ -576,6 +576,16 @@ class TestComingSoonGroupingAndSort:
         assert [r["title"] for r in dated] == ["B", "C"]
         assert [r["title"] for r in undated] == ["A"]
 
+    def test_soonest_sort_uses_the_release_moment_when_known(self):
+        rows = [
+            # Listed Oct 21, but out at 8 PM Central on Oct 20.
+            {"title": "Apple", "next_air_date": "2026-10-21", "next_released_at": "2026-10-20T20:00:00-05:00"},
+            {"title": "Untimed", "next_air_date": "2026-10-20"},
+            {"title": "Broadcast", "next_air_date": "2026-10-20", "next_released_at": "2026-10-20T22:00:00-05:00"},
+        ]
+        dated, _ = web._split_coming_soon(rows, "soonest")
+        assert [r["title"] for r in dated] == ["Untimed", "Apple", "Broadcast"]
+
     def test_undated_shows_sort_by_title_for_a_stable_order(self):
         rows = [{"title": "zeta", "next_air_date": None}, {"title": "Alpha", "next_air_date": None}]
         _, undated = web._split_coming_soon(rows, "soonest")
@@ -3890,3 +3900,11 @@ def test_dashboard_shows_top_six_tastes_and_folds_the_rest(client, monkeypatch):
     assert "Show 2 more" in html
     # The collapse control sits after the folded rows, at the bottom of the list.
     assert html.index("Taste 8") < html.index('class="tastes-more-btn more-list-fewer"')
+
+
+def test_release_time_filter_reads_like_a_clock():
+    assert web._release_time("2026-10-20T20:00:00-05:00") == "8 PM"
+    assert web._release_time("2026-10-21T02:30:00-05:00") == "2:30 AM"
+    assert web._release_time("2026-10-21T00:00:00-05:00") == "12 AM"
+    assert web._release_time("2026-10-21T12:00:00-05:00") == "12 PM"
+    assert web._release_time(None) == ""

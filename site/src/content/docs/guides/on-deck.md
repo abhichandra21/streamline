@@ -27,6 +27,7 @@ Apple TV lists its shows at midnight but releases them at 9 PM Eastern the eveni
 TheTVDB gives no timezone, so the time is read in the show's home country: US shows in Eastern time, UK shows in London time, Indian shows in India time, even when a US streamer carries them.
 This needs a TheTVDB API key in `TVDB_API_KEY`.
 Without one, or for a show TheTVDB has no time for, the episode counts from midnight, US Central time.
+When the time is known, Ready now and Coming soon show it next to the date, in US Central time.
 
 On Deck checks TMDB in the background when you open it.
 Cached results stay on screen while it runs.

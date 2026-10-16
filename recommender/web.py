@@ -527,6 +527,20 @@ def _human_date(value: str | None) -> str:
     return f"{parsed.day} {parsed.strftime('%b %Y')}"
 
 
+@app.template_filter("release_time")
+def _release_time(value: str | None) -> str:
+    """Render an ISO datetime's clock time as "8 PM" or "8:30 PM"."""
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return ""
+    hour = parsed.hour % 12 or 12
+    minutes = f":{parsed.minute:02d}" if parsed.minute else ""
+    return f"{hour}{minutes} {'AM' if parsed.hour < 12 else 'PM'}"
+
+
 def _length_of(content_type: str, raw: dict) -> tuple[str, int]:
     """How much of an evening a title asks for, as a label and a sort key.
 
@@ -625,10 +639,15 @@ def _split_coming_soon(coming_soon: list[dict], sort: str) -> tuple[list[dict], 
 
     An undated show carries no schedule to sort by, so it is grouped
     separately rather than sorted into the calendar under a blank date.
+    Dated shows sort by their release moment in Central time when known (an
+    Apple show comes out the evening before its listed date), else by date.
     """
     dated = [show for show in coming_soon if show.get("next_air_date")]
     undated = [show for show in coming_soon if not show.get("next_air_date")]
-    dated.sort(key=lambda show: show["next_air_date"], reverse=(sort == "latest"))
+    dated.sort(
+        key=lambda show: (show.get("next_released_at") or "")[:16] or f"{show['next_air_date']}T00:00",
+        reverse=(sort == "latest"),
+    )
     undated.sort(key=lambda show: (show.get("title") or "").lower())
     return dated, undated
 

@@ -429,8 +429,8 @@ def refresh_release_cache(
     return result
 
 
-def _ready_at(air_date: date, air_time: dict | None) -> datetime:
-    """When an episode counts as aired: the show's regular time, else midnight at home."""
+def _timed_release(air_date: date, air_time: dict | None) -> datetime | None:
+    """The episode's release moment from the show's regular time, or None without one."""
     if air_time:
         try:
             clock = clock_time.fromisoformat(air_time["time"])
@@ -438,7 +438,18 @@ def _ready_at(air_date: date, air_time: dict | None) -> datetime:
             return datetime.combine(day, clock, ZoneInfo(air_time["timezone"]))
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             log.warning("Ignoring unreadable air time %r: %s", air_time, exc)
-    return datetime.combine(air_date, clock_time(), HOME_TIMEZONE)
+    return None
+
+
+def _ready_at(air_date: date, air_time: dict | None) -> datetime:
+    """When an episode counts as aired: the show's regular time, else midnight at home."""
+    return _timed_release(air_date, air_time) or datetime.combine(air_date, clock_time(), HOME_TIMEZONE)
+
+
+def _released_at(air_date: date, air_time: dict | None) -> str | None:
+    """The release moment in home time as ISO text, for display; None when only the date is known."""
+    moment = _timed_release(air_date, air_time)
+    return moment.astimezone(HOME_TIMEZONE).isoformat() if moment else None
 
 
 def _following_card(
@@ -478,6 +489,8 @@ def _following_card(
                 future.append(item)
 
     next_episode = min(future) if future else None
+    air_time = snapshot.get("air_time")
+    next_released_at = _released_at(next_episode[0], air_time) if next_episode else None
     title = tracked.get("title") or entry["title"]
     poster_path = snapshot.get("poster_path")
     if aired:
@@ -488,7 +501,9 @@ def _following_card(
             "season_number": latest[1],
             "available_episode_count": len(aired),
             "latest_aired_episode": latest[2],
+            "latest_released_at": _released_at(latest[0], air_time),
             "next_air_date": next_episode[0].isoformat() if next_episode else None,
+            "next_released_at": next_released_at,
             # The next episode can open a new season, so season_number (the
             # latest aired) does not say which episode is next.
             "next_season_number": next_episode[1] if next_episode else None,
@@ -502,6 +517,7 @@ def _following_card(
             "title": title,
             "season_number": next_episode[1],
             "next_air_date": next_episode[0].isoformat(),
+            "next_released_at": next_released_at,
             "next_episode_number": next_episode[2],
             "poster_path": poster_path,
         }
