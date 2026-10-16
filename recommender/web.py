@@ -3193,7 +3193,7 @@ def _parse_exports(form, exports: list[dict]) -> dict[str, list[str] | None]:
     Refuses an export path outside data/ or that does not exist, and turning
     off a provider whose events are saved: the next rebuild would delete them.
     """
-    data_dir = (_REPO_ROOT / "data").resolve()
+    data_dir = os.path.join(os.path.realpath(_REPO_ROOT), "data")
     platform_paths = {}
     for row in exports:
         raw = form.get(f"export_{row['provider']}")
@@ -3207,10 +3207,10 @@ def _parse_exports(form, exports: list[dict]) -> dict[str, list[str] | None]:
             )
         for path in paths:
             # Only data/ is checked, so the page can't be used to probe other files.
-            target = (_REPO_ROOT / path).resolve()
-            if not target.is_relative_to(data_dir):
+            target = os.path.realpath(os.path.join(data_dir, os.pardir, path))
+            if not target.startswith(data_dir + os.sep):
                 raise ValueError(f"{row['label']} export must be inside the data folder: {path}")
-            if not target.exists():
+            if not os.path.exists(target):
                 raise ValueError(f"{row['label']} export not found on the server: {path}")
         platform_paths[row["provider"]] = paths or None
     return platform_paths
