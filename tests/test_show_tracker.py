@@ -101,7 +101,9 @@ def test_followed_show_reports_all_aired_episodes_from_returning_season():
         "season_number": 5,
         "available_episode_count": 3,
         "latest_aired_episode": 3,
+        "latest_released_at": None,
         "next_air_date": "2026-09-05",
+        "next_released_at": None,
         "next_season_number": 5,
         "next_episode_number": 4,
         "poster_path": "/slow.jpg",
@@ -175,6 +177,7 @@ def test_caught_up_show_moves_to_coming_soon_until_next_episode_airs():
         "title": "Slow Horses",
         "season_number": 5,
         "next_air_date": "2026-09-05",
+        "next_released_at": None,
         "next_episode_number": 4,
         "poster_path": "/slow.jpg",
     }]
@@ -1012,3 +1015,27 @@ def test_followed_snapshot_without_a_show_time_is_refreshed_straight_away(tmp_pa
                           now=soon, sleep=lambda _: None, tvdb=tvdb)
     assert tvdb.asked == [1]
     assert refresh_is_due(archive, [_following(1)], tmp_path, soon) is False
+
+
+def _cards_at(air_time, now):
+    archive, tracking, snapshots = _lwt(air_time)
+    sections = build_sections(archive, tracking, snapshots, today=now.date(), lookback_days=365, now=now)
+    return next(cards[0] for cards in sections.values() if cards)
+
+
+def test_coming_soon_card_carries_the_release_moment_in_central_time():
+    card = _cards_at(NEW_YORK_23, datetime(2026, 10, 4, 23, 0, tzinfo=timezone.utc))
+    assert card["next_released_at"] == "2026-10-04T22:00:00-05:00"
+
+
+def test_ready_card_carries_when_the_latest_episode_came_out():
+    # Apple: listed Oct 4, out 9 PM New York on Oct 3, which is 8 PM Central.
+    apple = {"time": "21:00", "timezone": "America/New_York", "days_early": 1}
+    card = _cards_at(apple, datetime(2026, 10, 4, 2, 0, tzinfo=timezone.utc))
+    assert card["latest_released_at"] == "2026-10-03T20:00:00-05:00"
+    assert card["next_released_at"] is None
+
+
+def test_cards_without_a_show_time_have_no_release_moment():
+    card = _cards_at(None, datetime(2026, 10, 4, 6, 0, tzinfo=timezone.utc))
+    assert card["latest_released_at"] is None
