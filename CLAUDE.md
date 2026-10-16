@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Stakes (read first)
+
+- **Who uses it:** one person, the owner. It runs on the owner's home server. No other users, no customers.
+- **If it breaks:** the owner notices and fixes it later. The one thing that must never be put at risk is the user state on the server (watch history, ratings), because it is the only copy.
+- **Done means:** the change works in the app end to end, UI and backend. It does not need to be polished or cover every case.
+- **Note, don't fix:** odd edge cases, rare API errors, cost tweaks, and "what if two people used it" ideas. List them as known limits in the PR description.
+- **Every finding goes in one bucket:** fix now (it breaks the goal of this change), note it (known limit, written down, not fixed), or ignore. Only "fix now" goes into the branch. This applies to code review findings too.
+
 ## What This Is
 
 Streamline is a personal streaming recommendation engine. It ingests real watch history (Netflix, Prime Video, Apple TV, Disney+, Max, Plex, manual lists), enriches titles via TMDB and LLM, builds a full taste profile from all watched content, then answers natural language queries using hybrid candidate generation (TMDB Discover + LLM semantic suggestions). Supports Anthropic (Claude), Google (Gemini), and OpenAI as LLM providers.
@@ -90,7 +98,7 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `recommender/imdb_ratings.py` — Local copy of IMDb's daily `title.ratings.tsv.gz` in SQLite. TMDB stays the catalogue and identity; IMDb only supplies rating and vote count. Every displayed, filtered, or ranked rating prefers IMDb and falls back to TMDB (`TmdbMetadata.rating` / `rating_source`). Refreshed by setup and, in the web UI, by a background job once the copy is a day old.
 - `recommender/language_catalog.py` — Find's original-language lists (Hindi). A background build reads every TMDB Discover page for the language over 10 years with no TMDB vote floor, attaches IMDb ratings, and saves the list; Find then filters (period, genre, `LANGUAGE_MIN_IMDB_VOTES`, IMDb rating) and sorts it locally. Built on first use from the Find page or by `--refresh-imdb`, then rebuilt daily.
 - `recommender/plex.py` — Plex webhook (`POST /plex/webhook?token=`, exempt from password and CSRF) saves each `media.scrobble` as a `plex` watch event with an exact TMDB ID (movies from the payload, shows by one cached Plex lookup). After each play, and via `./recommend plex ratings`, syncs Plex ratings newer-wins with a scan-start high-water mark in `user_store_meta`. Plex plays exist only in SQLite, so `event_store.PRESERVED_PROVIDERS` keeps setup from deleting them. Never writes to Plex.
-- `recommender/tvmaze.py` — A followed show's regular air time (TVmaze schedule time and timezone), looked up by IMDb then TVDB ID, cached in `cache/tvmaze/` and re-checked weekly. On Deck counts an episode as aired at its TMDB air date plus that time; shows with no set time (streaming) count from midnight Central. Failures keep the last saved time or the midnight rule. TVmaze data is CC BY-SA 4.0, credited on On Deck.
+- `recommender/tvdb.py` — A followed show's release time from TheTVDB (`airsTime`, read in the main timezone of the show's home country, not the network's as Sonarr does), looked up by the TVDB ID TMDB lists, cached in `cache/tvdb/` and re-checked weekly. Covers streaming drop times too; Apple TV shows listed at midnight count from 9 PM Eastern the evening before; Netflix shows always count from 3 AM Eastern. On Deck counts an episode as aired at its TMDB air date plus that time; with no `TVDB_API_KEY`, no time, or an unmapped country it counts from midnight Central. Failures keep the last saved time or the midnight rule. Credited on On Deck.
 - `recommender/watch_index.py` — Content-type-aware dual-key dedup (TMDB ID + `(normalized_title, content_type)`). Post-build rapidfuzz dedup. Stale cache cleanup.
 - `recommender/enricher.py` — LLM enrichment (role=fast), 30s timeout, rate limit retry. Only caches successful responses. Identity-keyed index (`content_type/tmdb_id` or `unknown/slug`).
 - `recommender/taste_profile_builder.py` — Batched prose profile builder (200 titles/batch, rate limit retry, merge pass). No top-N limit. Rebuilt only on request (`--refresh-profile`, `--rethink-themes`, or first install); `--refresh-data` never rebuilds it.
@@ -115,12 +123,13 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `UsageStats` — accumulated token counts and cost per query
 
 ### Cache Layout
-All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ identity-keyed index.json), `providers/`, `find/` (Find page: US now-playing ids on a 6h TTL, and `language_<code>.json` IMDb-rated language lists), `tmdb/external_ids/` (TMDB-to-IMDb ID map), `imdb_ratings.db` (IMDb ratings copy), `releases/` and `tvmaze/` (On Deck), `watch_index.json`, `taste_profile.txt` (+ timestamped backups), `taste_profile_structured.json`, `taste_tags.json` / `taste_themes.json` / `taste_placements.json` / `taste_words.json` (taste rows), `feedback.json` (deprecated). User-managed state (watchlist, ratings, manual archive) and query history live in the same SQLite database as imported watch events (`data/streamline.db`). A pre-SQLite `query_history.json` is imported once and kept as `query_history.json.migrated`.
+All under `recommender/cache/`: `tmdb/`, `enrichments/` (+ identity-keyed index.json), `providers/`, `find/` (Find page: US now-playing ids on a 6h TTL, and `language_<code>.json` IMDb-rated language lists), `tmdb/external_ids/` (TMDB-to-IMDb ID map), `imdb_ratings.db` (IMDb ratings copy), `releases/` and `tvdb/` (On Deck), `watch_index.json`, `taste_profile.txt` (+ timestamped backups), `taste_profile_structured.json`, `taste_tags.json` / `taste_themes.json` / `taste_placements.json` / `taste_words.json` (taste rows), `feedback.json` (deprecated). User-managed state (watchlist, ratings, manual archive) and query history live in the same SQLite database as imported watch events (`data/streamline.db`). A pre-SQLite `query_history.json` is imported once and kept as `query_history.json.migrated`.
 
 ## Configuration
 
-- **Environment variables** — secrets: `TMDB_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, and for Plex `PLEX_WEBHOOK_TOKEN`, `PLEX_URL`, `PLEX_TOKEN`
+- **Environment variables** — secrets: `TMDB_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, for Plex `PLEX_WEBHOOK_TOKEN`, `PLEX_URL`, `PLEX_TOKEN`, and `TVDB_API_KEY` for On Deck air times
 - **`.env`** — optional local convenience for setting those variables
+- **`data/keys.env`** — the same keys saved from the Settings page Keys section (`config.SETTINGS_KEY_NAMES`); a value there wins over the environment. Written mode 0600, never sent back to the browser
 - **`config.yaml`** — all settings in sections:
   - `provider`, `models.*` — LLM provider and model assignments
   - `llm.*` — timeouts, token limits, batch sizes, rate limit wait

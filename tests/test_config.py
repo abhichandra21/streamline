@@ -139,3 +139,28 @@ def test_returning_shows_lookback_days_defaults_to_two_years():
 def test_release_cache_is_separate_from_tmdb_metadata_cache():
     assert config.RELEASE_CACHE_DIR.endswith("recommender/cache/releases")
     assert config.RELEASE_CACHE_DIR != config.CACHE_DIR
+
+
+# ---------------------------------------------------------------------------
+# Keys saved on the Settings page
+# ---------------------------------------------------------------------------
+
+class TestSavedKeys:
+
+    def test_keys_file_is_read_and_unknown_names_ignored(self, tmp_path):
+        path = tmp_path / "keys.env"
+        path.write_text("# comment\nTMDB_API_KEY=abc123\nSTREAMLINE_PASSWORD=nope\nTVDB_API_KEY=\n")
+        assert config.read_keys_file(path) == {"TMDB_API_KEY": "abc123"}
+
+    def test_missing_keys_file_is_empty(self, tmp_path):
+        assert config.read_keys_file(tmp_path / "keys.env") == {}
+
+    def test_saved_key_wins_over_environment(self, monkeypatch):
+        monkeypatch.setenv("TMDB_API_KEY", "from-env")
+        monkeypatch.setattr(config, "_saved_keys", {"TMDB_API_KEY": "from-settings"})
+        assert config._secret("TMDB_API_KEY") == "from-settings"
+
+    def test_environment_is_used_when_nothing_is_saved(self, monkeypatch):
+        monkeypatch.setenv("TMDB_API_KEY", "from-env")
+        monkeypatch.setattr(config, "_saved_keys", {})
+        assert config._secret("TMDB_API_KEY") == "from-env"

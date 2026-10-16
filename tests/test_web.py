@@ -1210,6 +1210,109 @@ class TestRecommendProgressive:
         assert "<!DOCTYPE html>" not in html
 
 
+# ── Keys on the Settings page ──────────────────────────────────────────────────
+
+class TestSettingsKeys:
+    @pytest.fixture
+    def keys_path(self, tmp_path, monkeypatch):
+        path = tmp_path / "data" / "keys.env"
+        monkeypatch.setattr(web.config, "KEYS_PATH", path)
+        for name in web.config.SETTINGS_KEY_NAMES:
+            monkeypatch.delenv(name, raising=False)
+        return path
+
+    @patch("recommender.web._reload_app_config", return_value=True)
+    def test_saving_a_key_writes_an_owner_only_file_and_reloads(self, mock_reload, client, keys_path):
+        resp = client.post("/settings/keys", data=_csrf_form(key_TMDB_API_KEY="  tmdb-secret-1234 "))
+
+        assert resp.status_code == 302
+        assert "keys_saved=1" in resp.headers["Location"]
+        assert web.config.read_keys_file(keys_path) == {"TMDB_API_KEY": "tmdb-secret-1234"}
+        assert keys_path.stat().st_mode & 0o777 == 0o600
+        mock_reload.assert_called_once()
+
+    @patch("recommender.web._reload_app_config", return_value=True)
+    def test_blank_field_keeps_the_key_and_clear_removes_it(self, mock_reload, client, keys_path):
+        keys_path.parent.mkdir(parents=True)
+        keys_path.write_text("TMDB_API_KEY=keep-me-1234\nTVDB_API_KEY=drop-me-1234\n")
+
+        client.post("/settings/keys", data=_csrf_form(key_TMDB_API_KEY="", clear_TVDB_API_KEY="1"))
+
+        assert web.config.read_keys_file(keys_path) == {"TMDB_API_KEY": "keep-me-1234"}
+
+    @patch("recommender.web._reload_app_config", return_value=True)
+    def test_a_value_cannot_add_a_second_line(self, mock_reload, client, keys_path):
+        client.post("/settings/keys", data=_csrf_form(key_TMDB_API_KEY="abc\nSTREAMLINE_PASSWORD=x"))
+
+        assert keys_path.read_text().count("\n") == 2  # header and one key
+
+    def test_page_shows_where_a_key_comes_from_but_never_the_secret(self, client, keys_path, monkeypatch):
+        keys_path.parent.mkdir(parents=True)
+        keys_path.write_text("TMDB_API_KEY=settings-secret-wxyz\n")
+        monkeypatch.setenv("TVDB_API_KEY", "environment-secret-abcd")
+        monkeypatch.setenv("PLEX_URL", "http://plex.local:32400")
+
+        rows = {row["name"]: row for row in web._settings_keys()}
+
+        assert rows["TMDB_API_KEY"]["source"] == "settings"
+        assert rows["TMDB_API_KEY"]["shown"] == "wxyz"
+        assert rows["TVDB_API_KEY"]["source"] == "environment"
+        assert rows["TVDB_API_KEY"]["shown"] == "abcd"
+        assert rows["PLEX_URL"]["shown"] == "http://plex.local:32400"
+        assert rows["PLEX_TOKEN"]["source"] is None
+        html = client.get("/settings").data.decode()
+        assert "settings-secret" not in html
+        assert "environment-secret" not in html
+
+
+# ── Watch-history exports and other fields on the Settings page ───────────────
+
+class TestSettingsExports:
+    HBO = {"provider": "hbo", "label": "Max (HBO)", "paths": ["data/Max"], "missing": [], "event_count": 412}
+
+    def _post(self, client, rows, **fields):
+        with patch("recommender.web._settings_exports", return_value=rows), \
+                patch("recommender.web._load_config_yaml", return_value={}), \
+                patch("recommender.web._save_config_yaml") as save, \
+                patch("recommender.web._reload_app_config", return_value=True):
+            resp = client.post("/settings", data=_csrf_form(**fields))
+        return resp, save
+
+    def test_turning_off_a_provider_with_saved_events_is_refused(self, client):
+        resp, save = self._post(client, [self.HBO], export_hbo="  ")
+
+        assert resp.status_code == 200
+        assert "412 saved watch events" in resp.data.decode()
+        save.assert_not_called()
+
+    def test_an_export_that_does_not_exist_is_refused(self, client):
+        resp, save = self._post(client, [self.HBO], export_hbo="data/nowhere.zip")
+
+        assert "export not found" in resp.data.decode()
+        save.assert_not_called()
+
+    def test_a_new_export_path_is_saved_and_asks_for_a_data_refresh(self, client, tmp_path, monkeypatch):
+        export = tmp_path / "max-export"
+        export.mkdir()
+        resp, save = self._post(client, [self.HBO], export_hbo=f"{export}\n", disney_profiles="Abhishek, Kids")
+
+        saved = save.call_args.args[0]
+        assert saved["platform_paths"] == {"hbo": str(export)}
+        assert saved["disney_profiles"] == ["Abhishek", "Kids"]
+        assert "refresh-data" in resp.headers["Location"]
+
+    def test_wizard_and_returning_show_fields_are_saved(self, client):
+        resp, save = self._post(
+            client, [], wizard_max_questions="6", wizard_min_questions="3", wizard_max_tokens="2500",
+            returning_shows_lookback_days="365",
+        )
+
+        saved = save.call_args.args[0]
+        assert saved["wizard"] == {"max_questions": 6, "min_questions": 3, "max_tokens": 2500}
+        assert saved["returning_shows_lookback_days"] == 365
+        assert "refresh" not in resp.headers["Location"]
+
+
 # ── Settings save without rebuild ──────────────────────────────────────────────
 
 class TestSettingsSaveRebuild:
