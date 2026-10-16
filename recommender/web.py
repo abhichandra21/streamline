@@ -44,7 +44,7 @@ from recommender import loved_it
 from recommender import wizard
 from recommender import wizard_flow
 from recommender.structured_profile import load_structured_profile
-from recommender.tvmaze import TvmazeClient
+from recommender.tvdb import TvdbClient
 from recommender.tmdb_client import (
     MOVIE_GENRE_IDS, TV_GENRE_IDS, CatalogTitle, TmdbClient, TmdbRateLimitError,
 )
@@ -392,7 +392,7 @@ def _run_show_refresh(
         config.RELEASE_CACHE_DIR,
         progress=report,
         lookback_days=config.RETURNING_SHOWS_LOOKBACK_DAYS,
-        tvmaze=TvmazeClient(config.TVMAZE_CACHE_DIR),
+        tvdb=TvdbClient(config.TVDB_CACHE_DIR, config.TVDB_API_KEY) if config.TVDB_API_KEY else None,
     )
 
 

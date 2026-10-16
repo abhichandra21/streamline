@@ -219,12 +219,14 @@ Flask app serving:
 
 Setting `STREAMLINE_PASSWORD` puts the whole UI behind a password. All write actions need a CSRF token.
 
-### On Deck (`recommender/show_tracker.py`, `recommender/tvmaze.py`)
+### On Deck (`recommender/show_tracker.py`, `recommender/tvdb.py`)
 
 Tracks followed shows and groups them by what to do next: episodes ready now, Coming soon, and shows worth following.
-TMDB gives episode air dates without a time, so each followed show's regular air time comes from TVmaze (cached in `cache/tvmaze/`, re-checked weekly).
-An episode counts as aired at its air date plus that time; streaming shows with no set time count from midnight Central.
-TVmaze data is CC BY-SA 4.0 and is credited on the page.
+TMDB gives episode air dates without a time, so each followed show's release time comes from TheTVDB (looked up by the TVDB ID TMDB lists, cached in `cache/tvdb/`, re-checked weekly).
+TheTVDB gives no timezone, so the time is read in the main timezone of the show's home country (`originalCountry`, falling back to the network's). Sonarr uses the network's country instead, which puts foreign shows on US streamers hours off.
+Apple TV shows listed at midnight count from 9 PM Eastern the evening before, when Apple actually releases them, and Netflix shows always count from 3 AM Eastern, Netflix's worldwide release time.
+An episode counts as aired at its air date plus that time; with no `TVDB_API_KEY`, no time, or an unmapped country, it counts from midnight Central.
+TheTVDB is credited on the page.
 
 ### Plex (`recommender/plex.py`)
 
@@ -292,7 +294,7 @@ recommender/cache/
     batch_01.txt ... batch_NN.txt
   find/                          Find page: now-playing ids (6h TTL), language_<code>.json lists
   releases/                      Followed shows' episode snapshots (On Deck)
-  tvmaze/                        Followed shows' regular air times
+  tvdb/                          Followed shows' regular air times
   imdb_ratings.db                Local copy of IMDb ratings
   watch_index.json               [{tmdb_id, title, content_type}, ...]
   taste_profile.txt              LLM-generated prose output
@@ -319,6 +321,7 @@ Secrets come from the environment. Shared application settings live in
 - `GEMINI_API_KEY` — Google Gemini API key (AIza* for AI Studio, AQ.* for Vertex AI)
 - `OPENAI_API_KEY` — OpenAI-compatible API key
 - `PLEX_WEBHOOK_TOKEN`, `PLEX_URL`, `PLEX_TOKEN` — Plex webhook and rating sync
+- `TVDB_API_KEY` — optional TheTVDB key for On Deck air times
 - `STREAMLINE_PASSWORD` — optional password for the web UI
 - `STREAMLINE_API_TOKEN` — optional bearer token for `GET /api/*`
 
