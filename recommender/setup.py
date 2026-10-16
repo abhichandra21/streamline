@@ -1163,7 +1163,15 @@ def ingest_providers(fail_on_error: bool = True) -> list:
     configured_platforms = [p for p, _ in _PLATFORM_PARSERS if config.PLATFORM_PATHS.get(p)]
     event_store.remove_disabled_providers(config.EVENT_DB_PATH, configured_platforms)
 
+    saved = event_store.get_import_info(config.EVENT_DB_PATH)
     for platform, (pevents, paths) in platform_events_by_provider.items():
+        saved_count = saved.get(platform, {}).get("event_count", 0)
+        if not pevents and saved_count:
+            # A wrong file or a mistyped Disney+ profile reads as no watches;
+            # replacing would silently delete the history this provider has.
+            console.print(f"  {platform}: [yellow]no watches found, keeping the {saved_count:,} "
+                          f"saved ones[/yellow] (check its export path or profile names)")
+            continue
         manifest, snapshot_sha = _build_source_manifest(paths)
         persisted, _total_raw = event_store.replace_provider_events(
             config.EVENT_DB_PATH, platform, pevents, manifest, snapshot_sha,

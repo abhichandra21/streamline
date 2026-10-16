@@ -3200,6 +3200,9 @@ def _parse_exports(form, exports: list[dict]) -> dict[str, list[str] | None]:
         if raw is None:
             continue
         paths = [line.strip() for line in raw.splitlines() if line.strip()]
+        if [str(_REPO_ROOT / path) for path in paths] == (config.PLATFORM_PATHS.get(row["provider"]) or []):
+            # Unchanged: a path that has gone missing must not block other settings.
+            continue
         if not paths and row["event_count"]:
             raise ValueError(
                 f"{row['label']} has {row['event_count']} saved watch events, and the next rebuild "

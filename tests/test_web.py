@@ -1291,6 +1291,15 @@ class TestSettingsExports:
         assert "export not found" in resp.data.decode()
         save.assert_not_called()
 
+    def test_an_unchanged_missing_export_does_not_block_other_settings(self, client, monkeypatch):
+        monkeypatch.setitem(web.config.PLATFORM_PATHS, "prime", [str(web._REPO_ROOT / "data/gone.zip")])
+        prime = {"provider": "prime", "label": "Prime Video", "paths": ["data/gone.zip"],
+                 "missing": ["data/gone.zip"], "event_count": 0}
+        resp, save = self._post(client, [prime], export_prime="data/gone.zip", wizard_max_questions="6")
+
+        assert resp.status_code == 302
+        assert "prime" not in save.call_args.args[0].get("platform_paths", {})
+
     def test_an_export_outside_the_data_folder_is_refused(self, client, tmp_path, monkeypatch):
         monkeypatch.setattr(web, "_REPO_ROOT", tmp_path)
         (tmp_path / "data").mkdir()
