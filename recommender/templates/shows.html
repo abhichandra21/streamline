@@ -9,7 +9,7 @@
 
 {% include "_shows_content.html" %}
 
-<p class="shows-credit mono">Air times from <a href="https://www.tvmaze.com" target="_blank" rel="noopener">TVmaze</a> (<a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a>)</p>
+<p class="shows-credit mono">Air times from <a href="https://thetvdb.com" target="_blank" rel="noopener">TheTVDB</a></p>
 
 <style>
   /* ── Masthead: compact, because this page gets revisited weekly ── */
@@ -460,7 +460,7 @@
   }
   .shows-management .shows-list { margin-top: 0.8rem; }
 
-  /* TVmaze data is CC BY-SA 4.0 and must be credited. Sits outside
+  /* TheTVDB data must be credited. Sits outside
      #shows-content so the refresh poll's outerHTML swap never duplicates it. */
   .shows-credit {
     margin-top: 2.5rem;
@@ -474,7 +474,7 @@
     .shows-credit a:hover { color: var(--text); }
   }
   /* The JustWatch credit is the last thing inside #shows-content, so the
-     TVmaze credit below it tucks up underneath as one credits block. */
+     TheTVDB credit below it tucks up underneath as one credits block. */
   #shows-content:has(.shows-credit--justwatch) + .shows-credit { margin-top: 0.35rem; }
 
   @media (max-width: 640px) {

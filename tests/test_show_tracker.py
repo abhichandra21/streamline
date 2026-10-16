@@ -938,6 +938,13 @@ def test_show_time_follows_its_own_timezone_across_daylight_saving():
     assert build_sections(archive, tracking, snapshots, today=date(2026, 11, 8), lookback_days=365, now=after)["ready_now"]
 
 
+def test_apple_episode_is_ready_the_evening_before_its_air_date():
+    # Air date Oct 4; Apple puts it out at 9 PM New York on Oct 3 (8 PM Central).
+    apple = {"time": "21:00", "timezone": "America/New_York", "days_early": 1}
+    assert _section_at(apple, datetime(2026, 10, 4, 0, 59, tzinfo=timezone.utc)) == "coming_soon"
+    assert _section_at(apple, datetime(2026, 10, 4, 1, 1, tzinfo=timezone.utc)) == "ready_now"
+
+
 def test_show_without_a_time_is_ready_from_midnight_central():
     # 12:30 AM Central on the air date.
     assert _section_at(None, datetime(2026, 10, 4, 5, 30, tzinfo=timezone.utc)) == "ready_now"
@@ -948,7 +955,7 @@ def test_unreadable_show_time_falls_back_to_midnight_central():
     assert _section_at(bad, datetime(2026, 10, 4, 5, 30, tzinfo=timezone.utc)) == "ready_now"
 
 
-class _Tvmaze:
+class _Tvdb:
     def __init__(self, answer=None, error=None):
         self.answer, self.error, self.asked = answer, error, []
 
@@ -967,14 +974,14 @@ def test_refresh_saves_the_show_time_for_followed_shows_only(tmp_path):
         {"tmdb_id": 1, "title": "One", "content_type": "tv", "last_watched": "2024-01-01"},
         {"tmdb_id": 2, "title": "Two", "content_type": "tv", "last_watched": "2024-01-01"},
     ]
-    tvmaze = _Tvmaze(NEW_YORK_23)
+    tvdb = _Tvdb(NEW_YORK_23)
     client = _ReleaseClient({1: _series(1, "One"), 2: _series(2, "Two")})
 
     refresh_release_cache(archive, [_following(1)], client, tmp_path,
-                          now=datetime(2026, 9, 3, tzinfo=timezone.utc), sleep=lambda _: None, tvmaze=tvmaze)
+                          now=datetime(2026, 9, 3, tzinfo=timezone.utc), sleep=lambda _: None, tvdb=tvdb)
 
     snapshots = load_snapshots(tmp_path)
-    assert tvmaze.asked == [1]
+    assert tvdb.asked == [1]
     assert snapshots[1]["air_time"] == NEW_YORK_23
     assert "air_time" not in snapshots[2]
 
@@ -985,7 +992,7 @@ def test_refresh_without_a_show_time_saves_none(tmp_path):
 
     result = refresh_release_cache(archive, [_following(1)], client, tmp_path,
                                    now=datetime(2026, 9, 3, tzinfo=timezone.utc), sleep=lambda _: None,
-                                   tvmaze=_Tvmaze(None))
+                                   tvdb=_Tvdb(None))
 
     assert result["refreshed"] == 1
     assert load_snapshots(tmp_path)[1]["air_time"] is None
@@ -1000,8 +1007,8 @@ def test_followed_snapshot_without_a_show_time_is_refreshed_straight_away(tmp_pa
     soon = datetime(2026, 9, 3, 1, tzinfo=timezone.utc)
 
     assert refresh_is_due(archive, [_following(1)], tmp_path, soon) is True
-    tvmaze = _Tvmaze(NEW_YORK_23)
+    tvdb = _Tvdb(NEW_YORK_23)
     refresh_release_cache(archive, [_following(1)], _ReleaseClient({1: _series(1, "One")}), tmp_path,
-                          now=soon, sleep=lambda _: None, tvmaze=tvmaze)
-    assert tvmaze.asked == [1]
+                          now=soon, sleep=lambda _: None, tvdb=tvdb)
+    assert tvdb.asked == [1]
     assert refresh_is_due(archive, [_following(1)], tmp_path, soon) is False

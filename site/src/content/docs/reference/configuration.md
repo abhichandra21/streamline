@@ -5,7 +5,7 @@ description: Every setting, where it lives, and its default.
 
 Settings live in a few places:
 
-- **Environment variables** — secrets only (`TMDB_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, and for Plex `PLEX_WEBHOOK_TOKEN`, `PLEX_URL`, `PLEX_TOKEN`)
+- **Environment variables** — secrets only (`TMDB_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, for Plex `PLEX_WEBHOOK_TOKEN`, `PLEX_URL`, `PLEX_TOKEN`, and `TVDB_API_KEY` for On Deck air times)
 - **`.env`** — optional local convenience for setting those environment variables (gitignored)
 - **`config.yaml`** — the shipped defaults, tracked in git
 - **`config.local.yaml`** — your overrides, loaded after `config.yaml` and gitignored: watch-history paths, and everything saved from the Settings page
@@ -103,6 +103,7 @@ All shared settings in `config.yaml`:
 | `TMDB_API_KEY` | Required. TMDB v3 API key |
 | `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY` | The key for whichever provider you use |
 | `PLEX_WEBHOOK_TOKEN`, `PLEX_URL`, `PLEX_TOKEN` | [Plex](/guides/plex/) |
+| `TVDB_API_KEY` | Optional. TheTVDB key for [On Deck](/guides/on-deck/) air times |
 | `STREAMLINE_PASSWORD` | Optional password for the web UI |
 | `STREAMLINE_API_TOKEN` | Optional bearer token for `GET /api/*` |
 | `STREAMLINE_PORT`, `STREAMLINE_HOST` | Where the web UI listens (default port `5051`) |

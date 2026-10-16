@@ -333,12 +333,12 @@ def refresh_release_cache(
     sleep=time.sleep,
     lookback_days: int = 730,
     progress=None,
-    tvmaze=None,
+    tvdb=None,
 ) -> dict:
     """Refresh due release snapshots, preserving cached data on failures.
 
     progress, when given, is called with (completed, total) after each show so
-    callers can surface how far along the refresh is. tvmaze, when given, adds
+    callers can surface how far along the refresh is. tvdb, when given, adds
     each followed show's regular air time to its snapshot.
     """
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -406,9 +406,9 @@ def refresh_release_cache(
                 progress(completed, total)
             continue
         if (tracking.get(tmdb_id) or {}).get("state") == "following":
-            snapshot["air_time"] = tvmaze.show_time(
+            snapshot["air_time"] = tvdb.show_time(
                 tmdb_id, lambda: paced.call(client.fetch_tv_external_ids, tmdb_id)
-            ) if tvmaze is not None else None
+            ) if tvdb is not None else None
         _write_json(_snapshot_path(cache_dir, tmdb_id), snapshot)
         snapshots[tmdb_id] = snapshot
         result["refreshed"] += 1
@@ -434,8 +434,9 @@ def _ready_at(air_date: date, air_time: dict | None) -> datetime:
     if air_time:
         try:
             clock = clock_time.fromisoformat(air_time["time"])
-            return datetime.combine(air_date, clock, ZoneInfo(air_time["timezone"]))
-        except (KeyError, TypeError, ValueError) as exc:
+            day = air_date - timedelta(days=int(air_time.get("days_early", 0)))
+            return datetime.combine(day, clock, ZoneInfo(air_time["timezone"]))
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
             log.warning("Ignoring unreadable air time %r: %s", air_time, exc)
     return datetime.combine(air_date, clock_time(), HOME_TIMEZONE)
 
