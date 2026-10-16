@@ -238,7 +238,7 @@
   <!-- Watch-history exports -->
   <fieldset id="watch-history" class="settings-section" style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
     <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Watch-History Exports</legend>
-    <p class="section-intro">Where each service's export file sits on the server, relative to the Streamline folder. Put one path per line, or leave a box empty to skip that service. Changes take effect at the next Refresh data. A service that already has saved watch events can't be turned off here, because the next rebuild would delete them.</p>
+    <p class="section-intro">Where each service's export file sits on the server, inside the Streamline data folder (for example data/netflix/export.zip). Put one path per line, or leave a box empty to skip that service. Changes take effect at the next Refresh data. A service that already has saved watch events can't be turned off here, because the next rebuild would delete them.</p>
 
     <div class="export-list">
       {% for e in exports %}

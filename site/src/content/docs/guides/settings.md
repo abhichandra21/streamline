@@ -27,7 +27,7 @@ Remove the saved value to go back to the one in `.env`.
 
 ### Watch-history exports
 
-Each provider's export path is relative to the Streamline folder on the server, one per line. Leave it empty to turn that provider off.
+Each provider's export path is relative to the Streamline folder on the server and must be inside `data/`, one per line. Leave it empty to turn that provider off.
 Changes take effect at the next `./recommend setup --refresh-data`.
 A provider with saved watch events can't be turned off here, because the next rebuild would delete those events.
 

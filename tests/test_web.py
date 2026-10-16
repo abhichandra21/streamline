@@ -1291,13 +1291,21 @@ class TestSettingsExports:
         assert "export not found" in resp.data.decode()
         save.assert_not_called()
 
+    def test_an_export_outside_the_data_folder_is_refused(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(web, "_REPO_ROOT", tmp_path)
+        (tmp_path / "data").mkdir()
+        resp, save = self._post(client, [self.HBO], export_hbo="data/../config.local.yaml\n/etc/passwd")
+
+        assert "must be inside the data folder" in resp.data.decode()
+        save.assert_not_called()
+
     def test_a_new_export_path_is_saved_and_asks_for_a_data_refresh(self, client, tmp_path, monkeypatch):
-        export = tmp_path / "max-export"
-        export.mkdir()
-        resp, save = self._post(client, [self.HBO], export_hbo=f"{export}\n", disney_profiles="Abhishek, Kids")
+        monkeypatch.setattr(web, "_REPO_ROOT", tmp_path)
+        (tmp_path / "data" / "max-export").mkdir(parents=True)
+        resp, save = self._post(client, [self.HBO], export_hbo="data/max-export\n", disney_profiles="Abhishek, Kids")
 
         saved = save.call_args.args[0]
-        assert saved["platform_paths"] == {"hbo": str(export)}
+        assert saved["platform_paths"] == {"hbo": "data/max-export"}
         assert saved["disney_profiles"] == ["Abhishek", "Kids"]
         assert "refresh-data" in resp.headers["Location"]
 
