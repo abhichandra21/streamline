@@ -1,13 +1,37 @@
 {% extends "base.html" %}
 {% block title %}Streamline — Settings{% endblock %}
+{% block main_class %}wide{% endblock %}
 {% block content %}
 
-<div style="margin-bottom:2rem;">
+{% set settings_sections = [
+  ('keys', 'Keys'),
+  ('llm-provider', 'LLM provider'),
+  ('recommendations', 'Recommendations'),
+  ('streaming', 'Streaming'),
+  ('watch-history', 'Watch history'),
+  ('mood-match', 'Mood Match'),
+  ('on-deck', 'On Deck'),
+  ('logging', 'Logging'),
+  ('advanced', 'Advanced'),
+] %}
+
+<div class="settings-layout">
+<div class="settings-head">
   <span class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent);">Configuration</span>
   <h1 style="font-size:clamp(2rem, 4.5vw, 3rem); margin-top:0.2rem; margin-bottom:0.5rem;">Settings</h1>
-  <p style="color:var(--muted); font-size:0.85rem;">Runtime settings take effect on save unless a background job is still running. Scoring, manual title, and profile-related changes require a rebuild. Local watch-history paths belong in config.local.yaml.</p>
+  <p style="color:var(--muted); font-size:0.85rem;">Most changes apply as soon as you save, or once any running background job finishes. Changes to scoring, manual titles, the taste profile, or watch-history exports also need a rebuild, and the page tells you which one.</p>
 </div>
 
+<nav class="settings-toc" aria-label="Settings sections">
+  <span class="mono settings-toc-head">On this page</span>
+  <ul>
+    {% for sid, slabel in settings_sections %}
+    <li><a href="#{{ sid }}" data-toc="{{ sid }}">{{ slabel }}</a></li>
+    {% endfor %}
+  </ul>
+</nav>
+
+<div class="settings-body">
 {% if saved and rebuild_command %}
 <div style="padding:0.75rem 1.25rem; background:rgba(240,160,64,0.1); border:1px solid rgba(240,160,64,0.25); border-radius:6px; margin-bottom:1.5rem; font-size:0.85rem;">
   <span style="color:var(--accent2);">
@@ -33,13 +57,92 @@
 </div>
 {% endif %}
 
+<!-- ═══════ KEYS (its own form) ═══════ -->
+<section id="keys" class="keys-section settings-section">
+  {% if keys_saved %}
+  <div style="padding:0.75rem 1.25rem; background:rgba(163,207,98,0.1); border:1px solid rgba(163,207,98,0.25); border-radius:6px; margin-bottom:1rem; font-size:0.85rem; color:var(--yours);">
+    Keys saved.{% if reload_deferred %} They apply once the current background jobs finish.{% endif %}
+  </div>
+  {% endif %}
+
+  <form method="post" action="/settings/keys" autocomplete="off">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+      <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Keys</legend>
+      <p class="section-intro">Keys saved here are kept on the server in data/keys.env and win over the ones in .env. Once saved, a key is never shown in full again, only its last four characters. Leave a field blank to keep what is there.</p>
+
+      {% set key_groups = [
+        ('Data sources', ['TMDB_API_KEY', 'TVDB_API_KEY']),
+        ('AI providers', ['ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'OPENAI_API_KEY']),
+        ('Plex', ['PLEX_URL', 'PLEX_TOKEN', 'PLEX_WEBHOOK_TOKEN']),
+      ] %}
+      {% set grouped_names = ['TMDB_API_KEY', 'TVDB_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'OPENAI_API_KEY', 'PLEX_URL', 'PLEX_TOKEN', 'PLEX_WEBHOOK_TOKEN'] %}
+      {% set other_keys = keys | rejectattr('name', 'in', grouped_names) | list %}
+      {% if other_keys %}{% set key_groups = key_groups + [('Other', other_keys | map(attribute='name') | list)] %}{% endif %}
+
+      {% for group_label, group_names in key_groups %}
+      {% set group_keys = keys | selectattr('name', 'in', group_names) | list %}
+      {% if group_keys %}
+      <div class="key-group">
+        <span class="mono key-group-label">{{ group_label }}</span>
+        {% for k in group_keys %}
+        <div class="key-row">
+          <div class="key-meta">
+            <label class="form-label" for="key_{{ k.name }}">{{ k.label }}</label>
+            <span class="mono key-name">{{ k.name }}</span>
+          </div>
+          <div class="key-field">
+            <div class="key-state">
+              {% if not k.source %}
+                <span class="key-dot key-dot-off"></span><span>Not set</span>
+              {% else %}
+                <span class="key-dot {{ 'key-dot-here' if k.source == 'settings' else 'key-dot-env' }}"></span>
+                <span>{{ 'Set here' if k.source == 'settings' else 'From the environment (.env)' }}</span>
+                {% if k.secret and k.shown %}<span class="mono key-tail">ending in &bull;&bull;&bull;&bull;{{ k.shown }}</span>
+                {% elif not k.secret and k.shown %}<span class="mono key-tail key-url">{{ k.shown }}</span>{% endif %}
+              {% endif %}
+            </div>
+            <input
+              id="key_{{ k.name }}"
+              type="{{ 'password' if k.secret else 'url' }}"
+              name="key_{{ k.name }}"
+              value=""
+              class="form-input"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="{% if k.secret %}{{ 'Paste a new key, or leave blank to keep it' if k.source else 'Paste a key' }}{% else %}{{ 'New URL, or leave blank to keep it' if k.source else 'http://192.168.1.10:32400' }}{% endif %}"
+            >
+            {% if k.name == 'PLEX_WEBHOOK_TOKEN' %}
+            <span class="form-hint key-warn">Changing this stops Plex plays from being recorded until you update the webhook address in Plex (Settings, Webhooks) to end in <span class="mono">/plex/webhook?token=</span> followed by the new token. Plex does not resend missed plays.</span>
+            {% endif %}
+            {% if k.source == 'settings' %}
+            <label class="key-clear">
+              <input type="checkbox" name="clear_{{ k.name }}" value="1">
+              <span>Remove the saved value <span class="form-hint">The .env value, if there is one, applies again.</span></span>
+            </label>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% endfor %}
+
+      <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap; margin-top:1.25rem;">
+        <button type="submit" class="btn-primary" style="padding:0.6rem 1.6rem;">Save keys</button>
+        <span class="mono" style="font-size:0.58rem; color:var(--muted);">Saves only the keys. The settings below have their own Save button.</span>
+      </div>
+    </fieldset>
+  </form>
+</section>
+
 <form method="post" action="/settings" style="display:flex; flex-direction:column; gap:1.5rem;">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
 
   <!-- ═══════ REGULAR SETTINGS ═══════ -->
 
   <!-- LLM Provider -->
-  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+  <fieldset id="llm-provider" class="settings-section" style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
     <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">LLM Provider</legend>
     <p class="section-intro">Which AI provider to use and which models for each role.</p>
 
@@ -90,7 +193,7 @@
   </fieldset>
 
   <!-- Recommendations -->
-  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+  <fieldset id="recommendations" class="settings-section" style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
     <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Recommendations</legend>
     <p class="section-intro">Controls for result quality and quantity.</p>
 
@@ -114,7 +217,7 @@
   </fieldset>
 
   <!-- Streaming -->
-  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+  <fieldset id="streaming" class="settings-section" style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
     <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Streaming</legend>
     <p class="section-intro">Region and platform filtering for streaming availability.</p>
 
@@ -132,8 +235,74 @@
     </div>
   </fieldset>
 
+  <!-- Watch-history exports -->
+  <fieldset id="watch-history" class="settings-section" style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+    <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Watch-History Exports</legend>
+    <p class="section-intro">Where each service's export file sits on the server, inside the Streamline data folder (for example data/netflix/export.zip). Put one path per line, or leave a box empty to skip that service. Changes take effect at the next Refresh data. A service that already has saved watch events can't be turned off here, because the next rebuild would delete them.</p>
+
+    <div class="export-list">
+      {% for e in exports %}
+      <div class="export-row">
+        <div class="export-meta">
+          <label class="form-label" for="export_{{ e.provider }}">{{ e.label }}</label>
+          <span class="mono export-count {{ 'export-count-zero' if not e.event_count }}">{{ '{:,}'.format(e.event_count) }} watch event{{ '' if e.event_count == 1 else 's' }} saved</span>
+        </div>
+        <div class="export-field">
+          <textarea
+            id="export_{{ e.provider }}"
+            name="export_{{ e.provider }}"
+            class="form-input export-input"
+            rows="{{ [e.paths|length, 1]|max + 1 }}"
+            spellcheck="false"
+            placeholder="Off. Example: data/{{ e.provider }}/export.zip"
+          >{{ e.paths|join('\n') }}</textarea>
+          {% for path in e.missing %}
+          <span class="export-missing">Not found on the server: <span class="mono">{{ path }}</span></span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="form-row" style="margin-top:1rem;">
+      <label class="form-label" for="disney_profiles">Disney+ profiles to keep</label>
+      <input id="disney_profiles" type="text" name="disney_profiles" value="{{ disney_profiles }}" class="form-input" style="max-width:420px;" placeholder="All profiles">
+      <span class="form-hint">Profile names, separated by commas. Leave empty to keep every profile in the export.</span>
+    </div>
+  </fieldset>
+
+  <!-- Mood Match + On Deck -->
+  <div class="form-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:1.5rem;">
+    <fieldset id="mood-match" class="settings-section" style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+      <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Mood Match</legend>
+      <p class="section-intro">How many questions Mood Match asks before it recommends.</p>
+      <div class="form-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
+        <div class="form-row">
+          <label class="form-label" for="wizard_max_questions">Most questions</label>
+          <input id="wizard_max_questions" type="number" name="wizard_max_questions" value="{{ cfg.wizard.max_questions }}" class="form-input" style="width:80px;" min="1">
+          <span class="form-hint">It stops and recommends after this many.</span>
+        </div>
+        <div class="form-row">
+          <label class="form-label" for="wizard_min_questions">Fewest questions</label>
+          <input id="wizard_min_questions" type="number" name="wizard_min_questions" value="{{ cfg.wizard.min_questions }}" class="form-input" style="width:80px;" min="1">
+          <span class="form-hint">It won't recommend on its own before this many. The movie-or-show tap counts as one.</span>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset id="on-deck" class="settings-section" style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+      <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">On Deck</legend>
+      <p class="section-intro">Suggestions for shows that are coming back.</p>
+      <div class="form-row">
+        <label class="form-label" for="returning_shows_lookback_days">Look back (days)</label>
+        <input id="returning_shows_lookback_days" type="number" name="returning_shows_lookback_days" value="{{ cfg.returning_shows_lookback_days }}" class="form-input" style="width:100px;" min="1">
+        <span class="form-hint">A show you watched within this many days can be suggested when it returns.</span>
+      </div>
+    </fieldset>
+  </div>
+
   <!-- Logging -->
-  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+  <fieldset id="logging" class="settings-section" style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
     <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Logging</legend>
 
     <div class="form-row">
@@ -149,11 +318,11 @@
 
   <!-- ═══════ ADVANCED SETTINGS ═══════ -->
 
-  <details class="advanced-details">
+  <details id="advanced" class="advanced-details settings-section">
     <summary class="advanced-summary">
       <svg class="advanced-arrow" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1 L7 5 L3 9" stroke="var(--muted)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <span class="mono" style="font-size:0.65rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);">Advanced Settings</span>
-      <span style="font-size:0.72rem; color:var(--muted); margin-left:0.5rem;">LLM limits, scoring weights, manual titles</span>
+      <span style="font-size:0.72rem; color:var(--muted); margin-left:0.5rem;">LLM limits, Mood Match tokens, scoring weights, manual titles</span>
     </summary>
 
     <div style="display:flex; flex-direction:column; gap:1.5rem; margin-top:1.5rem;">
@@ -201,7 +370,7 @@
           </div>
         </div>
 
-        <div class="form-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-top:1rem;">
+        <div class="form-grid" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem; margin-top:1rem;">
           <div class="form-row">
             <label class="form-label">Profile batch size</label>
             <input type="number" name="llm_profile_batch_size" value="{{ cfg.llm.profile_batch_size }}" class="form-input" style="width:100px;" min="10">
@@ -211,6 +380,11 @@
             <label class="form-label">Rate limit wait (s)</label>
             <input type="number" name="llm_rate_limit_wait" value="{{ cfg.llm.rate_limit_wait }}" class="form-input" style="width:100px;" min="1">
             <span class="form-hint">Seconds to pause on 429 rate limit errors</span>
+          </div>
+          <div class="form-row">
+            <label class="form-label" for="wizard_max_tokens">Mood Match tokens</label>
+            <input id="wizard_max_tokens" type="number" name="wizard_max_tokens" value="{{ cfg.wizard.max_tokens }}" class="form-input" style="width:100px;" min="1">
+            <span class="form-hint">Output token limit for each Mood Match question</span>
           </div>
         </div>
       </fieldset>
@@ -324,8 +498,118 @@
   </div>
 
 </form>
+</div>
+</div>
 
 <style>
+  /* Section navigation. One list: a sticky column on wide screens, a row of
+     jump links under the title everywhere else. Plain anchors, so it works
+     without JS; the script below only adds the highlight and opens Advanced. */
+  /* base.html sets overflow-x: hidden on html and body, which turns body into
+     a scroll container that never scrolls, so nothing inside can stick.
+     clip trims the same overflow without that side effect. */
+  @supports (overflow-x: clip) {
+    html, body { overflow-x: clip; }
+  }
+  .settings-layout { max-width: 54rem; margin: 0 auto; }
+  .settings-head { margin-bottom: 1.25rem; }
+  .settings-body { min-width: 0; }
+  .settings-section { scroll-margin-top: 1.25rem; }
+
+  .settings-toc { margin: 0 0 1.75rem; min-width: 0; }
+  .settings-toc-head {
+    display: none;
+    font-size: 0.58rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .settings-toc ul {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 0.25rem;
+    display: flex;
+    gap: 0.4rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    /* Fade the right edge so a clipped chip reads as "scroll for more". */
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+            mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+  }
+  .settings-toc ul::-webkit-scrollbar { display: none; }
+  .settings-toc li { flex-shrink: 0; }
+  .settings-toc li:last-child { padding-right: 1.5rem; }
+  .settings-toc a {
+    display: block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.62rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+    padding: 0.45rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .settings-toc a.is-current { color: var(--text); border-color: var(--accent); }
+  @media (hover: hover) {
+    .settings-toc a:hover { color: var(--text); border-color: var(--muted); text-decoration: none; }
+  }
+
+  /* Phones: the mobile top bar is sticky (50px), so targets land below it. */
+  @media (max-width: 839px) {
+    .settings-section { scroll-margin-top: 4.25rem; }
+  }
+
+  @media (min-width: 1200px) {
+    .settings-layout {
+      max-width: none;
+      display: grid;
+      grid-template-columns: minmax(0, 10rem) minmax(0, 54rem);
+      grid-template-areas: ". head" "toc body";
+      column-gap: 2.5rem;
+      justify-content: center;
+    }
+    .settings-head { grid-area: head; }
+    .settings-body { grid-area: body; }
+    .settings-toc {
+      grid-area: toc;
+      position: sticky;
+      top: 1.5rem;
+      align-self: start;
+      margin: 0;
+      padding-top: 0.35rem;
+    }
+    .settings-toc-head { display: block; padding: 0 0 0.6rem 0.75rem; }
+    .settings-toc ul {
+      flex-direction: column;
+      gap: 0;
+      overflow: visible;
+      padding: 0;
+      border-left: 1px solid var(--border);
+      -webkit-mask-image: none;
+              mask-image: none;
+    }
+    .settings-toc li:last-child { padding-right: 0; }
+    .settings-toc a {
+      border: none;
+      border-radius: 0;
+      background: none;
+      padding: 0.42rem 0 0.42rem 0.75rem;
+      margin-left: -1px;
+      border-left: 2px solid transparent;
+      white-space: normal;
+    }
+    .settings-toc a.is-current { border-left-color: var(--accent); color: var(--text); }
+    @media (hover: hover) {
+      .settings-toc a:hover { color: var(--text); border-left-color: var(--muted); }
+      .settings-toc a.is-current:hover { border-left-color: var(--accent); }
+    }
+  }
+
   fieldset { border-color: var(--border); }
   .section-intro {
     font-size: 0.82rem;
@@ -370,6 +654,72 @@
     .form-grid { grid-template-columns: 1fr !important; }
   }
 
+  /* Keys */
+  .keys-section { margin-bottom: 1.5rem; }
+  .key-group { margin-top: 1.25rem; }
+  .key-group:first-of-type { margin-top: 0.25rem; }
+  .key-group-label {
+    display: block;
+    font-size: 0.58rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .key-row {
+    display: grid;
+    grid-template-columns: minmax(0, 12rem) minmax(0, 1fr);
+    gap: 0.5rem 1.25rem;
+    padding: 0.85rem 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .key-group .key-row:last-child { border-bottom: none; }
+  .key-meta, .key-field { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
+  .key-name { font-size: 0.58rem; color: var(--muted); letter-spacing: 0.04em; overflow-wrap: anywhere; }
+  .key-state {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.25rem 0.5rem;
+    font-size: 0.74rem; color: var(--body); min-width: 0;
+  }
+  .key-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .key-dot-off { border: 1px solid var(--muted); }
+  .key-dot-here { background: var(--yours); box-shadow: 0 0 0 3px rgba(163,207,98,0.15); }
+  .key-dot-env { background: var(--accent2); box-shadow: 0 0 0 3px rgba(240,160,64,0.15); }
+  .key-tail { font-size: 0.68rem; color: var(--muted); min-width: 0; }
+  .key-url { overflow-wrap: anywhere; color: var(--text); }
+  .key-field .form-input { max-width: 440px; }
+  .key-clear { display: flex; gap: 0.45rem; align-items: flex-start; font-size: 0.74rem; color: var(--body); cursor: pointer; }
+  .key-clear input { margin-top: 0.15rem; flex-shrink: 0; }
+  .key-clear .form-hint { display: block; }
+  .key-warn {
+    max-width: 440px;
+    color: var(--accent2);
+    padding-left: 0.6rem;
+    border-left: 2px solid rgba(240,160,64,0.45);
+    overflow-wrap: anywhere;
+  }
+  .key-warn .mono { font-size: 0.64rem; }
+
+  /* Watch-history exports */
+  .export-list { display: flex; flex-direction: column; }
+  .export-row {
+    display: grid;
+    grid-template-columns: minmax(0, 12rem) minmax(0, 1fr);
+    gap: 0.5rem 1.25rem;
+    padding: 0.85rem 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .export-row:first-child { padding-top: 0; }
+  .export-meta, .export-field { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
+  .export-count { font-size: 0.6rem; color: var(--yours); letter-spacing: 0.04em; }
+  .export-count-zero { color: var(--muted); }
+  .export-input { resize: vertical; line-height: 1.5; min-height: 2.4rem; }
+  .export-missing { font-size: 0.7rem; color: #e88; overflow-wrap: anywhere; }
+
+  @media (max-width: 639px) {
+    .key-row, .export-row { grid-template-columns: minmax(0, 1fr); }
+  }
+
   /* Advanced accordion */
   .advanced-details { margin-top: 0.5rem; }
   .advanced-summary {
@@ -384,8 +734,10 @@
   }
   .advanced-summary::-webkit-details-marker { display: none; }
   .advanced-summary::marker { content: ''; }
-  .advanced-summary:hover .advanced-arrow path { stroke: var(--accent); }
-  .advanced-summary:hover span { color: var(--text); }
+  @media (hover: hover) {
+    .advanced-summary:hover .advanced-arrow path { stroke: var(--accent); }
+    .advanced-summary:hover span { color: var(--text); }
+  }
   .advanced-arrow { flex-shrink: 0; transition: transform 0.2s; }
   .advanced-details[open] .advanced-arrow { transform: rotate(90deg); }
 </style>
@@ -428,6 +780,42 @@
       manualMode.addEventListener('change', syncManualTimestampInput);
       syncManualTimestampInput();
     }
+  })();
+
+  (function() {
+    var advanced = document.getElementById('advanced');
+    function openAdvancedIfTarget() {
+      if (advanced && location.hash === '#advanced') advanced.open = true;
+    }
+    document.querySelectorAll('a[href="#advanced"]').forEach(function(a) {
+      a.addEventListener('click', function() { if (advanced) advanced.open = true; });
+    });
+    window.addEventListener('hashchange', openAdvancedIfTarget);
+    openAdvancedIfTarget();
+
+    var links = document.querySelectorAll('.settings-toc a[data-toc]');
+    if (!('IntersectionObserver' in window) || !links.length) return;
+    var sections = [];
+    links.forEach(function(a) {
+      var el = document.getElementById(a.getAttribute('data-toc'));
+      if (el) sections.push(el);
+    });
+    // The current section is the last one whose top has passed the upper
+    // third of the screen. The observer just says when to re-check.
+    function mark() {
+      var line = window.innerHeight * 0.35;
+      var atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4;
+      var current = sections[0].id;
+      sections.forEach(function(el) {
+        var top = el.getBoundingClientRect().top;
+        if (top <= line || (atEnd && top < window.innerHeight)) current = el.id;
+      });
+      links.forEach(function(a) {
+        a.classList.toggle('is-current', a.getAttribute('data-toc') === current);
+      });
+    }
+    var observer = new IntersectionObserver(mark, { rootMargin: '0px 0px -65% 0px' });
+    sections.forEach(function(el) { observer.observe(el); });
   })();
 </script>
 

@@ -7,8 +7,9 @@ Settings live in a few places:
 
 - **Environment variables** — secrets only (`TMDB_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, for Plex `PLEX_WEBHOOK_TOKEN`, `PLEX_URL`, `PLEX_TOKEN`, and `TVDB_API_KEY` for On Deck air times)
 - **`.env`** — optional local convenience for setting those environment variables (gitignored)
+- **`data/keys.env`** — those same keys when saved on the Settings page. A key saved there wins over the environment; removing it on the page brings the environment value back
 - **`config.yaml`** — the shipped defaults, tracked in git
-- **`config.local.yaml`** — your overrides, loaded after `config.yaml` and gitignored: watch-history paths, and everything saved from the Settings page
+- **`config.local.yaml`** — your overrides, loaded after `config.yaml` and gitignored: watch-history paths and everything else saved from the Settings page
 
 ## LLM providers
 

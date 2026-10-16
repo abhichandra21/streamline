@@ -909,3 +909,26 @@ def test_a_data_refresh_never_rebuilds_the_taste_profile_on_its_own(tmp_path, mo
     os.utime(index, (2, 2))
     assert "Seen it" in setup._auto_data_refresh(index, overrides, [new_seen])
     assert setup._auto_data_refresh(index, overrides, []) is None
+
+
+def test_an_export_that_reads_as_no_watches_keeps_the_saved_ones(monkeypatch, tmp_path):
+    """A wrong file or mistyped Disney+ profile must not wipe a provider's history."""
+    import config
+    import recommender.setup as setup
+    from recommender.event_store import load_events
+
+    db_path = str(tmp_path / "streamline.db")
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"disney": ["/fake/export.pdf"]})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
+    monkeypatch.setattr(setup, "_compute_file_sha256", lambda _path: "sha")
+
+    saved = [_make_event(title="Andor", timestamp=datetime(2026, 1, 1, 20, 0, 0))]
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("disney", lambda _path: saved)])
+    setup.ingest_providers(fail_on_error=True)
+
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("disney", lambda _path: [])])
+    setup.ingest_providers(fail_on_error=True)
+
+    assert {e.title for e in load_events(db_path)} == {"Andor"}

@@ -1644,7 +1644,7 @@ def find_page() -> str:
     # Every outcome, including the preconditions, leaves through _find_response
     # so an HTMX continuation always gets a fragment and never the whole page.
     if not config.TMDB_API_KEY:
-        page["error"] = "TMDB_API_KEY is not set. Add it to the environment (or .env) and restart the web UI."
+        page["error"] = "TMDB_API_KEY is not set. Add it under Keys on the Settings page."
         return _find_response(cursor, page)
 
     try:
@@ -1723,7 +1723,7 @@ def classics_page() -> str:
     page = {"titles": [], "error": None}
 
     if not config.TMDB_API_KEY:
-        page["error"] = "TMDB_API_KEY is not set. Add it to the environment (or .env) and restart the web UI."
+        page["error"] = "TMDB_API_KEY is not set. Add it under Keys on the Settings page."
         return render_template("classics.html", **page)
     try:
         watch_index = wi.load(config.WATCH_INDEX_PATH)
@@ -3020,6 +3020,8 @@ _SETTINGS_DEFAULTS = {
     },
     "default_top_n": 3, "min_vote_count": 20, "min_rating": 0, "min_year": 0,
     "recency_half_life_days": 90, "watch_region": "US", "streaming_platforms": [],
+    "returning_shows_lookback_days": 730,
+    "wizard": {"max_questions": 4, "min_questions": 4, "max_tokens": 2000},
     "manual": {"timestamp": "now", "tv_duration_minutes": 45, "movie_duration_minutes": 120},
     "log_level": "WARNING",
 }
@@ -3105,6 +3107,118 @@ def _resolve_settings_config(raw_cfg: dict | None = None) -> dict:
     return _merge_settings_defaults(cfg, raw_cfg or {})
 
 
+_KEY_LABELS = {
+    "TMDB_API_KEY": "TMDB",
+    "ANTHROPIC_API_KEY": "Anthropic (Claude)",
+    "GEMINI_API_KEY": "Google Gemini",
+    "OPENAI_API_KEY": "OpenAI",
+    "TVDB_API_KEY": "TheTVDB",
+    "PLEX_URL": "Plex server URL",
+    "PLEX_TOKEN": "Plex token",
+    "PLEX_WEBHOOK_TOKEN": "Plex webhook token",
+}
+# Not secret, so the page shows it in full.
+_PLAIN_KEYS = {"PLEX_URL"}
+
+
+def _settings_keys() -> list[dict]:
+    """Each key's state for the page. Secret values never leave the server."""
+    saved = config.read_keys_file(config.KEYS_PATH)
+    rows = []
+    for name in config.SETTINGS_KEY_NAMES:
+        value = saved.get(name) or os.environ.get(name, "")
+        if saved.get(name):
+            source = "settings"
+        elif value:
+            source = "environment"
+        else:
+            source = None
+        if name in _PLAIN_KEYS:
+            shown = value
+        else:
+            shown = value[-4:] if len(value) > 8 else ""
+        rows.append({
+            "name": name, "label": _KEY_LABELS[name], "source": source,
+            "shown": shown, "secret": name not in _PLAIN_KEYS,
+        })
+    return rows
+
+
+def _save_keys_file(keys: dict[str, str]) -> None:
+    """Write data/keys.env readable by the owner only, replacing it in one step."""
+    path = config.KEYS_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("# Keys saved on the Settings page. They win over the environment.\n")
+        for name in config.SETTINGS_KEY_NAMES:
+            if keys.get(name):
+                f.write(f"{name}={keys[name]}\n")
+    os.replace(tmp, path)
+
+
+_WATCH_EXPORTS = (
+    ("netflix", "Netflix"), ("prime", "Prime Video"), ("apple_tv", "Apple TV"),
+    ("disney", "Disney+"), ("hbo", "Max (HBO)"),
+)
+_REPO_ROOT = Path(config.__file__).parent
+
+
+def _repo_relative(path: str) -> str:
+    try:
+        return str(Path(path).relative_to(_REPO_ROOT))
+    except ValueError:
+        return path
+
+
+def _settings_exports() -> list[dict]:
+    """Each watch-history export as setup will read it, with its saved event count."""
+    counts = event_store.get_import_info(config.EVENT_DB_PATH)
+    rows = []
+    for provider, label in _WATCH_EXPORTS:
+        paths = config.PLATFORM_PATHS.get(provider) or []
+        rows.append({
+            "provider": provider, "label": label,
+            "paths": [_repo_relative(path) for path in paths],
+            "missing": [_repo_relative(path) for path in paths if not Path(path).exists()],
+            "event_count": counts.get(provider, {}).get("event_count", 0),
+        })
+    return rows
+
+
+def _parse_exports(form, exports: list[dict]) -> dict[str, list[str] | None]:
+    """New platform_paths from the form; providers the form leaves out keep theirs.
+
+    Refuses an export path outside data/ or that does not exist, and turning
+    off a provider whose events are saved: the next rebuild would delete them.
+    """
+    data_dir = os.path.join(os.path.realpath(_REPO_ROOT), "data")
+    platform_paths = {}
+    for row in exports:
+        raw = form.get(f"export_{row['provider']}")
+        if raw is None:
+            continue
+        paths = [line.strip() for line in raw.splitlines() if line.strip()]
+        if [str(_REPO_ROOT / path) for path in paths] == (config.PLATFORM_PATHS.get(row["provider"]) or []):
+            # Unchanged: a path that has gone missing must not block other settings.
+            continue
+        if not paths and row["event_count"]:
+            raise ValueError(
+                f"{row['label']} has {row['event_count']} saved watch events, and the next rebuild "
+                f"would delete them without an export path. Keep its path to keep them."
+            )
+        for path in paths:
+            # Only data/ is checked, so the page can't be used to probe other files.
+            target = os.path.realpath(os.path.join(data_dir, os.pardir, path))
+            if not target.startswith(data_dir + os.sep):
+                raise ValueError(f"{row['label']} export must be inside the data folder: {path}")
+            if not os.path.exists(target):
+                raise ValueError(f"{row['label']} export not found on the server: {path}")
+        platform_paths[row["provider"]] = paths or None
+    return platform_paths
+
+
 def _render_settings_page(
     cfg: dict | None = None,
     *,
@@ -3112,12 +3226,15 @@ def _render_settings_page(
     error: str | None = None,
     rebuild_command: str | None = None,
     reload_deferred: bool = False,
+    keys_saved: bool = False,
 ) -> str:
     resolved_cfg = _resolve_settings_config(cfg if cfg is not None else _load_config_yaml())
     return render_template(
         "settings.html", cfg=resolved_cfg, saved=saved, error=error,
         rebuild_command=rebuild_command,
         reload_deferred=reload_deferred,
+        keys=_settings_keys(), keys_saved=keys_saved,
+        exports=_settings_exports(), disney_profiles=", ".join(config.DISNEY_PROFILES),
     )
 
 
@@ -3222,7 +3339,27 @@ def settings_page() -> str:
     return _render_settings_page(
         saved=saved, rebuild_command=rebuild_command,
         reload_deferred=reload_deferred,
+        keys_saved=request.args.get("keys_saved") == "1",
     )
+
+
+@app.route("/settings/keys", methods=["POST"])
+def settings_keys_save() -> Response:
+    """Save keys from the Settings page. A blank field leaves that key as it is."""
+    keys = config.read_keys_file(config.KEYS_PATH)
+    for name in config.SETTINGS_KEY_NAMES:
+        # Keys never contain whitespace; dropping it also keeps one key per line.
+        value = "".join((request.form.get(f"key_{name}") or "").split())
+        if request.form.get(f"clear_{name}"):
+            keys.pop(name, None)
+        elif value:
+            keys[name] = value
+    _save_keys_file(keys)
+    reload_applied = _reload_app_config()
+    return redirect(url_for(
+        "settings_page", keys_saved="1",
+        reload_deferred="0" if reload_applied else "1",
+    ) + "#keys")
 
 
 @app.route("/settings", methods=["POST"])
@@ -3256,7 +3393,14 @@ def settings_save() -> str:
             "min_rating": _parse_float_field(form, "min_rating", current_cfg["min_rating"]),
             "min_year": _parse_int_field(form, "min_year", current_cfg["min_year"]),
             "recency_half_life_days": _parse_int_field(form, "recency_half_life_days", current_cfg["recency_half_life_days"]),
+            "returning_shows_lookback_days": _parse_int_field(
+                form, "returning_shows_lookback_days", current_cfg["returning_shows_lookback_days"]),
         }
+        wizard_values = {
+            key: _parse_int_field(form, f"wizard_{key}", current_cfg["wizard"][key])
+            for key in ("max_questions", "min_questions", "max_tokens")
+        }
+        export_paths = _parse_exports(form, _settings_exports())
         manual_values = {
             "timestamp": _parse_manual_timestamp(form, current_cfg),
             "tv_duration_minutes": _parse_int_field(form, "manual_tv_duration", current_cfg["manual"]["tv_duration_minutes"]),
@@ -3310,10 +3454,30 @@ def settings_save() -> str:
     cfg["streaming_platforms"] = [p.strip() for p in platforms_str.split(",") if p.strip()] if platforms_str else []
     manual = cfg.setdefault("manual", {})
     manual.update(manual_values)
+    wizard = cfg.setdefault("wizard", {})
+    wizard.update(wizard_values)
     cfg["log_level"] = form.get("log_level", "WARNING")
+    exports_changed = False
+    if export_paths:
+        platform_paths = cfg.setdefault("platform_paths", {})
+        exports_changed = any(
+            [str(_REPO_ROOT / path) for path in paths or []] != (config.PLATFORM_PATHS.get(provider) or [])
+            for provider, paths in export_paths.items()
+        )
+        # One path stays a plain string, as people write it by hand.
+        platform_paths.update({
+            provider: paths[0] if paths and len(paths) == 1 else paths
+            for provider, paths in export_paths.items()
+        })
+    if "disney_profiles" in form:
+        profiles = [name.strip() for name in form["disney_profiles"].split(",") if name.strip()]
+        exports_changed = exports_changed or profiles != list(config.DISNEY_PROFILES)
+        cfg["disney_profiles"] = profiles
 
     updated_cfg = _resolve_settings_config(cfg)
     refresh_profile, refresh_data = _settings_refresh_flags(current_cfg, updated_cfg)
+    if exports_changed:
+        refresh_profile = refresh_data = True
 
     _save_config_yaml(cfg)
     reload_applied = _reload_app_config()
