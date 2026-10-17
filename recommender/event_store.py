@@ -400,6 +400,10 @@ def get_import_info(db_path: str) -> dict[str, dict]:
 
     conn = _connect(db_path)
     try:
+        # The web app creates the database for watchlist and ratings before any
+        # import, so a fresh install has the file but not this table yet.
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='imports'").fetchone():
+            return {}
         rows = conn.execute(
             "SELECT i.provider, i.source_manifest_json, i.snapshot_sha256, i.imported_at, "
             "COUNT(e.id) as event_count "

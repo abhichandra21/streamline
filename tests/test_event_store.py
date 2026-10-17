@@ -719,3 +719,13 @@ def test_last_played_ignores_list_providers_and_keys_shows_by_series(tmp_path):
                     timestamp=datetime(2026, 10, 9, 20, 0))])
     assert last_played(db) == {("Succession", "tv"): "2026-03-01T00:00:00",
                                ("Later", "movie"): "2026-10-09T20:00:00"}
+
+
+def test_import_info_is_empty_for_a_database_with_no_imports_table(tmp_path):
+    # Fresh install: the web app made the database for the watchlist before any import.
+    import sqlite3
+    from recommender.event_store import get_import_info
+    db = tmp_path / "streamline.db"
+    sqlite3.connect(db).execute("CREATE TABLE saved_titles (id INTEGER)").connection.close()
+
+    assert get_import_info(str(db)) == {}
