@@ -3,7 +3,7 @@
 {% block main_class %}wide{% endblock %}
 {% block content %}
 
-{% set settings_sections = [
+{% set settings_sections = ([('get-started', 'Get started')] if not is_set_up else []) + [
   ('keys', 'Keys'),
   ('llm-provider', 'LLM provider'),
   ('recommendations', 'Recommendations'),
@@ -12,8 +12,36 @@
   ('mood-match', 'Mood Match'),
   ('on-deck', 'On Deck'),
   ('logging', 'Logging'),
+] + ([('rebuild', 'Rebuild')] if is_set_up else []) + [
   ('advanced', 'Advanced'),
 ] %}
+
+{#- One way to start a setup run. Paid runs carry the cost box in the same form.
+    form_id: the Rebuild section sits inside the main settings form, and forms
+    can't nest, so its controls point at a separate empty form further down. -#}
+{% macro run_hidden(action) -%}
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="action" value="{{ action }}">
+{%- endmacro %}
+{% macro run_controls(scope, label, paid=False, primary=False, blocked=False, form_id=None) -%}
+  {% set off = setup_run.running or blocked %}
+  {% set form_attr = (' form="' ~ form_id ~ '"') | safe if form_id else '' %}
+  <div class="run-control">
+    {% if paid %}
+    <label class="run-confirm" for="confirm-{{ scope }}">
+      <input type="checkbox" id="confirm-{{ scope }}" name="confirm_cost" value="1"{{ form_attr }}{{ ' disabled' if off }}>
+      <span>I understand this makes paid AI calls</span>
+    </label>
+    {% endif %}
+    <button type="submit" class="{{ 'btn-primary' if primary else 'btn-ghost' }} run-btn"{{ form_attr }}{{ ' disabled' if off }}>{{ label }}</button>
+  </div>
+{%- endmacro %}
+{% macro run_form(scope, action, label, paid=False, primary=False, blocked=False) -%}
+  <form method="post" action="/setup/run" class="run-form">
+    {{ run_hidden(action) }}
+    {{ run_controls(scope, label, paid=paid, primary=primary, blocked=blocked) }}
+  </form>
+{%- endmacro %}
 
 <div class="settings-layout">
 <div class="settings-head">
@@ -40,6 +68,13 @@
     Some changes require a rebuild to take effect. Run:
   </span>
   <pre style="margin:0.5rem 0 0; padding:0.5rem 0.75rem; background:var(--bg); border:1px solid var(--border); border-radius:4px; font-family:'JetBrains Mono', monospace; font-size:0.8rem; color:var(--text); user-select:all;">{{ rebuild_command }}</pre>
+  {% if rebuild_action %}
+  <div class="run-now">
+    <span class="run-now-or">or run it from here:</span>
+    {{ run_form('banner', rebuild_action, 'Run it now', paid=(rebuild_action == 'refresh_profile'), primary=True) }}
+    {% if setup_run.running %}<span class="run-busy">A rebuild is running. Wait for it to finish first.</span>{% endif %}
+  </div>
+  {% endif %}
 </div>
 {% elif saved and reload_deferred %}
 <div style="padding:0.75rem 1.25rem; background:rgba(240,160,64,0.1); border:1px solid rgba(240,160,64,0.25); border-radius:6px; margin-bottom:1.5rem; font-size:0.85rem; color:var(--accent2);">
@@ -55,6 +90,92 @@
 <div style="padding:0.75rem 1.25rem; background:rgba(232,93,74,0.08); border:1px solid rgba(232,93,74,0.2); border-radius:6px; margin-bottom:1.5rem; font-size:0.85rem; color:#e88;">
   {{ error }}
 </div>
+{% endif %}
+
+{% if not is_set_up %}
+<!-- ═══════ GET STARTED (first run only; its run forms stand alone) ═══════ -->
+{% set provider_names = {'anthropic': 'Anthropic', 'gemini': 'Google Gemini', 'openai': 'OpenAI', 'local': 'your local model'} %}
+{% set has_history = checklist.exports_found or checklist.manual_lists %}
+{% set keys_ready = checklist.tmdb_key and checklist.llm_key %}
+<section id="get-started" class="settings-section first-run">
+  <span class="mono first-run-kicker">First run</span>
+  <h2 class="first-run-title">Get started</h2>
+  <p class="first-run-intro">Your library isn't built yet, so the rest of Streamline waits here until it is. Three steps: add your keys, point at your watch-history exports, then build.</p>
+
+  <ol class="first-run-steps">
+    <li class="first-run-step {{ 'is-ready' if keys_ready }}">
+      <span class="first-run-num" aria-hidden="true">1</span>
+      <div class="first-run-body">
+        <div class="first-run-step-head">
+          <h3>Keys</h3>
+          <a href="#keys" class="first-run-jump mono">Go to Keys</a>
+        </div>
+        <ul class="first-run-checks">
+          <li><span class="key-dot {{ 'key-dot-here' if checklist.tmdb_key else 'key-dot-off' }}"></span>
+            {% if checklist.tmdb_key %}TMDB key is set.{% else %}Add a TMDB key. Streamline looks up every title there.{% endif %}</li>
+          <li><span class="key-dot {{ 'key-dot-here' if checklist.llm_key else 'key-dot-off' }}"></span>
+            {% if checklist.provider == 'local' %}Using {{ provider_names.local }}, so no AI key is needed.
+            {% elif checklist.llm_key %}AI key for {{ provider_names.get(checklist.provider, checklist.provider) }} is set (<span class="mono">{{ checklist.llm_key_name }}</span>).
+            {% else %}Add an AI key for {{ provider_names.get(checklist.provider, checklist.provider) }} (<span class="mono">{{ checklist.llm_key_name }}</span>). You can pick a different provider under LLM provider.{% endif %}</li>
+          {% if not checklist.password_set %}
+          <li><span class="key-dot key-dot-off"></span>
+            No password is set, so anyone on your network can open Streamline, including Settings and your keys. Set <span class="mono">STREAMLINE_PASSWORD</span> in <span class="mono">.env</span> to add one.</li>
+          {% endif %}
+        </ul>
+      </div>
+    </li>
+
+    <li class="first-run-step {{ 'is-ready' if has_history }}">
+      <span class="first-run-num" aria-hidden="true">2</span>
+      <div class="first-run-body">
+        <div class="first-run-step-head">
+          <h3>Watch history</h3>
+          <a href="#watch-history" class="first-run-jump mono">Go to Watch history</a>
+        </div>
+        <ul class="first-run-checks">
+          {% if has_history %}
+          <li><span class="key-dot key-dot-here"></span>
+            {% if checklist.exports_found %}Found exports for {{ checklist.exports_found | join(', ') }}.{% else %}No service exports found.{% endif %}
+            {% if checklist.manual_lists %}{{ checklist.manual_lists }} manual list{{ '' if checklist.manual_lists == 1 else 's' }} found.{% endif %}</li>
+          {% else %}
+          <li><span class="key-dot key-dot-off"></span>
+            Nothing found yet. Copy at least one export (for example a Netflix .zip) into the data folder on the server and set its path, or add a manual list.</li>
+          {% endif %}
+          {% for miss in checklist.exports_missing %}
+          <li><span class="key-dot key-dot-off"></span>
+            {{ miss.label }} is set to {% for path in miss.paths %}<span class="mono">{{ path }}</span>{{ ', ' if not loop.last }}{% endfor %}, but {{ 'that file isn\'t' if miss.paths | length == 1 else 'those files aren\'t' }} there. Fix the path under <a href="#watch-history">Watch history exports</a>, or clear it.</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </li>
+
+    <li class="first-run-step">
+      <span class="first-run-num" aria-hidden="true">3</span>
+      <div class="first-run-body">
+        <div class="first-run-step-head"><h3>Build</h3></div>
+        <div class="run-list">
+          <div class="run-item">
+            <div class="run-item-text">
+              <span class="run-item-name">Check exports <span class="run-tag run-tag-free mono">Free</span></span>
+              <span class="run-item-desc">Reads your export files and counts the watches in them. Saves nothing, and makes no title lookups or AI calls. A good first try.</span>
+            </div>
+            {{ run_form('start-check', 'check_exports', 'Check exports') }}
+          </div>
+          <div class="run-item">
+            <div class="run-item-text">
+              <span class="run-item-name">Build my library <span class="run-tag run-tag-paid mono">Paid</span></span>
+              <span class="run-item-desc">Looks up every title and makes an AI call for each one, then writes your taste profile. This costs money and can take a while for a big history.</span>
+              {% if not keys_ready %}<span class="run-blocked">Add the {{ 'TMDB key' if not checklist.tmdb_key }}{{ ' and the ' if not checklist.tmdb_key and not checklist.llm_key }}{{ 'AI key' if not checklist.llm_key }} first.</span>{% endif %}
+            </div>
+            {{ run_form('start-build', 'build', 'Build my library', paid=True, primary=True, blocked=not keys_ready) }}
+          </div>
+        </div>
+        {% if setup_run.running %}<p class="run-busy">A rebuild is running, so these buttons are off until it finishes.</p>{% endif %}
+        {% with embedded = true %}{% include "_setup_status.html" %}{% endwith %}
+      </div>
+    </li>
+  </ol>
+</section>
 {% endif %}
 
 <!-- ═══════ KEYS (its own form) ═══════ -->
@@ -102,6 +223,7 @@
                 {% elif not k.secret and k.shown %}<span class="mono key-tail key-url">{{ k.shown }}</span>{% endif %}
               {% endif %}
             </div>
+            {% if k.secret %}<div class="key-input-wrap">{% endif %}
             <input
               id="key_{{ k.name }}"
               type="{{ 'password' if k.secret else 'url' }}"
@@ -112,6 +234,10 @@
               spellcheck="false"
               placeholder="{% if k.secret %}{{ 'Paste a new key, or leave blank to keep it' if k.source else 'Paste a key' }}{% else %}{{ 'New URL, or leave blank to keep it' if k.source else 'http://192.168.1.10:32400' }}{% endif %}"
             >
+            {% if k.secret %}
+              <button type="button" class="mono key-reveal" data-reveal="key_{{ k.name }}" aria-pressed="false" aria-controls="key_{{ k.name }}" aria-label="Show {{ k.label }} as you type">Show</button>
+            </div>
+            {% endif %}
             {% if k.name == 'PLEX_WEBHOOK_TOKEN' %}
             <span class="form-hint key-warn">Changing this stops Plex plays from being recorded until you update the webhook address in Plex (Settings, Webhooks) to end in <span class="mono">/plex/webhook?token=</span> followed by the new token. Plex does not resend missed plays.</span>
             {% endif %}
@@ -316,6 +442,38 @@
     </div>
   </fieldset>
 
+  {% set rebuild_runs = [
+    ('refresh_data', 'Refresh data', False, 'Reads your exports again and looks up any new titles. New titles may need a few AI calls.'),
+    ('refresh_profile', 'Rebuild taste profile', True, 'Writes your taste profile again from everything you have loved and followed.'),
+    ('rethink_themes', 'Rethink themes', True, 'Works out your taste themes from scratch, then rebuilds the taste profile too.'),
+    ('refresh_imdb', 'Refresh IMDb ratings', False, "Downloads IMDb's latest ratings and rebuilds Find's language lists."),
+    ('check_exports', 'Check exports', False, 'Reads your export files and counts the watches in them. Saves nothing.'),
+  ] %}
+  {% if is_set_up %}
+  <!-- Rebuild. Sits inside the settings form, so its buttons belong to the
+       separate run forms after this form (see the form attribute). -->
+  <fieldset id="rebuild" class="settings-section" style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+    <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Rebuild</legend>
+    <p class="section-intro">Run setup steps from here. One runs at a time, wherever it was started. The terminal commands still work the same. If you set up the weekly timer, it runs Refresh data every Sunday on its own.</p>
+
+    {% with embedded = true %}{% include "_setup_status.html" %}{% endwith %}
+
+    <div class="run-list" style="margin-top:1rem;">
+      {% for action, label, paid, desc in rebuild_runs %}
+      <div class="run-item">
+        <div class="run-item-text">
+          <span class="run-item-name">{{ label }}
+            {% if paid %}<span class="run-tag run-tag-paid mono">Paid</span>{% elif action != 'refresh_data' %}<span class="run-tag run-tag-free mono">Free</span>{% endif %}</span>
+          <span class="run-item-desc">{{ desc }}</span>
+        </div>
+        {{ run_controls('rebuild-' ~ action, label, paid=paid, form_id='run-' ~ action) }}
+      </div>
+      {% endfor %}
+    </div>
+    {% if setup_run.running %}<p class="run-busy">A rebuild is running, so these buttons are off until it finishes.</p>{% endif %}
+  </fieldset>
+  {% endif %}
+
   <!-- ═══════ ADVANCED SETTINGS ═══════ -->
 
   <details id="advanced" class="advanced-details settings-section">
@@ -498,6 +656,13 @@
   </div>
 
 </form>
+
+{% if is_set_up %}
+{# The Rebuild section's buttons submit these, by id. #}
+{% for action, label, paid, desc in rebuild_runs %}
+<form id="run-{{ action }}" method="post" action="/setup/run" hidden>{{ run_hidden(action) }}</form>
+{% endfor %}
+{% endif %}
 </div>
 </div>
 
@@ -688,6 +853,33 @@
   .key-tail { font-size: 0.68rem; color: var(--muted); min-width: 0; }
   .key-url { overflow-wrap: anywhere; color: var(--text); }
   .key-field .form-input { max-width: 440px; }
+  /* Show/Hide sits inside the right edge of a secret field. It needs script,
+     so it stays hidden without it and the field is a plain password box. */
+  .key-input-wrap { position: relative; max-width: 440px; }
+  .key-reveal { display: none; }
+  .js .key-input-wrap .form-input { padding-right: 4.2rem; }
+  .js .key-reveal {
+    display: inline-flex;
+    align-items: center;
+    position: absolute;
+    top: 50%; right: 0.3rem;
+    transform: translateY(-50%);
+    min-width: 3.3rem;
+    justify-content: center;
+    padding: 0.2rem 0.5rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--muted);
+    font-size: 0.58rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .key-reveal:hover { color: var(--text); border-color: var(--muted); }
+  .key-reveal:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .key-reveal[aria-pressed="true"] { color: var(--accent2); border-color: rgba(240,160,64,0.45); }
   .key-clear { display: flex; gap: 0.45rem; align-items: flex-start; font-size: 0.74rem; color: var(--body); cursor: pointer; }
   .key-clear input { margin-top: 0.15rem; flex-shrink: 0; }
   .key-clear .form-hint { display: block; }
@@ -718,6 +910,152 @@
 
   @media (max-width: 639px) {
     .key-row, .export-row { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  /* Get started: three numbered steps, a rule down the left joining them. */
+  .first-run {
+    position: relative;
+    margin-bottom: 1.75rem;
+    padding: 1.5rem 1.5rem 1.25rem;
+    border: 1px solid rgba(232,93,74,0.35);
+    border-radius: 6px;
+    background:
+      radial-gradient(120% 80% at 100% 0%, rgba(232,93,74,0.09), transparent 60%),
+      var(--surface);
+  }
+  .first-run-kicker { font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
+  .first-run-title { font-size: clamp(1.6rem, 3.4vw, 2.1rem); margin: 0.15rem 0 0.4rem; }
+  .first-run-intro { font-size: 0.88rem; color: var(--body); line-height: 1.6; margin: 0 0 1.25rem; max-width: 40rem; }
+  .first-run-steps { list-style: none; margin: 0; padding: 0; }
+  .first-run-step {
+    display: grid;
+    grid-template-columns: 2.25rem minmax(0, 1fr);
+    gap: 0 1rem;
+    position: relative;
+    padding-bottom: 1.25rem;
+  }
+  .first-run-step:last-child { padding-bottom: 0; }
+  .first-run-step:not(:last-child)::before {
+    content: '';
+    position: absolute;
+    left: calc(1.125rem - 0.5px);
+    top: 2.4rem;
+    bottom: 0.15rem;
+    border-left: 1px dashed var(--border);
+  }
+  .first-run-num {
+    width: 2.25rem; height: 2.25rem;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--bg);
+    font-family: 'DM Serif Display', serif;
+    font-size: 1.15rem;
+    color: var(--muted);
+  }
+  .first-run-step.is-ready .first-run-num { border-color: var(--yours); color: var(--yours); }
+  .first-run-step:last-child .first-run-num { border-color: var(--accent); color: var(--accent); }
+  .first-run-body { min-width: 0; padding-top: 0.3rem; }
+  .first-run-step-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem 1rem; flex-wrap: wrap; }
+  .first-run-step-head h3 { font-family: 'DM Serif Display', serif; font-weight: 400; font-size: 1.15rem; margin: 0; color: var(--text); }
+  .first-run-jump { font-size: 0.6rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+  .first-run-checks { list-style: none; margin: 0.5rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+  .first-run-checks li { position: relative; padding-left: 1.05rem; font-size: 0.8rem; color: var(--body); line-height: 1.5; overflow-wrap: anywhere; }
+  .first-run-checks .key-dot { position: absolute; left: 0; top: 0.45rem; }
+  .first-run-checks .mono { font-size: 0.68rem; color: var(--muted); }
+  @media (hover: hover) {
+    .first-run-jump:hover { color: var(--text); }
+  }
+
+  /* Setup runs: one row per action, its button on the right. */
+  .run-list { display: flex; flex-direction: column; margin-top: 0.6rem; }
+  .run-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.6rem 1.25rem;
+    align-items: center;
+    padding: 0.8rem 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .run-item:first-child { padding-top: 0.2rem; }
+  .run-item:last-child { border-bottom: none; }
+  .run-item-text { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+  .run-item-name { font-size: 0.86rem; color: var(--text); display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  .run-item-desc { font-size: 0.74rem; color: var(--muted); line-height: 1.5; }
+  .run-tag { font-size: 0.52rem; letter-spacing: 0.1em; text-transform: uppercase; padding: 0.12rem 0.4rem; border-radius: 3px; border: 1px solid; }
+  .run-tag-free { color: var(--yours); border-color: rgba(163,207,98,0.4); }
+  .run-tag-paid { color: var(--accent2); border-color: rgba(240,160,64,0.45); }
+  .run-blocked { font-size: 0.72rem; color: #e88; }
+  .run-busy { font-size: 0.74rem; color: var(--accent2); margin: 0.6rem 0 0; }
+  .run-form { margin: 0; }
+  .run-control { display: flex; flex-direction: column; align-items: flex-end; gap: 0.45rem; }
+  .run-btn { padding: 0.55rem 1.1rem; white-space: nowrap; }
+  .run-btn:disabled, .run-btn:disabled:hover {
+    opacity: 0.4; cursor: not-allowed; transform: none;
+    background: transparent; color: var(--muted); border: 1px solid var(--border);
+  }
+  .run-confirm { display: flex; gap: 0.4rem; align-items: flex-start; font-size: 0.7rem; color: var(--body); cursor: pointer; text-align: right; }
+  .run-confirm input { margin-top: 0.1rem; flex-shrink: 0; }
+  .run-now { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem 1rem; margin-top: 0.75rem; }
+  .run-now-or { font-size: 0.78rem; color: var(--body); }
+  .run-now .run-control { flex-direction: row-reverse; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem 0.9rem; }
+  .run-now .run-confirm { text-align: left; }
+  @media (max-width: 639px) {
+    .run-item { grid-template-columns: minmax(0, 1fr); }
+    .run-control { align-items: flex-start; }
+    .run-confirm { text-align: left; }
+    .first-run { padding: 1.25rem 1rem 1rem; }
+    .first-run-step { grid-template-columns: 1.9rem minmax(0, 1fr); gap: 0 0.75rem; }
+    .first-run-num { width: 1.9rem; height: 1.9rem; font-size: 1rem; }
+    .first-run-step:not(:last-child)::before { left: calc(0.95rem - 0.5px); top: 2.05rem; }
+  }
+
+  /* Last or current run (the _setup_status.html fragment). */
+  .run-status {
+    margin-top: 1rem;
+    padding: 0.8rem 1rem;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--muted);
+    border-radius: 4px;
+    background: var(--bg);
+    min-width: 0;
+  }
+  .run-status-none { border-left-color: var(--border); }
+  .run-status-running { border-left-color: var(--accent2); }
+  .run-status-done { border-left-color: var(--yours); }
+  .run-status-failed, .run-status-stopped { border-left-color: var(--accent); }
+  .run-status-head { display: flex; align-items: center; gap: 0.55rem; }
+  .run-status-title { font-size: 0.86rem; color: var(--text); }
+  .run-status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--muted); }
+  .run-status-running .run-status-dot { background: var(--accent2); animation: run-pulse 1.6s ease-in-out infinite; }
+  .run-status-done .run-status-dot { background: var(--yours); }
+  .run-status-failed .run-status-dot, .run-status-stopped .run-status-dot { background: var(--accent); }
+  .run-status-meta { font-size: 0.72rem; color: var(--muted); margin: 0.3rem 0 0; line-height: 1.5; }
+  .run-status-meta.mono { font-size: 0.64rem; letter-spacing: 0.03em; }
+  .run-status-note { font-size: 0.7rem; color: var(--muted); margin: 0.5rem 0 0; }
+  .run-status-log {
+    margin: 0.6rem 0 0;
+    padding: 0.55rem 0.7rem;
+    max-height: 14rem;
+    overflow: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.66rem;
+    line-height: 1.6;
+    color: var(--body);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .run-status-next { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.75rem; }
+  .run-status-link { padding: 0.5rem 1rem; display: inline-block; text-decoration: none; }
+  @keyframes run-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(240,160,64,0.45); }
+    50% { box-shadow: 0 0 0 5px rgba(240,160,64,0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .run-status-running .run-status-dot { animation: none; }
   }
 
   /* Advanced accordion */
@@ -781,6 +1119,20 @@
       syncManualTimestampInput();
     }
   })();
+
+  // Show/Hide flips a secret field between hidden and plain text. It only
+  // reveals what is typed in the box; saved keys never reach the page.
+  document.querySelectorAll('.key-reveal').forEach(function(btn) {
+    var input = document.getElementById(btn.getAttribute('data-reveal'));
+    if (!input) return;
+    btn.addEventListener('click', function() {
+      var show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      btn.textContent = show ? 'Hide' : 'Show';
+      // The label stays fixed; aria-pressed carries the on/off state.
+      btn.setAttribute('aria-pressed', show ? 'true' : 'false');
+    });
+  });
 
   (function() {
     var advanced = document.getElementById('advanced');

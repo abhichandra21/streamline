@@ -33,7 +33,7 @@ The newer rating wins.
 Rating in Plex sends no webhook, so run `./recommend plex ratings` to bring rating changes over by hand.
 Streamline never writes anything to Plex.
 
-New plays reach the Archive after the next `./recommend setup --refresh-data` and a web restart.
+New plays reach the Archive after the next **Refresh data** in Settings (or `./recommend setup --refresh-data`).
 
 ## Removing a wrong play
 

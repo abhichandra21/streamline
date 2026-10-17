@@ -597,44 +597,6 @@ def test_web_module_initializes_logging_on_import():
         importlib.reload(web_module)
 
 
-def test_recommend_web_uses_runtime_provider_for_api_key_check(tmp_path, monkeypatch):
-    repo_root = Path(__file__).resolve().parent.parent
-    script_path = tmp_path / "recommend-web"
-    shutil.copy(repo_root / "recommend-web", script_path)
-
-    activate_path = tmp_path / ".venv" / "bin"
-    activate_path.mkdir(parents=True)
-    current_python_bin = Path(sys.executable).parent
-    (activate_path / "activate").write_text(
-        f'export PATH="{current_python_bin}:$PATH"\n'
-        f'export VIRTUAL_ENV="{current_python_bin.parent}"\n'
-    )
-
-    cfg = yaml.safe_load((repo_root / "config.yaml").read_text())
-    cfg["provider"] = "openai"
-    (tmp_path / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
-
-    env = os.environ.copy()
-    env["STREAMLINE_PORT"] = "5157"
-    env["TMDB_API_KEY"] = "tmdb"
-    env["ANTHROPIC_API_KEY"] = "anthropic"
-    env["LLM_PROVIDER"] = "anthropic"
-    env.pop("OPENAI_API_KEY", None)
-
-    result = subprocess.run(
-        ["bash", str(script_path), "start"],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 1
-    assert "taste profile not found" in result.stderr
-    assert "OPENAI_API_KEY" not in result.stderr
-
-
 # ── 3b: apple_tv key in PLATFORM_PATHS ────────────────────────────────────
 
 def test_apple_tv_key_present_in_platform_paths():

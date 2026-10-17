@@ -164,3 +164,10 @@ class TestSavedKeys:
         monkeypatch.setenv("TMDB_API_KEY", "from-env")
         monkeypatch.setattr(config, "_saved_keys", {})
         assert config._secret("TMDB_API_KEY") == "from-env"
+
+
+def test_a_folder_where_config_local_yaml_should_be_is_ignored(tmp_path):
+    # Docker makes a folder when the bind-mounted file is missing on the host.
+    folder = tmp_path / "config.local.yaml"
+    folder.mkdir()
+    assert config._load_yaml(folder) == {}

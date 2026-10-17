@@ -2,7 +2,7 @@
 # Set API keys in the environment. .env is optional local convenience.
 # Put machine-specific watch-history paths in config.local.yaml.
 
-log_level: DEBUG
+log_level: INFO
 provider: anthropic
 models:
   anthropic:

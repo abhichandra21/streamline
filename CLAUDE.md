@@ -45,7 +45,8 @@ python3 -m pytest tests/test_query_engine.py -v
 ./recommend setup                              # first-time offline setup
 ./recommend setup --refresh-data               # re-fetch TMDB + rebuild all
 ./recommend setup --refresh-profile            # rebuild taste profile only
-./recommend setup --ingest-only                # validate configured provider zips
+./recommend setup --check-exports             # read exports and count watches; saves nothing
+./recommend setup --ingest-only                # import exports into SQLite, no TMDB or LLM calls
 ./recommend setup --refresh-imdb               # re-download IMDb ratings, rebuild Find's language lists
 ./recommend --debug "spy thriller"             # full pipeline trace
 ./recommend --provider gemini "spy thriller"   # use Gemini instead of default
@@ -103,6 +104,7 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `recommender/enricher.py` — LLM enrichment (role=fast), 30s timeout, rate limit retry. Only caches successful responses. Identity-keyed index (`content_type/tmdb_id` or `unknown/slug`).
 - `recommender/taste_profile_builder.py` — Batched prose profile builder (200 titles/batch, rate limit retry, merge pass). No top-N limit. Rebuilt only on request (`--refresh-profile`, `--rethink-themes`, or first install); `--refresh-data` never rebuilds it.
 - `recommender/taste_tags.py`, `taste_themes.py`, `taste_rows.py` — Taste rows built from Loved titles (Rate It, followed shows): 5-8 tags per title, a 10-16 theme map, code placement with saved AI placements for unclear titles, saved row words. All cached, so an unchanged rebuild makes no LLM calls.
+- `recommender/setup_runs.py` — One setup run at a time: every `recommender.setup` run (terminal, timer, web) holds `cache/setup.lock` and writes `cache/setup_status.json` at start and end. Settings starts runs as their own process (`python -u -m recommender.setup <flag>`, output in `logs/setup-<time>.log`) and shows the last one. Before the first build every page except Settings, `/setup/`, `/healthz`, the Plex webhook, `/api/`, logs and help redirects to Settings `#get-started`; the shared context reloads when `watch_index.json` or `taste_profile.txt` changes, so no restart is needed after a rebuild.
 - `recommender/show_tracker.py` — On Deck: followed shows, release snapshots, ready-now / Coming soon / Worth following sections.
 - `recommender/signals.py` — Scoring. Every watched title scores 1.0 by default (`scoring.use_viewing_signals: false`); when on, completion (50%) + rewatch (30%) + true half-life recency decay (20%).
 - `recommender/query_engine.py` — Full online pipeline. "Why not X?" trace mode, conversational context, platform filtering.

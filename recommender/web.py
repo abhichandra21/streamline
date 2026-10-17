@@ -30,6 +30,7 @@ from recommender import imdb_ratings
 from recommender import language_catalog
 from recommender import plex
 from recommender import show_tracker
+from recommender import setup_runs
 from recommender import user_store
 from recommender import watch_index as wi
 from recommender import event_store
@@ -74,6 +75,7 @@ setup_logging()
 # ── Shared context (read-only after build; rebuilt on config change) ──────────
 _ctx: RecommendContext | None = None
 _ctx_lock = threading.Lock()
+_ctx_built_from: tuple | None = None
 _config_reload_pending = False
 
 # Only one release refresh runs at a time. Pages keep rendering cached data
@@ -112,11 +114,26 @@ def _ensure_user_store_once() -> None:
         _user_store_ready = True
 
 
+def _setup_outputs_mtime() -> tuple | None:
+    """When setup last wrote the files the shared context is built from."""
+    try:
+        times = [Path(config.WATCH_INDEX_PATH).stat().st_mtime, Path(config.TASTE_PROFILE_PATH).stat().st_mtime]
+    except OSError:
+        return None
+    structured = Path(config.STRUCTURED_TASTE_PROFILE_PATH)
+    # Written after the prose profile, so a request in between must not keep the old one.
+    times.append(structured.stat().st_mtime if structured.exists() else None)
+    return tuple(times)
+
+
 def _get_context() -> RecommendContext:
-    global _ctx
+    """The shared context, rebuilt when a setup run (anywhere) has rewritten its files."""
+    global _ctx, _ctx_built_from
     with _ctx_lock:
-        if _ctx is None:
+        built_from = _setup_outputs_mtime()
+        if _ctx is None or built_from != _ctx_built_from:
             _ctx = _build_context()
+            _ctx_built_from = built_from
     return _ctx
 
 
@@ -541,6 +558,27 @@ def _release_time(value: str | None) -> str:
     return f"{hour}{minutes} {'AM' if parsed.hour < 12 else 'PM'}"
 
 
+@app.template_filter("run_time")
+def _run_time(epoch: float | None) -> str:
+    """A setup run's start or end in Central time, as "Sun Oct 18, 4:05 AM"."""
+    if not epoch:
+        return ""
+    moment = datetime.fromtimestamp(epoch, ZoneInfo("America/Chicago"))
+    return f"{moment:%a %b} {moment.day}, {moment.hour % 12 or 12}:{moment:%M} {moment:%p}"
+
+
+@app.template_filter("run_length")
+def _run_length(status: dict | None) -> str:
+    """How long a run took, or has taken so far, as "42 sec" or "1 hr 5 min"."""
+    if not status or not status.get("started_at"):
+        return ""
+    seconds = int((status.get("finished_at") or time.time()) - status["started_at"])
+    if seconds < 60:
+        return f"{seconds} sec"
+    minutes = seconds // 60
+    return f"{minutes // 60} hr {minutes % 60} min" if minutes >= 60 else f"{minutes} min"
+
+
 def _length_of(content_type: str, raw: dict) -> tuple[str, int]:
     """How much of an evening a title asks for, as a label and a sort key.
 
@@ -823,6 +861,28 @@ def _check_csrf() -> tuple | None:
         log.warning("CSRF validation failed for %s %s", request.method, request.path)
         return "Invalid or missing CSRF token", 403
     return None
+
+
+# ── First run ─────────────────────────────────────────────────────────────────
+
+# Pages that work before the library is built; everything else needs it.
+_PRE_SETUP_PATHS = ("/settings", "/setup/", "/static/", "/healthz", PLEX_WEBHOOK_PATH,
+                    "/api/", "/logs", "/help", "/status")
+
+
+def _is_set_up() -> bool:
+    return Path(config.WATCH_INDEX_PATH).exists() and Path(config.TASTE_PROFILE_PATH).exists()
+
+
+@app.before_request
+def _send_to_first_run() -> Response | None:
+    if _is_set_up() or request.path.startswith(_PRE_SETUP_PATHS):
+        return None
+    target = url_for("settings_page") + "#get-started"
+    if request.headers.get("HX-Request"):
+        # A swapped-in fragment can't redirect the page; HTMX does it on this header.
+        return Response(status=204, headers={"HX-Redirect": target})
+    return redirect(target)
 
 
 # ── Plex webhook ──────────────────────────────────────────────────────────────
@@ -3039,7 +3099,8 @@ _PROFILE_REBUILD_SCORING_KEYS = (
 
 
 def _read_yaml(path: Path) -> dict:
-    if not path.exists():
+    # A folder here is Docker's doing; the save below says how to fix it.
+    if not path.is_file():
         return {}
     with open(path) as f:
         return yaml.safe_load(f) or {}
@@ -3219,6 +3280,41 @@ def _parse_exports(form, exports: list[dict]) -> dict[str, list[str] | None]:
     return platform_paths
 
 
+# The terminal command Settings asks for -> the button that runs it.
+_REBUILD_ACTIONS = {
+    "./recommend setup --refresh-data": "refresh_data",
+    "./recommend setup --refresh-profile": "refresh_profile",
+}
+
+
+def _first_run_checklist() -> dict:
+    """What a fresh install still needs before its first build."""
+    provider = config.LLM_PROVIDER
+    llm_key_name = config.get_llm_api_key_env(provider)
+    # Read saved keys directly: a background job can hold off applying them to config.
+    saved_keys = config.read_keys_file(config.KEYS_PATH)
+
+    def key_set(name: str) -> bool:
+        return bool(saved_keys.get(name) or getattr(config, name, "") or os.environ.get(name))
+
+    exports = _settings_exports()
+    manual = [path for path in (config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH) if path and Path(path).exists()]
+    return {
+        "tmdb_key": key_set("TMDB_API_KEY"),
+        "provider": provider,
+        "llm_key_name": llm_key_name,
+        "llm_key": provider == "local" or key_set(llm_key_name),
+        "exports_found": [row["label"] for row in exports if row["paths"] and not row["missing"]],
+        # Only paths someone set: a built-in default that isn't there is just unused.
+        "exports_missing": [
+            {"label": row["label"], "paths": row["missing"]}
+            for row in exports if row["missing"] and row["provider"] in config.CONFIGURED_PLATFORMS
+        ],
+        "manual_lists": len(manual),
+        "password_set": bool(os.environ.get("STREAMLINE_PASSWORD", "").strip()),
+    }
+
+
 def _render_settings_page(
     cfg: dict | None = None,
     *,
@@ -3235,6 +3331,8 @@ def _render_settings_page(
         reload_deferred=reload_deferred,
         keys=_settings_keys(), keys_saved=keys_saved,
         exports=_settings_exports(), disney_profiles=", ".join(config.DISNEY_PROFILES),
+        is_set_up=_is_set_up(), checklist=_first_run_checklist(), setup_run=setup_runs.current(),
+        rebuild_action=_REBUILD_ACTIONS.get(rebuild_command or ""),
     )
 
 
@@ -3369,6 +3467,11 @@ def settings_save() -> str:
     form = request.form
 
     try:
+        if _local_config_path().is_dir():
+            raise ValueError(
+                "config.local.yaml is a folder, so settings can't be saved. Docker makes one when the file "
+                "is missing. Stop the container, delete that folder, run touch config.local.yaml, and start again."
+            )
         llm_values = {
             key: _parse_int_field(form, f"llm_{key}", current_cfg["llm"][key])
             for key in (
@@ -3483,7 +3586,9 @@ def settings_save() -> str:
     reload_applied = _reload_app_config()
 
     rebuild_command = None
-    if refresh_data:
+    if not _is_set_up():
+        pass  # the first build does all of this, and Get started offers it
+    elif refresh_data:
         rebuild_command = "./recommend setup --refresh-data"
     elif refresh_profile:
         rebuild_command = "./recommend setup --refresh-profile"
@@ -3494,6 +3599,42 @@ def settings_save() -> str:
         rebuild_command=rebuild_command or "",
         reload_deferred="1" if not reload_applied else "0",
     ))
+
+
+@app.route("/setup/run", methods=["POST"])
+def setup_run() -> Response | str:
+    """Start a setup run from Settings. Paid runs need the cost box ticked."""
+    action = request.form.get("action", "")
+    if action not in setup_runs.ACTIONS:
+        return _render_settings_page(saved=False, error="Unknown rebuild."), 400
+    if action in setup_runs.PAID_ACTIONS and request.form.get("confirm_cost") != "1":
+        return _render_settings_page(
+            saved=False, error="This makes paid AI calls. Tick the box to confirm, then start it again.")
+    if not setup_runs.start(action):
+        return _render_settings_page(saved=False, error="A rebuild is already running. Wait for it to finish.")
+    return redirect(url_for("settings_page") + ("#rebuild" if _is_set_up() else "#get-started"))
+
+
+@app.route("/setup/status")
+def setup_status() -> Response | str:
+    """The current or last run, for Settings to poll.
+
+    A page with a run going polls with watching=1. An idle page polls slowly with
+    since=<its last run's start> and only hears back once a new run has started,
+    from here or a terminal.
+    """
+    run = setup_runs.current()
+    since = request.args.get("since")
+    if since is not None:
+        started = str((run["status"] or {}).get("started_at") or 0)
+        if run["running"] or started != since:
+            return Response("", headers={"HX-Refresh": "true"})
+        return Response(status=204)  # nothing new; htmx leaves the page alone
+    html = render_template("_setup_status.html", setup_run=run, is_set_up=_is_set_up())
+    if request.args.get("watching") and not run["running"]:
+        # The run the page was watching ended; reload so the buttons and checklist catch up.
+        return Response(html, headers={"HX-Refresh": "true"})
+    return html
 
 
 # ── Read-only API ─────────────────────────────────────────────────────────────
@@ -3523,8 +3664,8 @@ def run() -> None:
     try:
         validate_config()
     except RuntimeError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)
+        # Still start: Settings is where keys are added on a fresh install.
+        print(f"Note: {exc} Open Settings in the web UI.", file=sys.stderr)
     host = os.environ.get("STREAMLINE_HOST", "127.0.0.1")
     port = int(os.environ.get("STREAMLINE_PORT", "5051"))
     print(f"Starting Streamline web UI at http://{host}:{port}")

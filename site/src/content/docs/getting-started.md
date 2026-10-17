@@ -1,10 +1,10 @@
 ---
 title: Getting started
-description: Install Streamline, run setup once, then use it from the browser.
+description: Install Streamline, then set it up and use it from the browser.
 ---
 
-Streamline is used from the browser.
-The terminal is only needed to install it, to run setup, and to rebuild after big changes.
+Streamline is used from the browser, setup included.
+The terminal is only needed to install it and copy your exports onto the machine; every step after that also works from the terminal if you prefer.
 
 Prefer Docker? Follow [Docker](/guides/docker/) instead of steps 1 to 4, then continue from step 5.
 
@@ -19,42 +19,29 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Put your keys in a `.env` file in the same folder. It is gitignored.
-
-```bash
-TMDB_API_KEY=your_key_here
-ANTHROPIC_API_KEY=your_key_here
-```
-
-## 2. Add your watch history
+## 2. Copy in your watch history
 
 Download your history export from each service you use; [Watch history](/guides/watch-history/) says where to find each one.
-Copy `config.local.example.yaml` to `config.local.yaml` and point it at the zips, with `null` for services you don't use:
+Copy the files into the `data/` folder, for example `data/netflix/export.zip`.
 
-```yaml
-platform_paths:
-  netflix: data/netflix/export.zip
-  prime: data/prime_video/Prime Video.zip
-  apple_tv: null
-```
-
-## 3. Run setup once
-
-```bash
-./recommend setup
-```
-
-Setup matches every title on TMDB, writes a short description of each with the fast model, and builds a first taste profile.
-It makes one fast-model call per title, so a large history takes a while and costs a little.
-Descriptions are cached, so later runs only pay for new titles.
-
-## 4. Open the web UI
+## 3. Start the web UI
 
 ```bash
 ./recommend-web start
 ```
 
 Open [http://localhost:5051](http://localhost:5051).
+Until your library is built, every page takes you to **Get started** at the top of Settings.
+
+## 4. Get started in Settings
+
+1. Under **Keys**, paste your TMDB key and the key for your AI provider. (Keys in a `.env` file in the same folder work too.)
+2. Under **Watch history**, point each service at its export file, and leave the ones you don't use empty.
+3. Press **Check exports**. It reads the files and counts your watches, with no TMDB or AI calls.
+4. Press **Build my library**. It matches every title on TMDB, writes a short description of each with the fast model, and builds a first taste profile. That is one AI call per title, so a large history takes a while and costs a little. The page shows how it is going.
+
+Descriptions are cached, so later rebuilds only pay for new titles.
+From the terminal, `./recommend setup` does the same build.
 
 ![The home page: a search box, and below it the taste rows](../../assets/screenshots/home.jpg)
 
@@ -79,12 +66,7 @@ Open **Archive**, then **Rate It**, and tap through your history.
 ![Rate It: tap the titles you loved](../../assets/screenshots/rate-it.jpg)
 
 Your ratings count in searches straight away.
-To update the taste rows on the home page, run:
-
-```bash
-./recommend setup --refresh-profile
-```
-
+To update the taste rows on the home page, press **Rebuild taste profile** under Rebuild in Settings, or run `./recommend setup --refresh-profile`.
 The app reminds you when the profile is out of date.
 
 ## 6. Make it yours

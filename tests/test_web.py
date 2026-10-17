@@ -1318,6 +1318,24 @@ class TestSettingsExports:
         assert saved["disney_profiles"] == ["Abhishek", "Kids"]
         assert "refresh-data" in resp.headers["Location"]
 
+    def test_a_config_local_folder_shows_how_to_fix_it(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(web, "_CONFIG_PATH", tmp_path / "config.yaml")
+        (tmp_path / "config.local.yaml").mkdir()
+
+        assert client.get("/settings").status_code == 200
+        resp, save = self._post(client, [self.HBO])
+        assert "config.local.yaml is a folder" in resp.data.decode()
+        save.assert_not_called()
+
+    def test_before_the_first_build_saving_exports_asks_for_no_rebuild(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(web, "_REPO_ROOT", tmp_path)
+        monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(tmp_path / "watch_index.json"))
+        (tmp_path / "data" / "max-export").mkdir(parents=True)
+        resp, save = self._post(client, [self.HBO], export_hbo="data/max-export\n")
+
+        save.assert_called_once()
+        assert "refresh" not in resp.headers["Location"]
+
     def test_wizard_and_returning_show_fields_are_saved(self, client):
         resp, save = self._post(
             client, [], wizard_max_questions="6", wizard_min_questions="3", wizard_max_tokens="2500",
@@ -2906,13 +2924,12 @@ class TestFind(FindTestSupport):
         assert call["tmdb"].api_key == "test-key"
         assert call["cache_dir"] == web.config.FIND_CACHE_DIR
 
-    def test_missing_watch_index_says_run_setup_and_makes_no_tmdb_request(self, client, find_env, monkeypatch, tmp_path):
+    def test_missing_watch_index_sends_you_to_first_run_setup(self, client, find_env, monkeypatch, tmp_path):
         monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(tmp_path / "missing.json"))
         with patch("recommender.tmdb_client.requests.get", side_effect=AssertionError("no TMDB")):
             resp = client.get("/find")
-        body = resp.get_data(as_text=True)
-        assert resp.status_code == 200
-        assert "Run ./recommend setup" in body
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/settings#get-started")
         assert find_env["finder"] == []
 
     @pytest.mark.parametrize("payload", ["{not json", "{}", "[1, 2]", '{"a": 1}', "null"])
@@ -3170,12 +3187,11 @@ class TestFindRendering(FindTestSupport):
         assert 'class="find-more"' in body and "Try again" in body
         assert 'href="/find?period=1y&amp;cursor=1.12&amp;start=10"' in body
 
-    def test_htmx_continuation_missing_index_returns_setup_fragment(self, client, find_env, monkeypatch, tmp_path):
+    def test_htmx_continuation_missing_index_redirects_the_page_to_setup(self, client, find_env, monkeypatch, tmp_path):
         monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(tmp_path / "gone.json"))
-        body = client.get("/find?cursor=1.12&start=10", headers={"HX-Request": "true"}).get_data(as_text=True)
-        assert "<html" not in body and "<aside" not in body
-        assert "Run ./recommend setup" in body
-        assert 'class="find-more"' in body and "Try again" in body
+        resp = client.get("/find?cursor=1.12&start=10", headers={"HX-Request": "true"})
+        assert resp.status_code == 204
+        assert resp.headers["HX-Redirect"].endswith("/settings#get-started")
 
     def test_htmx_continuation_missing_key_returns_fragment(self, client, find_env, monkeypatch):
         monkeypatch.setattr(web.config, "TMDB_API_KEY", "")
@@ -4028,3 +4044,143 @@ def test_release_time_filter_reads_like_a_clock():
     assert web._release_time("2026-10-21T00:00:00-05:00") == "12 AM"
     assert web._release_time("2026-10-21T12:00:00-05:00") == "12 PM"
     assert web._release_time(None) == ""
+
+
+def test_shared_context_is_rebuilt_after_a_setup_run_rewrites_its_files(tmp_path, monkeypatch):
+    import os
+    index, profile = tmp_path / "watch_index.json", tmp_path / "taste_profile.txt"
+    index.write_text("{}")
+    profile.write_text("x")
+    monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(index))
+    monkeypatch.setattr(web.config, "TASTE_PROFILE_PATH", str(profile))
+    monkeypatch.setattr(web, "_ctx", None)
+    monkeypatch.setattr(web, "_build_context", lambda: object())
+
+    first = web._get_context()
+    assert web._get_context() is first
+
+    later = index.stat().st_mtime + 60
+    os.utime(index, (later, later))
+    assert web._get_context() is not first
+
+
+class TestSetupFromSettings:
+    @pytest.fixture
+    def not_set_up(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(tmp_path / "watch_index.json"))
+        monkeypatch.setattr(web.config, "TASTE_PROFILE_PATH", str(tmp_path / "taste_profile.txt"))
+
+    def test_before_the_first_build_pages_go_to_get_started_but_settings_works(self, client, not_set_up):
+        resp = client.get("/")
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/settings#get-started")
+        assert client.get("/settings").status_code == 200
+        assert client.get("/healthz").status_code == 503
+
+    @patch("recommender.web.setup_runs.start", return_value=True)
+    def test_a_paid_run_needs_the_cost_box(self, start, client, not_set_up):
+        resp = client.post("/setup/run", data=_csrf_form(action="build"))
+        assert "paid AI calls" in resp.data.decode()
+        start.assert_not_called()
+
+        resp = client.post("/setup/run", data=_csrf_form(action="build", confirm_cost="1"))
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("#get-started")
+        start.assert_called_once_with("build")
+
+    @patch("recommender.web.setup_runs.start", return_value=True)
+    def test_a_free_run_starts_without_confirming(self, start, client, not_set_up):
+        client.post("/setup/run", data=_csrf_form(action="check_exports"))
+        start.assert_called_once_with("check_exports")
+
+    @patch("recommender.web.setup_runs.start", return_value=False)
+    def test_a_second_run_is_turned_away(self, start, client, not_set_up):
+        resp = client.post("/setup/run", data=_csrf_form(action="refresh_data"))
+        assert "already running" in resp.data.decode()
+
+    def test_an_unknown_action_is_refused(self, client, not_set_up):
+        with patch("recommender.web.setup_runs.start") as start:
+            resp = client.post("/setup/run", data=_csrf_form(action="rm -rf"))
+        assert resp.status_code == 400
+        start.assert_not_called()
+
+    def test_checklist_reports_missing_keys(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(web.config, "KEYS_PATH", tmp_path / "keys.env")
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "")
+        monkeypatch.delenv("TMDB_API_KEY", raising=False)
+        monkeypatch.setattr(web.config, "LLM_PROVIDER", "anthropic")
+        monkeypatch.setattr(web.config, "ANTHROPIC_API_KEY", "")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(web, "_settings_exports", lambda: [])
+
+        checklist = web._first_run_checklist()
+        assert checklist["tmdb_key"] is False
+        assert checklist["llm_key"] is False
+        assert checklist["llm_key_name"] == "ANTHROPIC_API_KEY"
+
+    def test_checklist_sees_a_saved_key_before_config_reloads(self, monkeypatch, tmp_path):
+        keys = tmp_path / "keys.env"
+        keys.write_text("TMDB_API_KEY=saved-1234\n")
+        monkeypatch.setattr(web.config, "KEYS_PATH", keys)
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "")  # reload held off by a background job
+        monkeypatch.delenv("TMDB_API_KEY", raising=False)
+        monkeypatch.setattr(web, "_settings_exports", lambda: [])
+
+        assert web._first_run_checklist()["tmdb_key"] is True
+
+    def test_status_poll_reloads_the_page_when_the_watched_run_ends(self, client):
+        idle = {"running": False, "state": "done", "status": {"action": "check_exports"}, "log_tail": []}
+        with patch("recommender.web.setup_runs.current", return_value=idle):
+            assert client.get("/setup/status?watching=1").headers.get("HX-Refresh") == "true"
+            assert "HX-Refresh" not in client.get("/setup/status").headers
+        busy = {**idle, "running": True, "state": "running"}
+        with patch("recommender.web.setup_runs.current", return_value=busy):
+            assert "HX-Refresh" not in client.get("/setup/status?watching=1").headers
+
+    def test_an_idle_page_reloads_only_when_a_new_run_has_started(self, client):
+        last = {"running": False, "state": "done", "status": {"started_at": 100.5}, "log_tail": []}
+        with patch("recommender.web.setup_runs.current", return_value=last):
+            assert client.get("/setup/status?since=100.5").status_code == 204
+            # A terminal run started and ended between two polls.
+            assert client.get("/setup/status?since=50.0").headers.get("HX-Refresh") == "true"
+        with patch("recommender.web.setup_runs.current", return_value={**last, "running": True}):
+            assert client.get("/setup/status?since=100.5").headers.get("HX-Refresh") == "true"
+        never = {"running": False, "state": None, "status": None, "log_tail": []}
+        with patch("recommender.web.setup_runs.current", return_value=never):
+            assert client.get("/setup/status?since=0").status_code == 204
+
+    def test_checklist_names_a_set_export_whose_file_is_missing(self, monkeypatch):
+        monkeypatch.setattr(web, "_settings_exports", lambda: [
+            {"provider": "netflix", "label": "Netflix", "paths": ["data/netflix/x.zip"], "missing": ["data/netflix/x.zip"]},
+            {"provider": "prime", "label": "Prime Video", "paths": ["data/p.zip"], "missing": ["data/p.zip"]},
+            {"provider": "hbo", "label": "Max", "paths": ["data/Max"], "missing": []},
+        ])
+        # Prime is only the built-in default, so its missing file is not worth flagging.
+        monkeypatch.setattr(web.config, "CONFIGURED_PLATFORMS", frozenset({"netflix", "hbo"}))
+        monkeypatch.setenv("STREAMLINE_PASSWORD", "")
+
+        checklist = web._first_run_checklist()
+        assert checklist["exports_found"] == ["Max"]
+        assert checklist["exports_missing"] == [{"label": "Netflix", "paths": ["data/netflix/x.zip"]}]
+        assert checklist["password_set"] is False
+
+
+def test_run_time_and_length_filters():
+    start = datetime(2026, 10, 18, 9, 5, tzinfo=web.ZoneInfo("UTC")).timestamp()
+    assert web._run_time(start) == "Sun Oct 18, 4:05 AM"
+    assert web._run_length({"started_at": start, "finished_at": start + 42}) == "42 sec"
+    assert web._run_length({"started_at": start, "finished_at": start + 3900}) == "1 hr 5 min"
+
+
+def test_a_finished_check_on_first_run_offers_a_reload(client, tmp_path, monkeypatch):
+    # The Build button was drawn disabled while the check ran; the page must say to reload.
+    monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(tmp_path / "watch_index.json"))
+    monkeypatch.setattr(web.config, "TASTE_PROFILE_PATH", str(tmp_path / "taste_profile.txt"))
+    finished = {"running": False, "state": "done", "log_tail": [],
+                "status": {"action": "check_exports", "started_at": 1.0, "finished_at": 2.0, "ok": True}}
+    with patch("recommender.web.setup_runs.current", return_value=finished):
+        body = client.get("/setup/status").data.decode()
+
+    assert "Reload the page" in body
+    assert "/settings#get-started" in body
+    assert "Open Streamline" not in body

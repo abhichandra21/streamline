@@ -932,3 +932,47 @@ def test_an_export_that_reads_as_no_watches_keeps_the_saved_ones(monkeypatch, tm
     setup.ingest_providers(fail_on_error=True)
 
     assert {e.title for e in load_events(db_path)} == {"Andor"}
+
+
+def test_check_exports_reads_the_exports_but_saves_nothing(monkeypatch, tmp_path):
+    import config
+    import recommender.setup as setup
+
+    db_path = tmp_path / "streamline.db"
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": ["/fake/export.zip"]})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "EVENT_DB_PATH", str(db_path))
+    event = _make_event(title="Dark", timestamp=datetime(2026, 1, 1, 20, 0, 0))
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("netflix", lambda _path: [event])])
+
+    setup.run_check_exports()
+
+    assert not db_path.exists()
+
+
+def test_check_exports_fails_on_an_unreadable_export(monkeypatch, tmp_path):
+    import config
+    import recommender.setup as setup
+
+    def broken(_path):
+        raise FileNotFoundError("gone")
+
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": ["/fake/export.zip"]})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "EVENT_DB_PATH", str(tmp_path / "streamline.db"))
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("netflix", broken)])
+
+    with pytest.raises(SystemExit):
+        setup.run_check_exports()
+
+
+def test_no_loved_titles_skips_taste_rows_without_an_ai_call(tmp_path, monkeypatch):
+    """A fresh install has nothing Loved; the theme call would only fail."""
+    tag_profile, console = _run_setup_with_stale_mocks(tmp_path, monkeypatch, scores={})
+
+    tag_profile.assert_not_called()
+    printed = " ".join(str(call.args[0]) for call in console.print.call_args_list if call.args)
+    assert "Taste rows: none yet" in printed
+    assert "skipped" not in printed

@@ -18,7 +18,8 @@ _LOCAL_CONFIG_PATH = _ROOT / "config.local.yaml"
 
 
 def _load_yaml(path: Path) -> dict:
-    if not path.exists():
+    # Docker makes a folder when a bind-mounted file is missing on the host.
+    if not path.is_file():
         return {}
     with open(path) as f:
         return yaml.safe_load(f) or {}
@@ -185,6 +186,8 @@ STREAMING_PLATFORMS: list[str] = _cfg.get("streaming_platforms", [])
 
 # ── Data paths ──
 _paths = _cfg.get("platform_paths", {})
+# Platforms with a path set in a config file, rather than the built-in default.
+CONFIGURED_PLATFORMS = frozenset(_paths)
 
 
 def _resolve_platform_paths(platform: str, default: str | None) -> list[str]:

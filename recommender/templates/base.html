@@ -817,10 +817,91 @@
     .more-list .more-list-fewer { display: none; }
     .js .more-list[open] > summary { display: none; }
     .js .more-list[open] .more-list-fewer { display: flex; }
+
+    /* "Not responding" notice. A small pill fixed at the top, clear of the
+       phone tab bar at the bottom. It never blocks the page. */
+    .conn-notice {
+      position: fixed;
+      top: 0.75rem;
+      left: 50%;
+      transform: translate(-50%, 0);
+      z-index: 900;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      width: max-content;
+      max-width: calc(100vw - 1.5rem);
+      padding: 0.5rem 0.95rem 0.5rem 0.8rem;
+      background: rgba(36,32,44,0.96);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(232,93,74,0.5);
+      border-radius: 999px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+      color: var(--text);
+      font-size: 0.8rem;
+      line-height: 1.35;
+      pointer-events: none;
+      transition: opacity 0.25s ease, transform 0.25s ease, border-color 0.25s ease;
+    }
+    .conn-notice[hidden] { display: none; }
+    .conn-notice.is-entering { opacity: 0; transform: translate(-50%, -8px); }
+    .conn-notice-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+      background: var(--accent);
+      box-shadow: 0 0 0 0 rgba(232,93,74,0.55);
+      animation: conn-pulse 1.6s ease-out infinite;
+    }
+    .conn-notice-retry {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .conn-notice.is-back { border-color: rgba(163,207,98,0.5); }
+    .conn-notice.is-back .conn-notice-dot {
+      background: var(--yours);
+      box-shadow: 0 0 0 3px rgba(163,207,98,0.18);
+      animation: none;
+    }
+    .conn-notice.is-back .conn-notice-retry { display: none; }
+    @keyframes conn-pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(232,93,74,0.55); }
+      70%  { box-shadow: 0 0 0 8px rgba(232,93,74,0); }
+      100% { box-shadow: 0 0 0 0 rgba(232,93,74,0); }
+    }
+    @media (max-width: 839px) {
+      /* Sit just under the brand strip on phones. */
+      .conn-notice {
+        top: calc(50px + 0.5rem);
+        left: 0.75rem; right: 0.75rem;
+        max-width: none;
+        transform: none;
+        border-radius: 12px;
+        flex-wrap: wrap;
+        row-gap: 0.15rem;
+        font-size: 0.76rem;
+      }
+      .conn-notice.is-entering { transform: translate(0, -8px); }
+      .conn-notice-text { flex: 1 1 12rem; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .conn-notice { transition: none; }
+      .conn-notice.is-entering { transform: translate(-50%, 0); }
+      @media (max-width: 839px) { .conn-notice.is-entering { transform: none; } }
+      .conn-notice-dot { animation: none; box-shadow: 0 0 0 3px rgba(232,93,74,0.22); }
+    }
   </style>
 </head>
 
 <body>
+
+  <div id="conn-notice" class="conn-notice" role="status" aria-live="polite" hidden>
+    <span class="conn-notice-dot" aria-hidden="true"></span>
+    <span class="conn-notice-text">Streamline isn't responding. It may be restarting.</span>
+    <span class="conn-notice-retry">Trying again&hellip;</span>
+  </div>
 
   <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
     <g id="ico-home"><path d="M3 10.4 12 3l9 7.4"/><path d="M5.6 9.2V20h12.8V9.2"/><path d="M9.8 20v-5.4h4.4V20"/></g>
@@ -986,6 +1067,72 @@
       btn.setAttribute('title', label);
       try { localStorage.setItem('sidebar', rail ? 'rail' : 'full'); } catch (e) {}
     }
+
+    // "Not responding" notice. While the tab is visible, ask /healthz every
+    // 5 s. Any HTTP answer, 503 included, means the server is up; only a
+    // network error or a 4 s timeout counts as a miss. Two misses in a row
+    // show the notice so one blip never flashes it. Never reloads the page.
+    (function() {
+      var notice = document.getElementById('conn-notice');
+      if (!notice || !window.fetch) return;
+      var text = notice.querySelector('.conn-notice-text');
+      var downText = text.textContent;
+      var INTERVAL_MS = 5000, TIMEOUT_MS = 4000, MISSES_TO_SHOW = 2, BACK_MS = 3000;
+      var misses = 0, down = false, timer = null, inFlight = false, backTimer = null;
+
+      function show() {
+        clearTimeout(backTimer);
+        notice.classList.remove('is-back');
+        text.textContent = downText;
+        if (notice.hidden) {
+          notice.classList.add('is-entering');
+          notice.hidden = false;
+          requestAnimationFrame(function() {
+            requestAnimationFrame(function() { notice.classList.remove('is-entering'); });
+          });
+        }
+      }
+      function showBack() {
+        notice.classList.add('is-back');
+        text.textContent = 'Streamline is back.';
+        backTimer = setTimeout(function() {
+          notice.hidden = true;
+          notice.classList.remove('is-back');
+          text.textContent = downText;
+        }, BACK_MS);
+      }
+      function result(ok) {
+        if (ok) {
+          misses = 0;
+          if (down) { down = false; showBack(); }
+          return;
+        }
+        misses += 1;
+        if (!down && misses >= MISSES_TO_SHOW) { down = true; show(); }
+      }
+      function check() {
+        if (inFlight || document.hidden) return;
+        inFlight = true;
+        var ctrl = window.AbortController ? new AbortController() : null;
+        var t = ctrl ? setTimeout(function() { ctrl.abort(); }, TIMEOUT_MS) : null;
+        fetch('/healthz', {cache: 'no-store', signal: ctrl ? ctrl.signal : undefined})
+          // 503 is the app itself (library not built yet); 502 and 504 come from a proxy in front of a stopped app.
+          .then(function(r) { result(r.status !== 502 && r.status !== 504); }, function() { result(false); })
+          .then(function() { clearTimeout(t); inFlight = false; });
+      }
+      function start() {
+        if (timer) return;
+        timer = setInterval(check, INTERVAL_MS);
+      }
+      function stop() { clearInterval(timer); timer = null; }
+
+      document.addEventListener('visibilitychange', function() {
+        if (document.hidden) { stop(); } else { check(); start(); }
+      });
+      // A failed HTMX request is a reason to look right away.
+      document.addEventListener('htmx:sendError', check);
+      if (!document.hidden) start();
+    })();
   </script>
 
 </body>
