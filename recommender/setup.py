@@ -1243,6 +1243,29 @@ def refresh_language_lists(only_existing: bool = False) -> bool:
     return ok
 
 
+def run_check_exports() -> None:
+    """Read every configured export and manual list and say what is in them. Saves nothing."""
+    console.print("Checking watch-history exports. Nothing is saved.")
+    by_provider = _load_platform_events_by_provider(fail_on_error=False)
+    configured = [p for p, _ in _PLATFORM_PARSERS if config.PLATFORM_PATHS.get(p)]
+    failed = [p for p in configured if p not in by_provider]
+    total = sum(len(events) for events, _paths in by_provider.values())
+    if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
+        try:
+            manual = parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH)
+            console.print(f"  manual: ok {len(manual):,} events")
+            total += len(manual)
+        except FileNotFoundError:
+            console.print("  manual: [dim]no lists found[/dim]")
+    if failed:
+        console.print(f"\n[red]Could not read: {', '.join(failed)}. Fix the path in Settings.[/red]")
+        sys.exit(1)
+    if not total:
+        console.print("\n[red]No watches found. Add at least one export or manual list.[/red]")
+        sys.exit(1)
+    console.print(f"\n[green]Found {total:,} watches. Nothing was saved; a build or Refresh data brings them in.[/green]")
+
+
 def run_ingest_only() -> None:
     """Strict preflight validation of configured provider zips, persist to SQLite."""
     ingest_providers(fail_on_error=True)
@@ -1567,7 +1590,7 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
     console.print("\n[green]Setup complete![/green]")
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run offline setup for the recommender")
     parser.add_argument("--refresh-profile", action="store_true",
                         help="Rebuild taste profile even if it exists")
@@ -1575,6 +1598,8 @@ if __name__ == "__main__":
                         help="Re-fetch TMDB metadata, watch index, and enrichments")
     parser.add_argument("--ingest-only", action="store_true",
                         help="Load and report on ingested data without TMDB or LLM calls")
+    parser.add_argument("--check-exports", action="store_true",
+                        help="Read the exports and manual lists and report what is in them; saves nothing")
     parser.add_argument("--refresh-imdb", action="store_true",
                         help="Only re-download IMDb ratings and rebuild Find's language lists, then exit")
     parser.add_argument("--debug", action="store_true",
@@ -1586,16 +1611,36 @@ if __name__ == "__main__":
     parser.add_argument("--rethink-themes", action="store_true",
                         help="Rebuild the taste themes from scratch, keeping theme ids where the taste "
                              "still exists. Also rebuilds the prose taste profile, which is a paid call")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     from recommender.log import setup_logging
+    from recommender import setup_runs
     setup_logging(level_override="DEBUG" if args.debug else None)
-    if args.refresh_imdb:
-        ratings_ok = refresh_imdb_ratings()
-        lists_ok = refresh_language_lists() if ratings_ok else False
-        sys.exit(0 if ratings_ok and lists_ok else 1)
-    elif args.ingest_only:
-        run_ingest_only()
-    else:
-        run_setup(refresh_profile=args.refresh_profile, refresh_data=args.refresh_data,
-                  provider=args.provider, profile_path=args.profile_path,
-                  rethink_themes=args.rethink_themes)
+    if not setup_runs.acquire_lock():
+        console.print("[red]A rebuild is already running. Try again when it finishes.[/red]")
+        sys.exit(1)
+    run_status = setup_runs.record_start(setup_runs.action_for(sys.argv[1:] if argv is None else argv))
+    exit_code = 0
+    try:
+        if args.refresh_imdb:
+            ratings_ok = refresh_imdb_ratings()
+            lists_ok = refresh_language_lists() if ratings_ok else False
+            exit_code = 0 if ratings_ok and lists_ok else 1
+        elif args.check_exports:
+            run_check_exports()
+        elif args.ingest_only:
+            run_ingest_only()
+        else:
+            run_setup(refresh_profile=args.refresh_profile, refresh_data=args.refresh_data,
+                      provider=args.provider, profile_path=args.profile_path,
+                      rethink_themes=args.rethink_themes)
+    except SystemExit as exc:
+        exit_code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+    except BaseException:
+        setup_runs.record_end(run_status, ok=False)
+        raise
+    setup_runs.record_end(run_status, ok=exit_code == 0)
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()

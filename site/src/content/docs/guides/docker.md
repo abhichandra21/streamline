@@ -15,21 +15,16 @@ mkdir -p data recommender/cache logs
 cp config.local.example.yaml config.local.yaml
 ```
 
-1. Put your keys in `.env`: `TMDB_API_KEY` plus one LLM key, such as `ANTHROPIC_API_KEY`.
-2. Copy your export zips into `data/` and set their paths in `config.local.yaml`, for example `data/netflix/export.zip`. See [Watch history](/guides/watch-history/).
-3. Run setup once:
-
-   ```bash
-   docker compose run --rm streamline ./recommend setup
-   ```
-
-4. Start the web UI:
+1. Copy your export files into `data/`, for example `data/netflix/export.zip`. See [Watch history](/guides/watch-history/).
+2. Start the web UI:
 
    ```bash
    docker compose up -d
    ```
 
-   Open [http://localhost:5051](http://localhost:5051).
+3. Open [http://localhost:5051](http://localhost:5051) and follow **Get started** in Settings: add your keys, point at your exports, then build your library. See [Getting started](/getting-started/).
+
+Keys can also go in `.env` (`TMDB_API_KEY` plus one LLM key, such as `ANTHROPIC_API_KEY`), and setup also runs from the terminal with `docker compose run --rm streamline ./recommend setup`.
 
 ## Everyday commands
 

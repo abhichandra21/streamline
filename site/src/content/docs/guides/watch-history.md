@@ -24,7 +24,7 @@ A few differences to know:
 
 - **Disney+** exports every profile on the account. Set `disney_profiles` in `config.local.yaml` to the profile names to keep, for example `disney_profiles: ["Alex"]`.
 - **Max** exports have no watch dates, so Max titles sort last in Archive's Recently watched, and each title counts once.
-After adding a newer export, run `./recommend setup --refresh-data`.
+After adding a newer export, press **Refresh data** in Settings, or run `./recommend setup --refresh-data`.
 
 A routine data refresh never rebuilds the taste profile.
 It does write descriptions for new titles, which are fast-model calls.

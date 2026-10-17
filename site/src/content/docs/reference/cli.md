@@ -31,7 +31,8 @@ Inside the interactive session: `+more Title`, `+fine Title`, `+less Title`, and
 
 ```bash
 ./recommend setup                        # first-time setup
-./recommend setup --ingest-only          # check the export zips, no TMDB or LLM calls
+./recommend setup --check-exports        # read the exports and count the watches; saves nothing
+./recommend setup --ingest-only          # import the exports into the database, no TMDB or LLM calls
 ./recommend setup --refresh-data         # re-read history, TMDB, descriptions; never the profile
 ./recommend setup --refresh-profile      # rebuild the taste profile
 ./recommend setup --rethink-themes       # regroup the taste rows from scratch (paid calls)
