@@ -855,6 +855,38 @@ def test_profile_scores_drop_every_alias_of_a_less_rated_title(monkeypatch):
     assert _profile_scores(events, {}, index, ratings, []) == {}
 
 
+def test_profile_scores_drop_event_titles_that_share_a_less_rated_tmdb_id(monkeypatch):
+    """One show can arrive under several episode-prefixed names that all match the same TMDB title."""
+    import config
+    from types import SimpleNamespace
+    from recommender.setup import _profile_scores
+
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    names = ["Delhi to the Foothills-Tough Rides: India", "Southern India-Tough Rides: India"]
+    events = [_make_event(title=n, series_name=n) for n in names]
+    events.append(_make_event(title="Vera S1E1", series_name="Vera"))
+    metadata = {(n, "tv"): SimpleNamespace(content_type="tv", tmdb_id=86002) for n in names}
+    index = [{"title": names[0], "content_type": "tv", "tmdb_id": 86002}]
+    ratings = [{"title": "Tough Rides: India", "content_type": "tv", "tmdb_id": 86002, "rating": "less"}]
+
+    assert _profile_scores(events, metadata, index, ratings, []) == {"Vera": 1.0}
+
+
+def test_profile_scores_use_the_type_tmdb_matched_when_dropping_less_titles(monkeypatch):
+    """TMDB can match a name imported as a movie to a show; the Less rating is for the show."""
+    import config
+    from types import SimpleNamespace
+    from recommender.setup import _profile_scores
+
+    monkeypatch.setattr(config, "USE_VIEWING_SIGNALS", False)
+    events = [_make_event(title="Southern India-Tough Rides: India", content_type="movie",
+                          series_name="Southern India-Tough Rides: India")]
+    metadata = {("Southern India-Tough Rides: India", "movie"): SimpleNamespace(content_type="tv", tmdb_id=86002)}
+    ratings = [{"title": "Tough Rides: India", "content_type": "tv", "tmdb_id": 86002, "rating": "less"}]
+
+    assert _profile_scores(events, metadata, [], ratings, []) == {}
+
+
 def test_a_data_refresh_never_rebuilds_the_taste_profile_on_its_own(tmp_path, monkeypatch):
     """The profile rebuilds only on request (--refresh-profile), not when overrides or archive entries change."""
     import os
@@ -877,3 +909,70 @@ def test_a_data_refresh_never_rebuilds_the_taste_profile_on_its_own(tmp_path, mo
     os.utime(index, (2, 2))
     assert "Seen it" in setup._auto_data_refresh(index, overrides, [new_seen])
     assert setup._auto_data_refresh(index, overrides, []) is None
+
+
+def test_an_export_that_reads_as_no_watches_keeps_the_saved_ones(monkeypatch, tmp_path):
+    """A wrong file or mistyped Disney+ profile must not wipe a provider's history."""
+    import config
+    import recommender.setup as setup
+    from recommender.event_store import load_events
+
+    db_path = str(tmp_path / "streamline.db")
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"disney": ["/fake/export.pdf"]})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "EVENT_DB_PATH", db_path)
+    monkeypatch.setattr(setup, "_compute_file_sha256", lambda _path: "sha")
+
+    saved = [_make_event(title="Andor", timestamp=datetime(2026, 1, 1, 20, 0, 0))]
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("disney", lambda _path: saved)])
+    setup.ingest_providers(fail_on_error=True)
+
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("disney", lambda _path: [])])
+    setup.ingest_providers(fail_on_error=True)
+
+    assert {e.title for e in load_events(db_path)} == {"Andor"}
+
+
+def test_check_exports_reads_the_exports_but_saves_nothing(monkeypatch, tmp_path):
+    import config
+    import recommender.setup as setup
+
+    db_path = tmp_path / "streamline.db"
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": ["/fake/export.zip"]})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "EVENT_DB_PATH", str(db_path))
+    event = _make_event(title="Dark", timestamp=datetime(2026, 1, 1, 20, 0, 0))
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("netflix", lambda _path: [event])])
+
+    setup.run_check_exports()
+
+    assert not db_path.exists()
+
+
+def test_check_exports_fails_on_an_unreadable_export(monkeypatch, tmp_path):
+    import config
+    import recommender.setup as setup
+
+    def broken(_path):
+        raise FileNotFoundError("gone")
+
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"netflix": ["/fake/export.zip"]})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "EVENT_DB_PATH", str(tmp_path / "streamline.db"))
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [("netflix", broken)])
+
+    with pytest.raises(SystemExit):
+        setup.run_check_exports()
+
+
+def test_no_loved_titles_skips_taste_rows_without_an_ai_call(tmp_path, monkeypatch):
+    """A fresh install has nothing Loved; the theme call would only fail."""
+    tag_profile, console = _run_setup_with_stale_mocks(tmp_path, monkeypatch, scores={})
+
+    tag_profile.assert_not_called()
+    printed = " ".join(str(call.args[0]) for call in console.print.call_args_list if call.args)
+    assert "Taste rows: none yet" in printed
+    assert "skipped" not in printed

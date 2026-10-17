@@ -264,7 +264,8 @@ def _write_words(rows: list[dict], client) -> dict:
     return saved
 
 
-def build_tag_profile(loves_scores, enrichments, index_entries, collections, client, negative_prefs, rethink=False):
+def build_tag_profile(loves_scores, enrichments, index_entries, collections, client, negative_prefs, rethink=False,
+                      skip_patterns=""):
     """The structured profile from saved tags, themes and words. Returns (profile, warnings)."""
     loves = sorted(loves_scores, key=str.casefold)
     tags = tag_titles(loves, enrichments, client, config.TASTE_TAGS_PATH)
@@ -303,5 +304,5 @@ def build_tag_profile(loves_scores, enrichments, index_entries, collections, cli
         })
     profile = validate_structured_profile({"clusters": clusters})
     profile = apply_member_weights(profile, loves_scores)
-    profile["negative_preferences"] = explicit_dislikes(negative_prefs)
+    profile["negative_preferences"] = explicit_dislikes(negative_prefs, patterns=skip_patterns)
     return profile, coverage_warnings(loves, unplaced, placed)

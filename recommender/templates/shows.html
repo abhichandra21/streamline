@@ -9,7 +9,7 @@
 
 {% include "_shows_content.html" %}
 
-<p class="shows-credit mono">Air times from <a href="https://www.tvmaze.com" target="_blank" rel="noopener">TVmaze</a> (<a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a>)</p>
+<p class="shows-credit mono">Air times from <a href="https://thetvdb.com" target="_blank" rel="noopener">TheTVDB</a></p>
 
 <style>
   /* ── Masthead: compact, because this page gets revisited weekly ── */
@@ -194,6 +194,14 @@
   .show-card--ready h3 { font-size: 1.12rem; }
   .show-card-copy { color: var(--muted); font-size: 0.8rem; }
   .show-card-detail { color: var(--body); }
+  /* Where it streams: a quiet secondary line, same tone as search results. */
+  .show-where {
+    color: var(--muted);
+    font-size: 0.58rem;
+    line-height: 1.5;
+    margin-top: 0.2rem;
+    overflow-wrap: anywhere;
+  }
   .show-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.4rem; flex-wrap: wrap; }
   .show-actions button { padding: 0.42rem 0.7rem; white-space: nowrap; }
   .show-inline-form { display: inline; margin: 0; }
@@ -228,6 +236,8 @@
   .shows-grid .show-card--ready h3 { font-size: 1rem; }
   .shows-grid .show-ready-line { gap: 0.4rem; }
   .shows-grid .show-card-copy { font-size: 0.72rem; }
+  .show-card-next { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .show-card-time { color: var(--body); }
   /* The body absorbs the slack instead of the action row claiming it with an
      auto margin. With `margin-top: auto` and a clamped height, free space goes
      negative once the content overflows, and WebKit resolves that by pulling
@@ -367,7 +377,7 @@
   .soon-list { display: flex; flex-direction: column; }
   .soon-row {
     display: grid;
-    grid-template-columns: 5.6rem minmax(0, 1fr) auto auto;
+    grid-template-columns: 8rem minmax(0, 1fr) auto auto;
     gap: 0.9rem;
     align-items: baseline;
     padding: 0.42rem 0;
@@ -417,9 +427,11 @@
   /* "Show fewer" is a button drawn like the summary it replaces. */
   .more-list-fewer { width: 100%; background: none; border-left: 0; border-right: 0; border-bottom: 0; text-align: left; }
   .soon-undated-rest .more-list-fewer { border-top: 0; }
-  .soon-date { color: var(--body); font-size: 0.68rem; letter-spacing: 0.03em; }
+  .soon-date { color: var(--body); font-size: 0.68rem; letter-spacing: 0.03em; white-space: nowrap; }
+  .soon-time { color: var(--muted); margin-left: 0.3rem; }
   .soon-title { color: var(--text); font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .soon-slug { color: var(--muted); font-size: 0.6rem; letter-spacing: 0.06em; }
+  .soon-where { letter-spacing: 0; opacity: 0.85; }
   .soon-row--undated .soon-date { color: var(--muted); }
   .soon-row .show-inline-form {
     opacity: 0;
@@ -451,7 +463,7 @@
   }
   .shows-management .shows-list { margin-top: 0.8rem; }
 
-  /* TVmaze data is CC BY-SA 4.0 and must be credited. Sits outside
+  /* TheTVDB data must be credited. Sits outside
      #shows-content so the refresh poll's outerHTML swap never duplicates it. */
   .shows-credit {
     margin-top: 2.5rem;
@@ -461,7 +473,12 @@
     text-transform: uppercase;
   }
   .shows-credit a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
-  .shows-credit a:hover { color: var(--text); }
+  @media (hover: hover) {
+    .shows-credit a:hover { color: var(--text); }
+  }
+  /* The JustWatch credit is the last thing inside #shows-content, so the
+     TheTVDB credit below it tucks up underneath as one credits block. */
+  #shows-content:has(.shows-credit--justwatch) + .shows-credit { margin-top: 0.35rem; }
 
   @media (max-width: 640px) {
     .show-card { grid-template-columns: 48px minmax(0, 1fr); }
@@ -486,11 +503,14 @@
       grid-template-columns: 5.2rem minmax(0, 1fr) auto;
       grid-template-areas:
         "date   title  action"
-        ".      slug   .";
+        "date   slug   .";
       column-gap: 0.7rem;
       row-gap: 0.15rem;
     }
-    .soon-date { grid-area: date; }
+    .soon-date { grid-area: date; white-space: normal; }
+    /* On a phone the time drops under the date, into the cell the slug line
+       leaves empty, so the narrow date column never has to widen. */
+    .soon-time { display: block; margin-left: 0; }
     .soon-title { grid-area: title; }
     .soon-slug { grid-area: slug; }
     .soon-row .show-inline-form { grid-area: action; justify-self: end; }

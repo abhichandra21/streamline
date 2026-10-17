@@ -1,8 +1,9 @@
 """Configuration loader.
 
 Reads non-secret settings from config.yaml plus optional local overrides from
-config.local.yaml. Secrets continue to come from the environment. All
-module-level attributes are available as before for backward compat.
+config.local.yaml. Secrets come from the environment, or from data/keys.env
+when they were saved on the Settings page. All module-level attributes are
+available as before for backward compat.
 """
 
 import os
@@ -17,7 +18,8 @@ _LOCAL_CONFIG_PATH = _ROOT / "config.local.yaml"
 
 
 def _load_yaml(path: Path) -> dict:
-    if not path.exists():
+    # Docker makes a folder when a bind-mounted file is missing on the host.
+    if not path.is_file():
         return {}
     with open(path) as f:
         return yaml.safe_load(f) or {}
@@ -38,16 +40,49 @@ _cfg = _merge_dicts(_load_yaml(_CONFIG_PATH), _load_yaml(_LOCAL_CONFIG_PATH))
 # ── Logging ──
 LOG_LEVEL = os.environ.get("LOG_LEVEL", _cfg.get("log_level", "WARNING")).upper()
 
-# ── Secrets (from environment only; .env is an optional launcher convenience) ──
-TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+# ── Secrets ──
+# The keys the Settings page can set. A value saved there (data/keys.env) wins
+# over the environment, since it is the newer choice; clearing it on the page
+# brings back the environment value (.env is an optional launcher convenience).
+SETTINGS_KEY_NAMES = (
+    "TMDB_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY",
+    "TVDB_API_KEY", "PLEX_URL", "PLEX_TOKEN", "PLEX_WEBHOOK_TOKEN",
+)
+KEYS_PATH = _ROOT / "data/keys.env"
+
+
+def read_keys_file(path: Path = KEYS_PATH) -> dict[str, str]:
+    """NAME=value lines saved by the Settings page; unknown names are ignored."""
+    try:
+        lines = path.read_text().splitlines()
+    except FileNotFoundError:
+        return {}
+    keys = {}
+    for line in lines:
+        name, sep, value = line.partition("=")
+        if sep and name.strip() in SETTINGS_KEY_NAMES and value.strip():
+            keys[name.strip()] = value.strip()
+    return keys
+
+
+_saved_keys = read_keys_file()
+
+
+def _secret(name: str) -> str:
+    return _saved_keys.get(name) or os.environ.get(name, "")
+
+
+TMDB_API_KEY = _secret("TMDB_API_KEY")
+ANTHROPIC_API_KEY = _secret("ANTHROPIC_API_KEY")
+GEMINI_API_KEY = _secret("GEMINI_API_KEY")
+OPENAI_API_KEY = _secret("OPENAI_API_KEY")
 # Plex: the webhook token guards POST /plex/webhook; URL and token let the
 # webhook look up show IDs and sync ratings (see recommender/plex.py).
-PLEX_WEBHOOK_TOKEN = os.environ.get("PLEX_WEBHOOK_TOKEN", "")
-PLEX_URL = os.environ.get("PLEX_URL", "")
-PLEX_TOKEN = os.environ.get("PLEX_TOKEN", "")
+PLEX_WEBHOOK_TOKEN = _secret("PLEX_WEBHOOK_TOKEN")
+PLEX_URL = _secret("PLEX_URL")
+PLEX_TOKEN = _secret("PLEX_TOKEN")
+# TheTVDB: followed shows' release times on On Deck (see recommender/tvdb.py).
+TVDB_API_KEY = _secret("TVDB_API_KEY")
 
 LLM_DEFAULT_API_KEY_ENVS: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
@@ -151,6 +186,8 @@ STREAMING_PLATFORMS: list[str] = _cfg.get("streaming_platforms", [])
 
 # ── Data paths ──
 _paths = _cfg.get("platform_paths", {})
+# Platforms with a path set in a config file, rather than the built-in default.
+CONFIGURED_PLATFORMS = frozenset(_paths)
 
 
 def _resolve_platform_paths(platform: str, default: str | None) -> list[str]:
@@ -209,8 +246,8 @@ PROVIDERS_CACHE_DIR = str(_ROOT / "recommender/cache/providers")
 # Find page: US now-playing ids on a 6h TTL.
 FIND_CACHE_DIR = str(_ROOT / "recommender/cache/find")
 RELEASE_CACHE_DIR = str(_ROOT / "recommender/cache/releases")
-# Followed shows' regular air times (recommender/tvmaze.py).
-TVMAZE_CACHE_DIR = str(_ROOT / "recommender/cache/tvmaze")
+# Followed shows' regular air times (recommender/tvdb.py).
+TVDB_CACHE_DIR = str(_ROOT / "recommender/cache/tvdb")
 # Local copy of IMDb's daily ratings dataset (recommender/imdb_ratings.py).
 IMDB_RATINGS_DB_PATH = str(_ROOT / "recommender/cache/imdb_ratings.db")
 TASTE_PROFILE_PATH = str(_ROOT / "recommender/cache/taste_profile.txt")

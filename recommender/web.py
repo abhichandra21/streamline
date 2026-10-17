@@ -30,6 +30,7 @@ from recommender import imdb_ratings
 from recommender import language_catalog
 from recommender import plex
 from recommender import show_tracker
+from recommender import setup_runs
 from recommender import user_store
 from recommender import watch_index as wi
 from recommender import event_store
@@ -44,7 +45,7 @@ from recommender import loved_it
 from recommender import wizard
 from recommender import wizard_flow
 from recommender.structured_profile import load_structured_profile
-from recommender.tvmaze import TvmazeClient
+from recommender.tvdb import TvdbClient
 from recommender.tmdb_client import (
     MOVIE_GENRE_IDS, TV_GENRE_IDS, CatalogTitle, TmdbClient, TmdbRateLimitError,
 )
@@ -74,6 +75,7 @@ setup_logging()
 # ── Shared context (read-only after build; rebuilt on config change) ──────────
 _ctx: RecommendContext | None = None
 _ctx_lock = threading.Lock()
+_ctx_built_from: tuple | None = None
 _config_reload_pending = False
 
 # Only one release refresh runs at a time. Pages keep rendering cached data
@@ -112,11 +114,26 @@ def _ensure_user_store_once() -> None:
         _user_store_ready = True
 
 
+def _setup_outputs_mtime() -> tuple | None:
+    """When setup last wrote the files the shared context is built from."""
+    try:
+        times = [Path(config.WATCH_INDEX_PATH).stat().st_mtime, Path(config.TASTE_PROFILE_PATH).stat().st_mtime]
+    except OSError:
+        return None
+    structured = Path(config.STRUCTURED_TASTE_PROFILE_PATH)
+    # Written after the prose profile, so a request in between must not keep the old one.
+    times.append(structured.stat().st_mtime if structured.exists() else None)
+    return tuple(times)
+
+
 def _get_context() -> RecommendContext:
-    global _ctx
+    """The shared context, rebuilt when a setup run (anywhere) has rewritten its files."""
+    global _ctx, _ctx_built_from
     with _ctx_lock:
-        if _ctx is None:
+        built_from = _setup_outputs_mtime()
+        if _ctx is None or built_from != _ctx_built_from:
             _ctx = _build_context()
+            _ctx_built_from = built_from
     return _ctx
 
 
@@ -392,7 +409,7 @@ def _run_show_refresh(
         config.RELEASE_CACHE_DIR,
         progress=report,
         lookback_days=config.RETURNING_SHOWS_LOOKBACK_DAYS,
-        tvmaze=TvmazeClient(config.TVMAZE_CACHE_DIR),
+        tvdb=TvdbClient(config.TVDB_CACHE_DIR, config.TVDB_API_KEY) if config.TVDB_API_KEY else None,
     )
 
 
@@ -527,6 +544,41 @@ def _human_date(value: str | None) -> str:
     return f"{parsed.day} {parsed.strftime('%b %Y')}"
 
 
+@app.template_filter("release_time")
+def _release_time(value: str | None) -> str:
+    """Render an ISO datetime's clock time as "8 PM" or "8:30 PM"."""
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return ""
+    hour = parsed.hour % 12 or 12
+    minutes = f":{parsed.minute:02d}" if parsed.minute else ""
+    return f"{hour}{minutes} {'AM' if parsed.hour < 12 else 'PM'}"
+
+
+@app.template_filter("run_time")
+def _run_time(epoch: float | None) -> str:
+    """A setup run's start or end in Central time, as "Sun Oct 18, 4:05 AM"."""
+    if not epoch:
+        return ""
+    moment = datetime.fromtimestamp(epoch, ZoneInfo("America/Chicago"))
+    return f"{moment:%a %b} {moment.day}, {moment.hour % 12 or 12}:{moment:%M} {moment:%p}"
+
+
+@app.template_filter("run_length")
+def _run_length(status: dict | None) -> str:
+    """How long a run took, or has taken so far, as "42 sec" or "1 hr 5 min"."""
+    if not status or not status.get("started_at"):
+        return ""
+    seconds = int((status.get("finished_at") or time.time()) - status["started_at"])
+    if seconds < 60:
+        return f"{seconds} sec"
+    minutes = seconds // 60
+    return f"{minutes // 60} hr {minutes % 60} min" if minutes >= 60 else f"{minutes} min"
+
+
 def _length_of(content_type: str, raw: dict) -> tuple[str, int]:
     """How much of an evening a title asks for, as a label and a sort key.
 
@@ -625,10 +677,15 @@ def _split_coming_soon(coming_soon: list[dict], sort: str) -> tuple[list[dict], 
 
     An undated show carries no schedule to sort by, so it is grouped
     separately rather than sorted into the calendar under a blank date.
+    Dated shows sort by their release moment in Central time when known (an
+    Apple show comes out the evening before its listed date), else by date.
     """
     dated = [show for show in coming_soon if show.get("next_air_date")]
     undated = [show for show in coming_soon if not show.get("next_air_date")]
-    dated.sort(key=lambda show: show["next_air_date"], reverse=(sort == "latest"))
+    dated.sort(
+        key=lambda show: (show.get("next_released_at") or "")[:16] or f"{show['next_air_date']}T00:00",
+        reverse=(sort == "latest"),
+    )
     undated.sort(key=lambda show: (show.get("title") or "").lower())
     return dated, undated
 
@@ -641,6 +698,7 @@ def _render_shows_content(
     progress=None,
     template: str = "_shows_content.html",
 ) -> str:
+    _attach_show_providers(sections)
     soon_sort = _soon_sort()
     soon_dated, soon_undated = _split_coming_soon(sections["coming_soon"], soon_sort)
     return render_template(
@@ -803,6 +861,28 @@ def _check_csrf() -> tuple | None:
         log.warning("CSRF validation failed for %s %s", request.method, request.path)
         return "Invalid or missing CSRF token", 403
     return None
+
+
+# ── First run ─────────────────────────────────────────────────────────────────
+
+# Pages that work before the library is built; everything else needs it.
+_PRE_SETUP_PATHS = ("/settings", "/setup/", "/static/", "/healthz", PLEX_WEBHOOK_PATH,
+                    "/api/", "/logs", "/help", "/status")
+
+
+def _is_set_up() -> bool:
+    return Path(config.WATCH_INDEX_PATH).exists() and Path(config.TASTE_PROFILE_PATH).exists()
+
+
+@app.before_request
+def _send_to_first_run() -> Response | None:
+    if _is_set_up() or request.path.startswith(_PRE_SETUP_PATHS):
+        return None
+    target = url_for("settings_page") + "#get-started"
+    if request.headers.get("HX-Request"):
+        # A swapped-in fragment can't redirect the page; HTMX does it on this header.
+        return Response(status=204, headers={"HX-Redirect": target})
+    return redirect(target)
 
 
 # ── Plex webhook ──────────────────────────────────────────────────────────────
@@ -1182,6 +1262,7 @@ def shows_page() -> str:
 def coming_soon_section() -> str:
     """Re-render just the Coming soon section, for the sort control."""
     _, _, sections = _show_page_data()
+    _attach_show_providers(sections)
     soon_sort = _soon_sort()
     soon_dated, soon_undated = _split_coming_soon(sections["coming_soon"], soon_sort)
     return render_template(
@@ -1623,7 +1704,7 @@ def find_page() -> str:
     # Every outcome, including the preconditions, leaves through _find_response
     # so an HTMX continuation always gets a fragment and never the whole page.
     if not config.TMDB_API_KEY:
-        page["error"] = "TMDB_API_KEY is not set. Add it to the environment (or .env) and restart the web UI."
+        page["error"] = "TMDB_API_KEY is not set. Add it under Keys on the Settings page."
         return _find_response(cursor, page)
 
     try:
@@ -1702,7 +1783,7 @@ def classics_page() -> str:
     page = {"titles": [], "error": None}
 
     if not config.TMDB_API_KEY:
-        page["error"] = "TMDB_API_KEY is not set. Add it to the environment (or .env) and restart the web UI."
+        page["error"] = "TMDB_API_KEY is not set. Add it under Keys on the Settings page."
         return render_template("classics.html", **page)
     try:
         watch_index = wi.load(config.WATCH_INDEX_PATH)
@@ -2296,6 +2377,7 @@ def title_detail(tmdb_id: int) -> str:
         meta=meta, description=description, overview=overview,
         tmdb_id=tmdb_id, ct=ct, poster=poster, user_state=state,
         tracking=_title_tracking_state(tmdb_id, ct),
+        streaming_providers=_streaming_providers(tmdb_id, ct, ctx.tmdb_client) if meta else [],
     )
 
 
@@ -2450,6 +2532,35 @@ def _consolidate_providers(names: list[str]) -> list[str]:
             seen.add(label)
             out.append(label)
     return out
+
+
+def _streaming_providers(tmdb_id: int | None, content_type: str | None, tmdb=None) -> list[str]:
+    """Where a title streams in the watch region, as clean brand names.
+
+    Reads the providers cache; only a title never looked up costs a TMDB call,
+    the same as search results. Without an API key only cached titles show.
+    """
+    if not (tmdb_id and content_type and config.TMDB_API_KEY):
+        return []
+    tmdb = tmdb or TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+    try:
+        return _consolidate_providers(tmdb.get_watch_providers(
+            tmdb_id, content_type, config.WATCH_REGION, config.PROVIDERS_CACHE_DIR))[:4]
+    except Exception as exc:
+        log.debug("Watch providers lookup failed for %s/%s: %s", content_type, tmdb_id, exc)
+        return []
+
+
+def _attach_show_providers(sections: dict[str, list[dict]]) -> None:
+    """Add streaming services to the On Deck cards the page shows."""
+    tmdb = None
+    for name in ("ready_now", "might_be_back", "coming_soon"):
+        for card in sections.get(name, []):
+            if "streaming_providers" in card:
+                continue
+            if tmdb is None and config.TMDB_API_KEY:
+                tmdb = TmdbClient(api_key=config.TMDB_API_KEY, cache_dir=config.CACHE_DIR)
+            card["streaming_providers"] = _streaming_providers(card.get("tmdb_id"), "tv", tmdb)
 
 
 def _decorate_saved_item(item: dict, ctx) -> None:
@@ -2969,6 +3080,8 @@ _SETTINGS_DEFAULTS = {
     },
     "default_top_n": 3, "min_vote_count": 20, "min_rating": 0, "min_year": 0,
     "recency_half_life_days": 90, "watch_region": "US", "streaming_platforms": [],
+    "returning_shows_lookback_days": 730,
+    "wizard": {"max_questions": 4, "min_questions": 4, "max_tokens": 2000},
     "manual": {"timestamp": "now", "tv_duration_minutes": 45, "movie_duration_minutes": 120},
     "log_level": "WARNING",
 }
@@ -2986,7 +3099,8 @@ _PROFILE_REBUILD_SCORING_KEYS = (
 
 
 def _read_yaml(path: Path) -> dict:
-    if not path.exists():
+    # A folder here is Docker's doing; the save below says how to fix it.
+    if not path.is_file():
         return {}
     with open(path) as f:
         return yaml.safe_load(f) or {}
@@ -3054,6 +3168,153 @@ def _resolve_settings_config(raw_cfg: dict | None = None) -> dict:
     return _merge_settings_defaults(cfg, raw_cfg or {})
 
 
+_KEY_LABELS = {
+    "TMDB_API_KEY": "TMDB",
+    "ANTHROPIC_API_KEY": "Anthropic (Claude)",
+    "GEMINI_API_KEY": "Google Gemini",
+    "OPENAI_API_KEY": "OpenAI",
+    "TVDB_API_KEY": "TheTVDB",
+    "PLEX_URL": "Plex server URL",
+    "PLEX_TOKEN": "Plex token",
+    "PLEX_WEBHOOK_TOKEN": "Plex webhook token",
+}
+# Not secret, so the page shows it in full.
+_PLAIN_KEYS = {"PLEX_URL"}
+
+
+def _settings_keys() -> list[dict]:
+    """Each key's state for the page. Secret values never leave the server."""
+    saved = config.read_keys_file(config.KEYS_PATH)
+    rows = []
+    for name in config.SETTINGS_KEY_NAMES:
+        value = saved.get(name) or os.environ.get(name, "")
+        if saved.get(name):
+            source = "settings"
+        elif value:
+            source = "environment"
+        else:
+            source = None
+        if name in _PLAIN_KEYS:
+            shown = value
+        else:
+            shown = value[-4:] if len(value) > 8 else ""
+        rows.append({
+            "name": name, "label": _KEY_LABELS[name], "source": source,
+            "shown": shown, "secret": name not in _PLAIN_KEYS,
+        })
+    return rows
+
+
+def _save_keys_file(keys: dict[str, str]) -> None:
+    """Write data/keys.env readable by the owner only, replacing it in one step."""
+    path = config.KEYS_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("# Keys saved on the Settings page. They win over the environment.\n")
+        for name in config.SETTINGS_KEY_NAMES:
+            if keys.get(name):
+                f.write(f"{name}={keys[name]}\n")
+    os.replace(tmp, path)
+
+
+_WATCH_EXPORTS = (
+    ("netflix", "Netflix"), ("prime", "Prime Video"), ("apple_tv", "Apple TV"),
+    ("disney", "Disney+"), ("hbo", "Max (HBO)"),
+)
+_REPO_ROOT = Path(config.__file__).parent
+
+
+def _repo_relative(path: str) -> str:
+    try:
+        return str(Path(path).relative_to(_REPO_ROOT))
+    except ValueError:
+        return path
+
+
+def _settings_exports() -> list[dict]:
+    """Each watch-history export as setup will read it, with its saved event count."""
+    counts = event_store.get_import_info(config.EVENT_DB_PATH)
+    rows = []
+    for provider, label in _WATCH_EXPORTS:
+        paths = config.PLATFORM_PATHS.get(provider) or []
+        rows.append({
+            "provider": provider, "label": label,
+            "paths": [_repo_relative(path) for path in paths],
+            "missing": [_repo_relative(path) for path in paths if not Path(path).exists()],
+            "event_count": counts.get(provider, {}).get("event_count", 0),
+        })
+    return rows
+
+
+def _parse_exports(form, exports: list[dict]) -> dict[str, list[str] | None]:
+    """New platform_paths from the form; providers the form leaves out keep theirs.
+
+    Refuses an export path outside data/ or that does not exist, and turning
+    off a provider whose events are saved: the next rebuild would delete them.
+    """
+    data_dir = os.path.join(os.path.realpath(_REPO_ROOT), "data")
+    platform_paths = {}
+    for row in exports:
+        raw = form.get(f"export_{row['provider']}")
+        if raw is None:
+            continue
+        paths = [line.strip() for line in raw.splitlines() if line.strip()]
+        if [str(_REPO_ROOT / path) for path in paths] == (config.PLATFORM_PATHS.get(row["provider"]) or []):
+            # Unchanged: a path that has gone missing must not block other settings.
+            continue
+        if not paths and row["event_count"]:
+            raise ValueError(
+                f"{row['label']} has {row['event_count']} saved watch events, and the next rebuild "
+                f"would delete them without an export path. Keep its path to keep them."
+            )
+        for path in paths:
+            # Only data/ is checked, so the page can't be used to probe other files.
+            target = os.path.realpath(os.path.join(data_dir, os.pardir, path))
+            if not target.startswith(data_dir + os.sep):
+                raise ValueError(f"{row['label']} export must be inside the data folder: {path}")
+            if not os.path.exists(target):
+                raise ValueError(f"{row['label']} export not found on the server: {path}")
+        platform_paths[row["provider"]] = paths or None
+    return platform_paths
+
+
+# The terminal command Settings asks for -> the button that runs it.
+_REBUILD_ACTIONS = {
+    "./recommend setup --refresh-data": "refresh_data",
+    "./recommend setup --refresh-profile": "refresh_profile",
+}
+
+
+def _first_run_checklist() -> dict:
+    """What a fresh install still needs before its first build."""
+    provider = config.LLM_PROVIDER
+    llm_key_name = config.get_llm_api_key_env(provider)
+    # Read saved keys directly: a background job can hold off applying them to config.
+    saved_keys = config.read_keys_file(config.KEYS_PATH)
+
+    def key_set(name: str) -> bool:
+        return bool(saved_keys.get(name) or getattr(config, name, "") or os.environ.get(name))
+
+    exports = _settings_exports()
+    manual = [path for path in (config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH) if path and Path(path).exists()]
+    return {
+        "tmdb_key": key_set("TMDB_API_KEY"),
+        "provider": provider,
+        "llm_key_name": llm_key_name,
+        "llm_key": provider == "local" or key_set(llm_key_name),
+        "exports_found": [row["label"] for row in exports if row["paths"] and not row["missing"]],
+        # Only paths someone set: a built-in default that isn't there is just unused.
+        "exports_missing": [
+            {"label": row["label"], "paths": row["missing"]}
+            for row in exports if row["missing"] and row["provider"] in config.CONFIGURED_PLATFORMS
+        ],
+        "manual_lists": len(manual),
+        "password_set": bool(os.environ.get("STREAMLINE_PASSWORD", "").strip()),
+    }
+
+
 def _render_settings_page(
     cfg: dict | None = None,
     *,
@@ -3061,12 +3322,17 @@ def _render_settings_page(
     error: str | None = None,
     rebuild_command: str | None = None,
     reload_deferred: bool = False,
+    keys_saved: bool = False,
 ) -> str:
     resolved_cfg = _resolve_settings_config(cfg if cfg is not None else _load_config_yaml())
     return render_template(
         "settings.html", cfg=resolved_cfg, saved=saved, error=error,
         rebuild_command=rebuild_command,
         reload_deferred=reload_deferred,
+        keys=_settings_keys(), keys_saved=keys_saved,
+        exports=_settings_exports(), disney_profiles=", ".join(config.DISNEY_PROFILES),
+        is_set_up=_is_set_up(), checklist=_first_run_checklist(), setup_run=setup_runs.current(),
+        rebuild_action=_REBUILD_ACTIONS.get(rebuild_command or ""),
     )
 
 
@@ -3171,7 +3437,27 @@ def settings_page() -> str:
     return _render_settings_page(
         saved=saved, rebuild_command=rebuild_command,
         reload_deferred=reload_deferred,
+        keys_saved=request.args.get("keys_saved") == "1",
     )
+
+
+@app.route("/settings/keys", methods=["POST"])
+def settings_keys_save() -> Response:
+    """Save keys from the Settings page. A blank field leaves that key as it is."""
+    keys = config.read_keys_file(config.KEYS_PATH)
+    for name in config.SETTINGS_KEY_NAMES:
+        # Keys never contain whitespace; dropping it also keeps one key per line.
+        value = "".join((request.form.get(f"key_{name}") or "").split())
+        if request.form.get(f"clear_{name}"):
+            keys.pop(name, None)
+        elif value:
+            keys[name] = value
+    _save_keys_file(keys)
+    reload_applied = _reload_app_config()
+    return redirect(url_for(
+        "settings_page", keys_saved="1",
+        reload_deferred="0" if reload_applied else "1",
+    ) + "#keys")
 
 
 @app.route("/settings", methods=["POST"])
@@ -3181,6 +3467,11 @@ def settings_save() -> str:
     form = request.form
 
     try:
+        if _local_config_path().is_dir():
+            raise ValueError(
+                "config.local.yaml is a folder, so settings can't be saved. Docker makes one when the file "
+                "is missing. Stop the container, delete that folder, run touch config.local.yaml, and start again."
+            )
         llm_values = {
             key: _parse_int_field(form, f"llm_{key}", current_cfg["llm"][key])
             for key in (
@@ -3205,7 +3496,14 @@ def settings_save() -> str:
             "min_rating": _parse_float_field(form, "min_rating", current_cfg["min_rating"]),
             "min_year": _parse_int_field(form, "min_year", current_cfg["min_year"]),
             "recency_half_life_days": _parse_int_field(form, "recency_half_life_days", current_cfg["recency_half_life_days"]),
+            "returning_shows_lookback_days": _parse_int_field(
+                form, "returning_shows_lookback_days", current_cfg["returning_shows_lookback_days"]),
         }
+        wizard_values = {
+            key: _parse_int_field(form, f"wizard_{key}", current_cfg["wizard"][key])
+            for key in ("max_questions", "min_questions", "max_tokens")
+        }
+        export_paths = _parse_exports(form, _settings_exports())
         manual_values = {
             "timestamp": _parse_manual_timestamp(form, current_cfg),
             "tv_duration_minutes": _parse_int_field(form, "manual_tv_duration", current_cfg["manual"]["tv_duration_minutes"]),
@@ -3259,16 +3557,38 @@ def settings_save() -> str:
     cfg["streaming_platforms"] = [p.strip() for p in platforms_str.split(",") if p.strip()] if platforms_str else []
     manual = cfg.setdefault("manual", {})
     manual.update(manual_values)
+    wizard = cfg.setdefault("wizard", {})
+    wizard.update(wizard_values)
     cfg["log_level"] = form.get("log_level", "WARNING")
+    exports_changed = False
+    if export_paths:
+        platform_paths = cfg.setdefault("platform_paths", {})
+        exports_changed = any(
+            [str(_REPO_ROOT / path) for path in paths or []] != (config.PLATFORM_PATHS.get(provider) or [])
+            for provider, paths in export_paths.items()
+        )
+        # One path stays a plain string, as people write it by hand.
+        platform_paths.update({
+            provider: paths[0] if paths and len(paths) == 1 else paths
+            for provider, paths in export_paths.items()
+        })
+    if "disney_profiles" in form:
+        profiles = [name.strip() for name in form["disney_profiles"].split(",") if name.strip()]
+        exports_changed = exports_changed or profiles != list(config.DISNEY_PROFILES)
+        cfg["disney_profiles"] = profiles
 
     updated_cfg = _resolve_settings_config(cfg)
     refresh_profile, refresh_data = _settings_refresh_flags(current_cfg, updated_cfg)
+    if exports_changed:
+        refresh_profile = refresh_data = True
 
     _save_config_yaml(cfg)
     reload_applied = _reload_app_config()
 
     rebuild_command = None
-    if refresh_data:
+    if not _is_set_up():
+        pass  # the first build does all of this, and Get started offers it
+    elif refresh_data:
         rebuild_command = "./recommend setup --refresh-data"
     elif refresh_profile:
         rebuild_command = "./recommend setup --refresh-profile"
@@ -3279,6 +3599,42 @@ def settings_save() -> str:
         rebuild_command=rebuild_command or "",
         reload_deferred="1" if not reload_applied else "0",
     ))
+
+
+@app.route("/setup/run", methods=["POST"])
+def setup_run() -> Response | str:
+    """Start a setup run from Settings. Paid runs need the cost box ticked."""
+    action = request.form.get("action", "")
+    if action not in setup_runs.ACTIONS:
+        return _render_settings_page(saved=False, error="Unknown rebuild."), 400
+    if action in setup_runs.PAID_ACTIONS and request.form.get("confirm_cost") != "1":
+        return _render_settings_page(
+            saved=False, error="This makes paid AI calls. Tick the box to confirm, then start it again.")
+    if not setup_runs.start(action):
+        return _render_settings_page(saved=False, error="A rebuild is already running. Wait for it to finish.")
+    return redirect(url_for("settings_page") + ("#rebuild" if _is_set_up() else "#get-started"))
+
+
+@app.route("/setup/status")
+def setup_status() -> Response | str:
+    """The current or last run, for Settings to poll.
+
+    A page with a run going polls with watching=1. An idle page polls slowly with
+    since=<its last run's start> and only hears back once a new run has started,
+    from here or a terminal.
+    """
+    run = setup_runs.current()
+    since = request.args.get("since")
+    if since is not None:
+        started = str((run["status"] or {}).get("started_at") or 0)
+        if run["running"] or started != since:
+            return Response("", headers={"HX-Refresh": "true"})
+        return Response(status=204)  # nothing new; htmx leaves the page alone
+    html = render_template("_setup_status.html", setup_run=run, is_set_up=_is_set_up())
+    if request.args.get("watching") and not run["running"]:
+        # The run the page was watching ended; reload so the buttons and checklist catch up.
+        return Response(html, headers={"HX-Refresh": "true"})
+    return html
 
 
 # ── Read-only API ─────────────────────────────────────────────────────────────
@@ -3308,8 +3664,8 @@ def run() -> None:
     try:
         validate_config()
     except RuntimeError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)
+        # Still start: Settings is where keys are added on a fresh install.
+        print(f"Note: {exc} Open Settings in the web UI.", file=sys.stderr)
     host = os.environ.get("STREAMLINE_HOST", "127.0.0.1")
     port = int(os.environ.get("STREAMLINE_PORT", "5051"))
     print(f"Starting Streamline web UI at http://{host}:{port}")

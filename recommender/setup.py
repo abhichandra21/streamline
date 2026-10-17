@@ -40,7 +40,7 @@ from recommender.enricher import (
     enrichment_key_from_parts,
     is_identity_enrichment_index,
 )
-from recommender.taste_profile_builder import build as build_taste_profile
+from recommender.taste_profile_builder import build as build_taste_profile, skip_patterns
 from recommender.structured_profile import save_structured_profile
 from recommender.taste_rows import build_tag_profile
 from recommender.llm import create_client
@@ -1078,7 +1078,22 @@ def _profile_scores(
     if config.USE_VIEWING_SIGNALS:
         return user_store.apply_rating_multipliers(scores, ratings, key_for_tmdb)
     less = keys_rated(user_store.RATING_LESS)
-    return {key: score for key, score in scores.items() if key not in less}
+    # One show can arrive under several event titles (episode-prefixed names) that all
+    # match the same TMDB title, so a Less rating also drops every title with its TMDB ID.
+    less_ids = {
+        (r["content_type"], r["tmdb_id"]) for r in ratings
+        if user_store.normalize_rating(r["rating"]) == user_store.RATING_LESS and r.get("tmdb_id")
+    }
+
+    def tmdb_identity(key: str) -> tuple[str, int] | None:
+        # The matched type, since TMDB can correct an imported movie to a show or back.
+        for meta in (metadata.get((key, "tv")), metadata.get((key, "movie")), metadata.get(key)):
+            if meta and meta.tmdb_id:
+                return meta.content_type, meta.tmdb_id
+        return None
+
+    return {key: score for key, score in scores.items()
+            if key not in less and tmdb_identity(key) not in less_ids}
 
 
 def _archive_events() -> list[WatchEvent]:
@@ -1148,7 +1163,15 @@ def ingest_providers(fail_on_error: bool = True) -> list:
     configured_platforms = [p for p, _ in _PLATFORM_PARSERS if config.PLATFORM_PATHS.get(p)]
     event_store.remove_disabled_providers(config.EVENT_DB_PATH, configured_platforms)
 
+    saved = event_store.get_import_info(config.EVENT_DB_PATH)
     for platform, (pevents, paths) in platform_events_by_provider.items():
+        saved_count = saved.get(platform, {}).get("event_count", 0)
+        if not pevents and saved_count:
+            # A wrong file or a mistyped Disney+ profile reads as no watches;
+            # replacing would silently delete the history this provider has.
+            console.print(f"  {platform}: [yellow]no watches found, keeping the {saved_count:,} "
+                          f"saved ones[/yellow] (check its export path or profile names)")
+            continue
         manifest, snapshot_sha = _build_source_manifest(paths)
         persisted, _total_raw = event_store.replace_provider_events(
             config.EVENT_DB_PATH, platform, pevents, manifest, snapshot_sha,
@@ -1218,6 +1241,29 @@ def refresh_language_lists(only_existing: bool = False) -> bool:
             continue
         console.print(f"  {label} list: [green]ok[/green] {count:,} IMDb-rated titles")
     return ok
+
+
+def run_check_exports() -> None:
+    """Read every configured export and manual list and say what is in them. Saves nothing."""
+    console.print("Checking watch-history exports. Nothing is saved.")
+    by_provider = _load_platform_events_by_provider(fail_on_error=False)
+    configured = [p for p, _ in _PLATFORM_PARSERS if config.PLATFORM_PATHS.get(p)]
+    failed = [p for p in configured if p not in by_provider]
+    total = sum(len(events) for events, _paths in by_provider.values())
+    if config.MANUAL_TV_PATH and config.MANUAL_MOVIES_PATH:
+        try:
+            manual = parse_manual(config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH)
+            console.print(f"  manual: ok {len(manual):,} events")
+            total += len(manual)
+        except FileNotFoundError:
+            console.print("  manual: [dim]no lists found[/dim]")
+    if failed:
+        console.print(f"\n[red]Could not read: {', '.join(failed)}. Fix the path in Settings.[/red]")
+        sys.exit(1)
+    if not total:
+        console.print("\n[red]No watches found. Add at least one export or manual list.[/red]")
+        sys.exit(1)
+    console.print(f"\n[green]Found {total:,} watches. Nothing was saved; a build or Refresh data brings them in.[/green]")
 
 
 def run_ingest_only() -> None:
@@ -1491,12 +1537,17 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                 sys.exit(1)
             structured_profile = None
             structured_profile_skipped = False
-            if not using_custom_path:
+            loves = {t: s for t, s in scores.items() if s >= STRONG_WEIGHT}
+            if not using_custom_path and not loves:
+                # A fresh install has no Loved titles yet; the theme call would get nothing to group.
+                console.print("  Taste rows: none yet. Mark titles Loved in Archive > Rate It, "
+                              "then rebuild the taste profile.")
+            elif not using_custom_path:
                 try:
-                    loves = {t: s for t, s in scores.items() if s >= STRONG_WEIGHT}
                     structured_profile, warnings = build_tag_profile(
                         loves, enrichments, index.entries, collections, llm,
                         negative_prefs or None, rethink=rethink_themes,
+                        skip_patterns=skip_patterns(profile),
                     )
                     for warning in warnings:
                         console.print(f"[yellow]{warning}[/yellow]")
@@ -1543,7 +1594,7 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
     console.print("\n[green]Setup complete![/green]")
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run offline setup for the recommender")
     parser.add_argument("--refresh-profile", action="store_true",
                         help="Rebuild taste profile even if it exists")
@@ -1551,6 +1602,8 @@ if __name__ == "__main__":
                         help="Re-fetch TMDB metadata, watch index, and enrichments")
     parser.add_argument("--ingest-only", action="store_true",
                         help="Load and report on ingested data without TMDB or LLM calls")
+    parser.add_argument("--check-exports", action="store_true",
+                        help="Read the exports and manual lists and report what is in them; saves nothing")
     parser.add_argument("--refresh-imdb", action="store_true",
                         help="Only re-download IMDb ratings and rebuild Find's language lists, then exit")
     parser.add_argument("--debug", action="store_true",
@@ -1562,16 +1615,36 @@ if __name__ == "__main__":
     parser.add_argument("--rethink-themes", action="store_true",
                         help="Rebuild the taste themes from scratch, keeping theme ids where the taste "
                              "still exists. Also rebuilds the prose taste profile, which is a paid call")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     from recommender.log import setup_logging
+    from recommender import setup_runs
     setup_logging(level_override="DEBUG" if args.debug else None)
-    if args.refresh_imdb:
-        ratings_ok = refresh_imdb_ratings()
-        lists_ok = refresh_language_lists() if ratings_ok else False
-        sys.exit(0 if ratings_ok and lists_ok else 1)
-    elif args.ingest_only:
-        run_ingest_only()
-    else:
-        run_setup(refresh_profile=args.refresh_profile, refresh_data=args.refresh_data,
-                  provider=args.provider, profile_path=args.profile_path,
-                  rethink_themes=args.rethink_themes)
+    if not setup_runs.acquire_lock():
+        console.print("[red]A rebuild is already running. Try again when it finishes.[/red]")
+        sys.exit(1)
+    run_status = setup_runs.record_start(setup_runs.action_for(sys.argv[1:] if argv is None else argv))
+    exit_code = 0
+    try:
+        if args.refresh_imdb:
+            ratings_ok = refresh_imdb_ratings()
+            lists_ok = refresh_language_lists() if ratings_ok else False
+            exit_code = 0 if ratings_ok and lists_ok else 1
+        elif args.check_exports:
+            run_check_exports()
+        elif args.ingest_only:
+            run_ingest_only()
+        else:
+            run_setup(refresh_profile=args.refresh_profile, refresh_data=args.refresh_data,
+                      provider=args.provider, profile_path=args.profile_path,
+                      rethink_themes=args.rethink_themes)
+    except SystemExit as exc:
+        exit_code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+    except BaseException:
+        setup_runs.record_end(run_status, ok=False)
+        raise
+    setup_runs.record_end(run_status, ok=exit_code == 0)
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()

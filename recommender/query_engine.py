@@ -346,9 +346,14 @@ def rank_candidates(
         'for tonight over niche or obscure ones, unless the query or notes ask for lesser-known picks.\n'
         '- Score 0-1 on query fit, nudged by taste fit.\n'
         f'- Return the {top_n} best. If fewer truly fit, return fewer. '
-        'Never include weak matches just to fill the count.\n\n'
+        'Never include weak matches just to fill the count.\n'
+        '- One pick that misses the request costs more trust than a shorter list. '
+        'Check every part of the query (genre, mood, pace, who it is for, type, era). '
+        'If you would have to qualify the explanation, as in "only partly a spy show", '
+        '"more propulsive than slow-burn" or "better for older kids", it does not fit.\n\n'
         'Return ONLY valid JSON: a list of objects with fields:\n'
         '- title: string (exact title from candidates)\n'
+        '- fits_request: boolean (true only if it fits every part of the query)\n'
         '- explanation: string (1-2 sentences why this fits the query and this user)\n'
         '- score: float 0-1\n'
     )
@@ -368,6 +373,9 @@ def rank_candidates(
         title = item.get('title', '')
         if title not in meta_by_title:
             log.debug("Ranked title not in candidates, skipping: %r", title)
+            continue
+        if item.get('fits_request') is False:
+            log.debug("Ranker says title misses part of the request, skipping: %r", title)
             continue
         score = float(item.get('score', 0))
         if score < MIN_QUERY_MATCH_SCORE:
@@ -662,6 +670,11 @@ def _matches_request(candidate: TmdbMetadata, intent: "QueryIntent") -> bool:
     return True
 
 
+def _min_year_applies(intent: "QueryIntent | None") -> bool:
+    """The min_year setting is a default; a request that names years replaces it."""
+    return config.MIN_YEAR > 0 and not (intent and (intent.year_from or intent.year_to))
+
+
 def _candidate_allowed(
     candidate: TmdbMetadata,
     ctx: "RecommendContext",
@@ -678,7 +691,7 @@ def _candidate_allowed(
         return False
     if ctx.user_state and ctx.user_state.is_dismissed(candidate):
         return False
-    if config.MIN_YEAR > 0 and candidate.release_year and candidate.release_year < config.MIN_YEAR:
+    if _min_year_applies(intent) and candidate.release_year and candidate.release_year < config.MIN_YEAR:
         return False
     return True
 
@@ -779,10 +792,7 @@ def ask(
     if not run_discover:
         log.debug("Skipping unfiltered TMDB Discover for similar_to-only query")
 
-    # Use the more restrictive of intent year_from and config MIN_YEAR
-    effective_year_from = intent.year_from
-    if config.MIN_YEAR > 0:
-        effective_year_from = max(config.MIN_YEAR, intent.year_from or 0) or config.MIN_YEAR
+    effective_year_from = config.MIN_YEAR if _min_year_applies(intent) else intent.year_from
 
     discover_cts = list(content_types) if run_discover else []
 
@@ -880,12 +890,13 @@ def ask(
         candidates = [c for c in candidates if c.rating >= config.MIN_RATING]
 
     def _rank_pool(candidates: list[TmdbMetadata], context_note: str | None,
-                   first_round: bool = True) -> list[Recommendation]:
+                   first_round: bool = True, platform_first: bool = True) -> list[Recommendation]:
         """Runtime-filter, trim, enrich, rank, and platform-filter one pool of candidates.
 
         Only the first round may relax the runtime limit or the platform filter;
         a refill must not sneak in titles the request rules out.
         """
+        pool, pool_note = candidates, context_note   # for the unfiltered retry below
         # Runtime is a hard filter when known, applied once over the whole pool so a
         # fallback is possible. If every candidate with a known runtime exceeds the
         # ceiling (e.g. "movie under an hour" — feature films are rarely that short),
@@ -901,8 +912,31 @@ def ask(
                 context_note = (
                     (context_note or "")
                     + f"\nRuntime limit ({intent.max_runtime_minutes} min) was too restrictive; "
-                      "prefer the shortest strong matches and note if a pick runs longer."
+                      "prefer the shortest strong matches and note if a pick runs longer. "
+                      "Runtime does not count against fits_request for this query."
                 ).strip()
+
+        # Keep only what is on the requested services before ranking. Ranking
+        # first and filtering after let a pool mostly on other services fill
+        # every ranked slot, leaving nothing on the service the user asked for.
+        requested_platforms = [
+            PLATFORM_ALIASES.get(p.lower(), p) for p in (intent.platforms or [])
+        ] or [PLATFORM_ALIASES.get(p.lower(), p) for p in config.STREAMING_PLATFORMS]
+        narrowed = False
+        if platform_first and ctx.providers_cache_dir and requested_platforms and candidates:
+            providers = _parallel_fetch(
+                lambda c: ctx.tmdb_client.get_watch_providers(
+                    c.tmdb_id, c.content_type, ctx.watch_region, ctx.providers_cache_dir),
+                candidates)
+            on_platform = [c for c, names in zip(candidates, providers)
+                           if any(p in (names or []) for p in requested_platforms)]
+            log.debug("On requested platforms %s: %d of %d candidates",
+                      requested_platforms, len(on_platform), len(candidates))
+            # The first round keeps the whole pool when nothing is on the
+            # platforms, so the unfiltered fallback below still has results.
+            if on_platform or not first_round:
+                narrowed = len(on_platform) < len(candidates)
+                candidates = on_platform
 
         if log.isEnabledFor(logging.DEBUG) and candidates:
             log.debug("Final candidate pool (%d): %s",
@@ -940,9 +974,6 @@ def ask(
         # Annotate results with streaming provider data (and optionally filter by platform).
         if ctx.providers_cache_dir:
             meta_by_title = {c.title: c for c in candidates}
-            requested_platforms = [
-                PLATFORM_ALIASES.get(p.lower(), p) for p in (intent.platforms or [])
-            ] or [PLATFORM_ALIASES.get(p.lower(), p) for p in config.STREAMING_PLATFORMS]
 
             # Rank with a larger pool when platform filtering is active, so we have
             # enough candidates after discarding titles not on the requested service.
@@ -969,6 +1000,12 @@ def ask(
                 annotated.append(rec)
                 if len(annotated) == intent.top_n:
                     break
+
+            # Nothing on the platforms survived ranking: rank the whole pool once
+            # more, so the unfiltered fallback still has off-platform picks to show.
+            if first_round and not annotated and narrowed:
+                log.debug("No on-platform pick survived ranking; ranking the whole pool")
+                return _rank_pool(pool, pool_note, platform_first=False)
 
             # If platform filter removed everything, fall back to unfiltered results
             if first_round and not annotated and unfiltered and requested_platforms:

@@ -61,3 +61,35 @@ def _isolate_find_cache_dir(tmp_path, monkeypatch):
     The path keeps its real suffix for tests that check the configured name.
     """
     monkeypatch.setattr(config, "FIND_CACHE_DIR", str(tmp_path / "recommender/cache/find"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_providers_cache_dir(tmp_path, monkeypatch):
+    """Point PROVIDERS_CACHE_DIR at a per-test directory.
+
+    On Deck and the title page read streaming services from it. Without this,
+    a route test would show the user's real cached providers.
+    """
+    monkeypatch.setattr(config, "PROVIDERS_CACHE_DIR", str(tmp_path / "providers"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_built_library(tmp_path_factory, monkeypatch):
+    """Give every test a built (empty) library of its own.
+
+    Without this, web tests pass only on a machine that has run setup: before
+    the first build every page redirects to Settings. Tests of the first-run
+    flow point these paths at missing files themselves. Setup's lock and
+    status file move too, so no test sees or blocks a real run.
+    """
+    from recommender import setup_runs
+    from recommender import watch_index as wi
+
+    # Its own folder: some tests check what lands in tmp_path.
+    built = tmp_path_factory.mktemp("built")
+    wi.save(wi.build([], {}), str(built / "watch_index.json"))
+    (built / "taste_profile.txt").write_text("Test taste profile.")
+    monkeypatch.setattr(config, "WATCH_INDEX_PATH", str(built / "watch_index.json"))
+    monkeypatch.setattr(config, "TASTE_PROFILE_PATH", str(built / "taste_profile.txt"))
+    monkeypatch.setattr(setup_runs, "LOCK_PATH", built / "setup.lock")
+    monkeypatch.setattr(setup_runs, "STATUS_PATH", built / "setup_status.json")

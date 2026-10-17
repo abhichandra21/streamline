@@ -1,7 +1,7 @@
 # Streamline web UI and CLI in one image.
 #
-#   docker compose up -d                                   # web UI on :5051
-#   docker compose run --rm streamline ./recommend setup   # first-time setup
+#   docker compose up -d                                   # web UI on :5051; set up from Settings
+#   docker compose run --rm streamline ./recommend setup   # or set up from the terminal
 #
 # State lives in bind mounts (see compose.yaml), laid out exactly as in a
 # plain checkout, so the same paths and commands work with or without Docker.

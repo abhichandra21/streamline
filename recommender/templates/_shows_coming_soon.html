@@ -1,11 +1,18 @@
 {% import "_show_links.html" as link %}
 {% macro soon_row(show, csrf_token, undated=false) -%}
 <article class="show-row soon-row{% if undated %} soon-row--undated{% endif %}">
+  {# A known release time brings its own date: Apple drops the evening before
+     the listed day, so next_air_date would be a day late. #}
+  {%- if show.next_released_at %}
+  <span class="soon-date mono">{{ show.next_released_at[:10] }} <span class="soon-time">{{ show.next_released_at|release_time }}</span></span>
+  {%- else %}
   <span class="soon-date mono">{{ show.next_air_date if show.next_air_date else "—" }}</span>
+  {%- endif %}
   <span class="soon-title">{{ link.name(show) }}</span>
   <span class="soon-slug mono">
     {%- if show.next_episode_number %}S{{ show.season_number }}E{{ show.next_episode_number }}
     {%- else %}S{{ show.season_number }}{% endif %}
+    {%- if show.streaming_providers %}<span class="soon-where"> · {{ show.streaming_providers | join("  ·  ") }}</span>{% endif %}
   </span>
   <form class="show-inline-form" action="/shows/unfollow" method="post"
         hx-post="/shows/unfollow" hx-target="closest .show-row" hx-swap="outerHTML swap:340ms" hx-indicator="closest .show-row">

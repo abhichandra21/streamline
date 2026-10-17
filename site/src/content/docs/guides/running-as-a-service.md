@@ -12,7 +12,8 @@ sudo systemctl enable --now streamline-web
 ```
 
 Edit the `User`, `WorkingDirectory`, and venv paths in `streamline-web.service` first.
-The unit reads keys from `.env` with `EnvironmentFile`, so restart the service after changing `.env`.
+The unit reads keys from `.env` with `EnvironmentFile`, so restart the service after changing `.env`. Keys saved in Settings need no restart.
+The service starts even before the library is built or keys are set; the web UI then sends you to Settings.
 
 ## Port and address
 
@@ -26,5 +27,6 @@ All changes from the browser also need a CSRF token, so other sites can't make c
 ## Keep data fresh
 
 The web UI refreshes IMDb ratings and On Deck on its own.
-New exports and Plex plays reach the Archive after `./recommend setup --refresh-data`, which you can run on a schedule (a cron job or systemd timer, weekly is plenty).
+New exports and Plex plays reach the Archive after **Refresh data** in Settings or `./recommend setup --refresh-data`, which you can run on a schedule (a cron job or systemd timer, weekly is plenty).
 It never rebuilds the taste profile, so scheduled runs only pay for descriptions of new titles.
+Only one rebuild runs at a time, whoever starts it; a second one stops straight away. The web UI picks up a finished rebuild by itself, so there is no need to restart it afterwards.

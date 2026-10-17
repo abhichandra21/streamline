@@ -1,0 +1,72 @@
+{#- The current or last setup run. Included on Settings (with embedded=true) and
+    served alone by GET /setup/status, which it polls only while a run is going. -#}
+{% set run_labels = {
+  'build': 'First build',
+  'check_exports': 'Check exports',
+  'import_exports': 'Import exports',
+  'refresh_data': 'Refresh data',
+  'refresh_profile': 'Rebuild taste profile',
+  'rethink_themes': 'Rethink themes',
+  'refresh_imdb': 'Refresh IMDb ratings',
+} %}
+{% set run = setup_run %}
+{% set st = run.status or {} %}
+{% set run_label = run_labels.get(st.action, 'Rebuild') %}
+<div id="setup-status"
+     class="run-status run-status-{{ 'running' if run.running else (run.state or 'none') }}"
+     aria-live="polite"
+     {% if run.running %}hx-get="/setup/status?watching=1" hx-trigger="every 3s" hx-swap="outerHTML"
+     {%- else %}hx-get="/setup/status?since={{ st.started_at or 0 }}" hx-trigger="every 15s" hx-swap="outerHTML"{% endif %}>
+  {% if run.running and run.state != 'running' %}
+    <div class="run-status-head">
+      <span class="run-status-dot"></span>
+      <span class="run-status-title">A rebuild is running</span>
+    </div>
+    <p class="run-status-meta">It was started from a terminal or the weekly timer. This updates by itself when it finishes.</p>
+  {% elif run.state == 'running' %}
+    <div class="run-status-head">
+      <span class="run-status-dot"></span>
+      <span class="run-status-title">{{ run_label }} is running</span>
+    </div>
+    <p class="run-status-meta mono">Started {{ st.started_at|run_time }} &middot; {{ st|run_length }} so far</p>
+    {% if run.log_tail %}
+    <pre class="run-status-log">{% for line in run.log_tail %}{{ line }}
+{% endfor %}</pre>
+    {% else %}
+    <p class="run-status-note">Started from a terminal or the weekly timer, so its output is not shown here.</p>
+    {% endif %}
+    <p class="run-status-note">You can leave this page. Come back any time to see how it is going.</p>
+  {% elif run.state in ('done', 'failed') %}
+    <div class="run-status-head">
+      <span class="run-status-dot"></span>
+      <span class="run-status-title">{{ run_label }} {{ 'finished' if run.state == 'done' else 'failed' }}</span>
+    </div>
+    <p class="run-status-meta mono">{{ 'Finished' if run.state == 'done' else 'Stopped' }} {{ st.finished_at|run_time }} &middot; took {{ st|run_length }}</p>
+    {% if run.log_tail %}
+    <pre class="run-status-log">{% for line in run.log_tail %}{{ line }}
+{% endfor %}</pre>
+    {% endif %}
+  {% elif run.state == 'stopped' %}
+    <div class="run-status-head">
+      <span class="run-status-dot"></span>
+      <span class="run-status-title">{{ run_label }} stopped before finishing</span>
+    </div>
+    <p class="run-status-meta">The web app or the server may have restarted. Started {{ st.started_at|run_time }}.</p>
+    {% if run.log_tail %}
+    <pre class="run-status-log">{% for line in run.log_tail %}{{ line }}
+{% endfor %}</pre>
+    {% endif %}
+  {% else %}
+    <p class="run-status-meta">No rebuild has run yet.</p>
+  {% endif %}
+
+  {# Only in the polled copy: the buttons on the page were drawn while the run was going. #}
+  {% if not embedded and not run.running and run.state in ('done', 'failed', 'stopped') %}
+  <div class="run-status-next">
+    {% if is_set_up and run.state == 'done' and st.action == 'build' %}
+    <a href="/" class="btn-primary run-status-link">Open Streamline</a>
+    {% endif %}
+    <a href="/settings{{ '#rebuild' if is_set_up else '#get-started' }}" class="btn-ghost run-status-link">Reload the page</a>
+  </div>
+  {% endif %}
+</div>

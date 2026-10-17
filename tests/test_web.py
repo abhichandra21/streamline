@@ -576,6 +576,16 @@ class TestComingSoonGroupingAndSort:
         assert [r["title"] for r in dated] == ["B", "C"]
         assert [r["title"] for r in undated] == ["A"]
 
+    def test_soonest_sort_uses_the_release_moment_when_known(self):
+        rows = [
+            # Listed Oct 21, but out at 8 PM Central on Oct 20.
+            {"title": "Apple", "next_air_date": "2026-10-21", "next_released_at": "2026-10-20T20:00:00-05:00"},
+            {"title": "Untimed", "next_air_date": "2026-10-20"},
+            {"title": "Broadcast", "next_air_date": "2026-10-20", "next_released_at": "2026-10-20T22:00:00-05:00"},
+        ]
+        dated, _ = web._split_coming_soon(rows, "soonest")
+        assert [r["title"] for r in dated] == ["Untimed", "Apple", "Broadcast"]
+
     def test_undated_shows_sort_by_title_for_a_stable_order(self):
         rows = [{"title": "zeta", "next_air_date": None}, {"title": "Alpha", "next_air_date": None}]
         _, undated = web._split_coming_soon(rows, "soonest")
@@ -812,6 +822,98 @@ class TestStatusObservability:
         payload = resp.get_json()
         assert payload["status"] == "ok"
         assert "ingestion_errors" not in payload
+
+
+class TestStreamingServices:
+    """On Deck and the title page say where a show streams, from the providers cache."""
+
+    def _cache_providers(self, tmdb_id, names):
+        import json
+        from pathlib import Path
+        path = Path(web.config.PROVIDERS_CACHE_DIR) / "tv" / web.config.WATCH_REGION / f"{tmdb_id}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"providers": names}))
+
+    def _on_deck(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "tmdb")
+        monkeypatch.setattr(web.config, "CACHE_DIR", str(tmp_path / "tmdb"))
+        monkeypatch.setattr(web, "_show_page_data", lambda: ([], [], _show_sections()))
+        monkeypatch.setattr(web.show_tracker, "refresh_is_due", lambda *_args: False)
+
+    def test_on_deck_cards_show_cached_services_with_no_tmdb_call(self, client, monkeypatch, tmp_path):
+        self._on_deck(monkeypatch, tmp_path)
+        self._cache_providers(10, ["Apple TV", "Apple TV Amazon Channel"])
+        self._cache_providers(20, ["Netflix"])
+        tmdb_get = MagicMock(side_effect=AssertionError("TMDB called"))
+        monkeypatch.setattr(web.TmdbClient, "_get", tmdb_get)
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert '<p class="show-where mono">Apple TV+</p>' in body
+        assert '<p class="show-where mono">Netflix</p>' in body
+        assert 'shows-credit--justwatch' in body
+        tmdb_get.assert_not_called()
+
+    def test_show_with_no_services_says_nothing(self, client, monkeypatch, tmp_path):
+        self._on_deck(monkeypatch, tmp_path)
+        self._cache_providers(10, [])
+        self._cache_providers(20, [])
+        monkeypatch.setattr(web.TmdbClient, "_get", MagicMock(side_effect=AssertionError("TMDB called")))
+
+        body = client.get("/shows").get_data(as_text=True)
+
+        assert 'class="show-where' not in body
+        assert "justwatch.com" not in body
+        assert "not available" not in body.lower()
+
+    def test_uncached_show_is_looked_up_once_then_read_from_cache(self, client, monkeypatch, tmp_path):
+        self._on_deck(monkeypatch, tmp_path)
+        self._cache_providers(20, [])
+        tmdb_get = MagicMock(return_value={"results": {"US": {"flatrate": [{"provider_name": "Apple TV"}]}}})
+        monkeypatch.setattr(web.TmdbClient, "_get", tmdb_get)
+
+        first = client.get("/shows").get_data(as_text=True)
+        second = client.get("/shows").get_data(as_text=True)
+
+        assert tmdb_get.call_count == 1
+        assert '<p class="show-where mono">Apple TV+</p>' in first
+        assert '<p class="show-where mono">Apple TV+</p>' in second
+
+    @patch("recommender.web._load_enrichments", return_value={})
+    @patch("recommender.web._load_user_state")
+    @patch("recommender.web._get_context")
+    def test_title_page_shows_services_and_credit(
+        self, mock_ctx, mock_user_state, _mock_enrichments, client, monkeypatch
+    ):
+        from recommender.tmdb_client import TmdbMetadata
+
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "tmdb")
+        monkeypatch.setattr(web, "_title_tracking_state", lambda *_args: {
+            "state": None, "from_season": None, "can_follow": False})
+        user_state = MagicMock()
+        user_state.is_manually_watched.return_value = False
+        user_state.is_in_watchlist.return_value = False
+        user_state.is_dismissed.return_value = False
+        user_state.get_rating.return_value = None
+        mock_user_state.return_value = user_state
+        tmdb_client = MagicMock()
+        tmdb_client.get_cached_by_id.return_value = TmdbMetadata(tmdb_id=10, content_type="tv", title="Ready Show")
+        tmdb_client.get_watch_providers.return_value = ["Apple TV"]
+        mock_ctx.return_value = MagicMock(
+            tmdb_client=tmdb_client,
+            watch_index=MagicMock(tmdb_keys=set()),
+        )
+
+        html = client.get("/title/10?type=tv").get_data(as_text=True)
+
+        assert '<p class="tp-providers mono">Apple TV+</p>' in html
+        assert 'class="justwatch-credit mono"' in html
+
+        tmdb_client.get_watch_providers.return_value = []
+        html = client.get("/title/10?type=tv").get_data(as_text=True)
+
+        assert 'class="tp-providers' not in html
+        assert "justwatch.com" not in html
 
 
 class TestTitleDetailFallback:
@@ -1106,6 +1208,144 @@ class TestRecommendProgressive:
         assert "test-job-id" in html
         # Should NOT be a full page
         assert "<!DOCTYPE html>" not in html
+
+
+# ── Keys on the Settings page ──────────────────────────────────────────────────
+
+class TestSettingsKeys:
+    @pytest.fixture
+    def keys_path(self, tmp_path, monkeypatch):
+        path = tmp_path / "data" / "keys.env"
+        monkeypatch.setattr(web.config, "KEYS_PATH", path)
+        for name in web.config.SETTINGS_KEY_NAMES:
+            monkeypatch.delenv(name, raising=False)
+        return path
+
+    @patch("recommender.web._reload_app_config", return_value=True)
+    def test_saving_a_key_writes_an_owner_only_file_and_reloads(self, mock_reload, client, keys_path):
+        resp = client.post("/settings/keys", data=_csrf_form(key_TMDB_API_KEY="  tmdb-secret-1234 "))
+
+        assert resp.status_code == 302
+        assert "keys_saved=1" in resp.headers["Location"]
+        assert web.config.read_keys_file(keys_path) == {"TMDB_API_KEY": "tmdb-secret-1234"}
+        assert keys_path.stat().st_mode & 0o777 == 0o600
+        mock_reload.assert_called_once()
+
+    @patch("recommender.web._reload_app_config", return_value=True)
+    def test_blank_field_keeps_the_key_and_clear_removes_it(self, mock_reload, client, keys_path):
+        keys_path.parent.mkdir(parents=True)
+        keys_path.write_text("TMDB_API_KEY=keep-me-1234\nTVDB_API_KEY=drop-me-1234\n")
+
+        client.post("/settings/keys", data=_csrf_form(key_TMDB_API_KEY="", clear_TVDB_API_KEY="1"))
+
+        assert web.config.read_keys_file(keys_path) == {"TMDB_API_KEY": "keep-me-1234"}
+
+    @patch("recommender.web._reload_app_config", return_value=True)
+    def test_a_value_cannot_add_a_second_line(self, mock_reload, client, keys_path):
+        client.post("/settings/keys", data=_csrf_form(key_TMDB_API_KEY="abc\nSTREAMLINE_PASSWORD=x"))
+
+        assert keys_path.read_text().count("\n") == 2  # header and one key
+
+    def test_page_shows_where_a_key_comes_from_but_never_the_secret(self, client, keys_path, monkeypatch):
+        keys_path.parent.mkdir(parents=True)
+        keys_path.write_text("TMDB_API_KEY=settings-secret-wxyz\n")
+        monkeypatch.setenv("TVDB_API_KEY", "environment-secret-abcd")
+        monkeypatch.setenv("PLEX_URL", "http://plex.local:32400")
+
+        rows = {row["name"]: row for row in web._settings_keys()}
+
+        assert rows["TMDB_API_KEY"]["source"] == "settings"
+        assert rows["TMDB_API_KEY"]["shown"] == "wxyz"
+        assert rows["TVDB_API_KEY"]["source"] == "environment"
+        assert rows["TVDB_API_KEY"]["shown"] == "abcd"
+        assert rows["PLEX_URL"]["shown"] == "http://plex.local:32400"
+        assert rows["PLEX_TOKEN"]["source"] is None
+        html = client.get("/settings").data.decode()
+        assert "settings-secret" not in html
+        assert "environment-secret" not in html
+
+
+# ── Watch-history exports and other fields on the Settings page ───────────────
+
+class TestSettingsExports:
+    HBO = {"provider": "hbo", "label": "Max (HBO)", "paths": ["data/Max"], "missing": [], "event_count": 412}
+
+    def _post(self, client, rows, **fields):
+        with patch("recommender.web._settings_exports", return_value=rows), \
+                patch("recommender.web._load_config_yaml", return_value={}), \
+                patch("recommender.web._save_config_yaml") as save, \
+                patch("recommender.web._reload_app_config", return_value=True):
+            resp = client.post("/settings", data=_csrf_form(**fields))
+        return resp, save
+
+    def test_turning_off_a_provider_with_saved_events_is_refused(self, client):
+        resp, save = self._post(client, [self.HBO], export_hbo="  ")
+
+        assert resp.status_code == 200
+        assert "412 saved watch events" in resp.data.decode()
+        save.assert_not_called()
+
+    def test_an_export_that_does_not_exist_is_refused(self, client):
+        resp, save = self._post(client, [self.HBO], export_hbo="data/nowhere.zip")
+
+        assert "export not found" in resp.data.decode()
+        save.assert_not_called()
+
+    def test_an_unchanged_missing_export_does_not_block_other_settings(self, client, monkeypatch):
+        monkeypatch.setitem(web.config.PLATFORM_PATHS, "prime", [str(web._REPO_ROOT / "data/gone.zip")])
+        prime = {"provider": "prime", "label": "Prime Video", "paths": ["data/gone.zip"],
+                 "missing": ["data/gone.zip"], "event_count": 0}
+        resp, save = self._post(client, [prime], export_prime="data/gone.zip", wizard_max_questions="6")
+
+        assert resp.status_code == 302
+        assert "prime" not in save.call_args.args[0].get("platform_paths", {})
+
+    def test_an_export_outside_the_data_folder_is_refused(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(web, "_REPO_ROOT", tmp_path)
+        (tmp_path / "data").mkdir()
+        resp, save = self._post(client, [self.HBO], export_hbo="data/../config.local.yaml\n/etc/passwd")
+
+        assert "must be inside the data folder" in resp.data.decode()
+        save.assert_not_called()
+
+    def test_a_new_export_path_is_saved_and_asks_for_a_data_refresh(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(web, "_REPO_ROOT", tmp_path)
+        (tmp_path / "data" / "max-export").mkdir(parents=True)
+        resp, save = self._post(client, [self.HBO], export_hbo="data/max-export\n", disney_profiles="Abhishek, Kids")
+
+        saved = save.call_args.args[0]
+        assert saved["platform_paths"] == {"hbo": "data/max-export"}
+        assert saved["disney_profiles"] == ["Abhishek", "Kids"]
+        assert "refresh-data" in resp.headers["Location"]
+
+    def test_a_config_local_folder_shows_how_to_fix_it(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(web, "_CONFIG_PATH", tmp_path / "config.yaml")
+        (tmp_path / "config.local.yaml").mkdir()
+
+        assert client.get("/settings").status_code == 200
+        resp, save = self._post(client, [self.HBO])
+        assert "config.local.yaml is a folder" in resp.data.decode()
+        save.assert_not_called()
+
+    def test_before_the_first_build_saving_exports_asks_for_no_rebuild(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(web, "_REPO_ROOT", tmp_path)
+        monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(tmp_path / "watch_index.json"))
+        (tmp_path / "data" / "max-export").mkdir(parents=True)
+        resp, save = self._post(client, [self.HBO], export_hbo="data/max-export\n")
+
+        save.assert_called_once()
+        assert "refresh" not in resp.headers["Location"]
+
+    def test_wizard_and_returning_show_fields_are_saved(self, client):
+        resp, save = self._post(
+            client, [], wizard_max_questions="6", wizard_min_questions="3", wizard_max_tokens="2500",
+            returning_shows_lookback_days="365",
+        )
+
+        saved = save.call_args.args[0]
+        assert saved["wizard"] == {"max_questions": 6, "min_questions": 3, "max_tokens": 2500}
+        assert saved["returning_shows_lookback_days"] == 365
+        assert "refresh" not in resp.headers["Location"]
 
 
 # ── Settings save without rebuild ──────────────────────────────────────────────
@@ -2684,13 +2924,12 @@ class TestFind(FindTestSupport):
         assert call["tmdb"].api_key == "test-key"
         assert call["cache_dir"] == web.config.FIND_CACHE_DIR
 
-    def test_missing_watch_index_says_run_setup_and_makes_no_tmdb_request(self, client, find_env, monkeypatch, tmp_path):
+    def test_missing_watch_index_sends_you_to_first_run_setup(self, client, find_env, monkeypatch, tmp_path):
         monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(tmp_path / "missing.json"))
         with patch("recommender.tmdb_client.requests.get", side_effect=AssertionError("no TMDB")):
             resp = client.get("/find")
-        body = resp.get_data(as_text=True)
-        assert resp.status_code == 200
-        assert "Run ./recommend setup" in body
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/settings#get-started")
         assert find_env["finder"] == []
 
     @pytest.mark.parametrize("payload", ["{not json", "{}", "[1, 2]", '{"a": 1}', "null"])
@@ -2948,12 +3187,11 @@ class TestFindRendering(FindTestSupport):
         assert 'class="find-more"' in body and "Try again" in body
         assert 'href="/find?period=1y&amp;cursor=1.12&amp;start=10"' in body
 
-    def test_htmx_continuation_missing_index_returns_setup_fragment(self, client, find_env, monkeypatch, tmp_path):
+    def test_htmx_continuation_missing_index_redirects_the_page_to_setup(self, client, find_env, monkeypatch, tmp_path):
         monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(tmp_path / "gone.json"))
-        body = client.get("/find?cursor=1.12&start=10", headers={"HX-Request": "true"}).get_data(as_text=True)
-        assert "<html" not in body and "<aside" not in body
-        assert "Run ./recommend setup" in body
-        assert 'class="find-more"' in body and "Try again" in body
+        resp = client.get("/find?cursor=1.12&start=10", headers={"HX-Request": "true"})
+        assert resp.status_code == 204
+        assert resp.headers["HX-Redirect"].endswith("/settings#get-started")
 
     def test_htmx_continuation_missing_key_returns_fragment(self, client, find_env, monkeypatch):
         monkeypatch.setattr(web.config, "TMDB_API_KEY", "")
@@ -3798,3 +4036,151 @@ def test_dashboard_shows_top_six_tastes_and_folds_the_rest(client, monkeypatch):
     assert "Show 2 more" in html
     # The collapse control sits after the folded rows, at the bottom of the list.
     assert html.index("Taste 8") < html.index('class="tastes-more-btn more-list-fewer"')
+
+
+def test_release_time_filter_reads_like_a_clock():
+    assert web._release_time("2026-10-20T20:00:00-05:00") == "8 PM"
+    assert web._release_time("2026-10-21T02:30:00-05:00") == "2:30 AM"
+    assert web._release_time("2026-10-21T00:00:00-05:00") == "12 AM"
+    assert web._release_time("2026-10-21T12:00:00-05:00") == "12 PM"
+    assert web._release_time(None) == ""
+
+
+def test_shared_context_is_rebuilt_after_a_setup_run_rewrites_its_files(tmp_path, monkeypatch):
+    import os
+    index, profile = tmp_path / "watch_index.json", tmp_path / "taste_profile.txt"
+    index.write_text("{}")
+    profile.write_text("x")
+    monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(index))
+    monkeypatch.setattr(web.config, "TASTE_PROFILE_PATH", str(profile))
+    monkeypatch.setattr(web, "_ctx", None)
+    monkeypatch.setattr(web, "_build_context", lambda: object())
+
+    first = web._get_context()
+    assert web._get_context() is first
+
+    later = index.stat().st_mtime + 60
+    os.utime(index, (later, later))
+    assert web._get_context() is not first
+
+
+class TestSetupFromSettings:
+    @pytest.fixture
+    def not_set_up(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(tmp_path / "watch_index.json"))
+        monkeypatch.setattr(web.config, "TASTE_PROFILE_PATH", str(tmp_path / "taste_profile.txt"))
+
+    def test_before_the_first_build_pages_go_to_get_started_but_settings_works(self, client, not_set_up):
+        resp = client.get("/")
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/settings#get-started")
+        assert client.get("/settings").status_code == 200
+        assert client.get("/healthz").status_code == 503
+
+    @patch("recommender.web.setup_runs.start", return_value=True)
+    def test_a_paid_run_needs_the_cost_box(self, start, client, not_set_up):
+        resp = client.post("/setup/run", data=_csrf_form(action="build"))
+        assert "paid AI calls" in resp.data.decode()
+        start.assert_not_called()
+
+        resp = client.post("/setup/run", data=_csrf_form(action="build", confirm_cost="1"))
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("#get-started")
+        start.assert_called_once_with("build")
+
+    @patch("recommender.web.setup_runs.start", return_value=True)
+    def test_a_free_run_starts_without_confirming(self, start, client, not_set_up):
+        client.post("/setup/run", data=_csrf_form(action="check_exports"))
+        start.assert_called_once_with("check_exports")
+
+    @patch("recommender.web.setup_runs.start", return_value=False)
+    def test_a_second_run_is_turned_away(self, start, client, not_set_up):
+        resp = client.post("/setup/run", data=_csrf_form(action="refresh_data"))
+        assert "already running" in resp.data.decode()
+
+    def test_an_unknown_action_is_refused(self, client, not_set_up):
+        with patch("recommender.web.setup_runs.start") as start:
+            resp = client.post("/setup/run", data=_csrf_form(action="rm -rf"))
+        assert resp.status_code == 400
+        start.assert_not_called()
+
+    def test_checklist_reports_missing_keys(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(web.config, "KEYS_PATH", tmp_path / "keys.env")
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "")
+        monkeypatch.delenv("TMDB_API_KEY", raising=False)
+        monkeypatch.setattr(web.config, "LLM_PROVIDER", "anthropic")
+        monkeypatch.setattr(web.config, "ANTHROPIC_API_KEY", "")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(web, "_settings_exports", lambda: [])
+
+        checklist = web._first_run_checklist()
+        assert checklist["tmdb_key"] is False
+        assert checklist["llm_key"] is False
+        assert checklist["llm_key_name"] == "ANTHROPIC_API_KEY"
+
+    def test_checklist_sees_a_saved_key_before_config_reloads(self, monkeypatch, tmp_path):
+        keys = tmp_path / "keys.env"
+        keys.write_text("TMDB_API_KEY=saved-1234\n")
+        monkeypatch.setattr(web.config, "KEYS_PATH", keys)
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "")  # reload held off by a background job
+        monkeypatch.delenv("TMDB_API_KEY", raising=False)
+        monkeypatch.setattr(web, "_settings_exports", lambda: [])
+
+        assert web._first_run_checklist()["tmdb_key"] is True
+
+    def test_status_poll_reloads_the_page_when_the_watched_run_ends(self, client):
+        idle = {"running": False, "state": "done", "status": {"action": "check_exports"}, "log_tail": []}
+        with patch("recommender.web.setup_runs.current", return_value=idle):
+            assert client.get("/setup/status?watching=1").headers.get("HX-Refresh") == "true"
+            assert "HX-Refresh" not in client.get("/setup/status").headers
+        busy = {**idle, "running": True, "state": "running"}
+        with patch("recommender.web.setup_runs.current", return_value=busy):
+            assert "HX-Refresh" not in client.get("/setup/status?watching=1").headers
+
+    def test_an_idle_page_reloads_only_when_a_new_run_has_started(self, client):
+        last = {"running": False, "state": "done", "status": {"started_at": 100.5}, "log_tail": []}
+        with patch("recommender.web.setup_runs.current", return_value=last):
+            assert client.get("/setup/status?since=100.5").status_code == 204
+            # A terminal run started and ended between two polls.
+            assert client.get("/setup/status?since=50.0").headers.get("HX-Refresh") == "true"
+        with patch("recommender.web.setup_runs.current", return_value={**last, "running": True}):
+            assert client.get("/setup/status?since=100.5").headers.get("HX-Refresh") == "true"
+        never = {"running": False, "state": None, "status": None, "log_tail": []}
+        with patch("recommender.web.setup_runs.current", return_value=never):
+            assert client.get("/setup/status?since=0").status_code == 204
+
+    def test_checklist_names_a_set_export_whose_file_is_missing(self, monkeypatch):
+        monkeypatch.setattr(web, "_settings_exports", lambda: [
+            {"provider": "netflix", "label": "Netflix", "paths": ["data/netflix/x.zip"], "missing": ["data/netflix/x.zip"]},
+            {"provider": "prime", "label": "Prime Video", "paths": ["data/p.zip"], "missing": ["data/p.zip"]},
+            {"provider": "hbo", "label": "Max", "paths": ["data/Max"], "missing": []},
+        ])
+        # Prime is only the built-in default, so its missing file is not worth flagging.
+        monkeypatch.setattr(web.config, "CONFIGURED_PLATFORMS", frozenset({"netflix", "hbo"}))
+        monkeypatch.setenv("STREAMLINE_PASSWORD", "")
+
+        checklist = web._first_run_checklist()
+        assert checklist["exports_found"] == ["Max"]
+        assert checklist["exports_missing"] == [{"label": "Netflix", "paths": ["data/netflix/x.zip"]}]
+        assert checklist["password_set"] is False
+
+
+def test_run_time_and_length_filters():
+    start = datetime(2026, 10, 18, 9, 5, tzinfo=web.ZoneInfo("UTC")).timestamp()
+    assert web._run_time(start) == "Sun Oct 18, 4:05 AM"
+    assert web._run_length({"started_at": start, "finished_at": start + 42}) == "42 sec"
+    assert web._run_length({"started_at": start, "finished_at": start + 3900}) == "1 hr 5 min"
+
+
+def test_a_finished_check_on_first_run_offers_a_reload(client, tmp_path, monkeypatch):
+    # The Build button was drawn disabled while the check ran; the page must say to reload.
+    monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(tmp_path / "watch_index.json"))
+    monkeypatch.setattr(web.config, "TASTE_PROFILE_PATH", str(tmp_path / "taste_profile.txt"))
+    finished = {"running": False, "state": "done", "log_tail": [],
+                "status": {"action": "check_exports", "started_at": 1.0, "finished_at": 2.0, "ok": True}}
+    with patch("recommender.web.setup_runs.current", return_value=finished):
+        body = client.get("/setup/status").data.decode()
+
+    assert "Reload the page" in body
+    assert "/settings#get-started" in body
+    assert "Open Streamline" not in body

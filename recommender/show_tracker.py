@@ -333,12 +333,12 @@ def refresh_release_cache(
     sleep=time.sleep,
     lookback_days: int = 730,
     progress=None,
-    tvmaze=None,
+    tvdb=None,
 ) -> dict:
     """Refresh due release snapshots, preserving cached data on failures.
 
     progress, when given, is called with (completed, total) after each show so
-    callers can surface how far along the refresh is. tvmaze, when given, adds
+    callers can surface how far along the refresh is. tvdb, when given, adds
     each followed show's regular air time to its snapshot.
     """
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -406,9 +406,9 @@ def refresh_release_cache(
                 progress(completed, total)
             continue
         if (tracking.get(tmdb_id) or {}).get("state") == "following":
-            snapshot["air_time"] = tvmaze.show_time(
+            snapshot["air_time"] = tvdb.show_time(
                 tmdb_id, lambda: paced.call(client.fetch_tv_external_ids, tmdb_id)
-            ) if tvmaze is not None else None
+            ) if tvdb is not None else None
         _write_json(_snapshot_path(cache_dir, tmdb_id), snapshot)
         snapshots[tmdb_id] = snapshot
         result["refreshed"] += 1
@@ -429,15 +429,27 @@ def refresh_release_cache(
     return result
 
 
-def _ready_at(air_date: date, air_time: dict | None) -> datetime:
-    """When an episode counts as aired: the show's regular time, else midnight at home."""
+def _timed_release(air_date: date, air_time: dict | None) -> datetime | None:
+    """The episode's release moment from the show's regular time, or None without one."""
     if air_time:
         try:
             clock = clock_time.fromisoformat(air_time["time"])
-            return datetime.combine(air_date, clock, ZoneInfo(air_time["timezone"]))
-        except (KeyError, TypeError, ValueError) as exc:
+            day = air_date - timedelta(days=int(air_time.get("days_early", 0)))
+            return datetime.combine(day, clock, ZoneInfo(air_time["timezone"]))
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
             log.warning("Ignoring unreadable air time %r: %s", air_time, exc)
-    return datetime.combine(air_date, clock_time(), HOME_TIMEZONE)
+    return None
+
+
+def _ready_at(air_date: date, air_time: dict | None) -> datetime:
+    """When an episode counts as aired: the show's regular time, else midnight at home."""
+    return _timed_release(air_date, air_time) or datetime.combine(air_date, clock_time(), HOME_TIMEZONE)
+
+
+def _released_at(air_date: date, air_time: dict | None) -> str | None:
+    """The release moment in home time as ISO text, for display; None when only the date is known."""
+    moment = _timed_release(air_date, air_time)
+    return moment.astimezone(HOME_TIMEZONE).isoformat() if moment else None
 
 
 def _following_card(
@@ -477,6 +489,8 @@ def _following_card(
                 future.append(item)
 
     next_episode = min(future) if future else None
+    air_time = snapshot.get("air_time")
+    next_released_at = _released_at(next_episode[0], air_time) if next_episode else None
     title = tracked.get("title") or entry["title"]
     poster_path = snapshot.get("poster_path")
     if aired:
@@ -487,7 +501,9 @@ def _following_card(
             "season_number": latest[1],
             "available_episode_count": len(aired),
             "latest_aired_episode": latest[2],
+            "latest_released_at": _released_at(latest[0], air_time),
             "next_air_date": next_episode[0].isoformat() if next_episode else None,
+            "next_released_at": next_released_at,
             # The next episode can open a new season, so season_number (the
             # latest aired) does not say which episode is next.
             "next_season_number": next_episode[1] if next_episode else None,
@@ -501,6 +517,7 @@ def _following_card(
             "title": title,
             "season_number": next_episode[1],
             "next_air_date": next_episode[0].isoformat(),
+            "next_released_at": next_released_at,
             "next_episode_number": next_episode[2],
             "poster_path": poster_path,
         }

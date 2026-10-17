@@ -34,6 +34,14 @@
     </div>
     {% endif %}
 
+    {% if streaming_providers %}
+    {# TMDB requires the JustWatch credit wherever provider names show. #}
+    <div class="tp-where">
+      <p class="tp-providers mono">{{ streaming_providers | join("  ·  ") }}</p>
+      <p class="justwatch-credit mono">Streaming data from <a href="https://www.justwatch.com" target="_blank" rel="noopener">JustWatch</a></p>
+    </div>
+    {% endif %}
+
     <div style="display:flex; align-items:center; gap:0.75rem; margin-top:0.5rem; flex-wrap:wrap;">
       <a href="https://www.themoviedb.org/{{ 'tv' if meta.content_type == 'tv' else 'movie' }}/{{ tmdb_id }}"
          target="_blank" rel="noopener" class="mono result-link">TMDB ↗</a>
@@ -126,6 +134,19 @@
 <style>
   /* Narrow columns (a phone, or the Archive modal) stack less wastefully. */
   .title-panel { container-type: inline-size; }
+  .title-panel .tp-where { margin-bottom: 0.85rem; }
+  .title-panel .tp-providers { font-size: 0.66rem; color: var(--body); line-height: 1.5; overflow-wrap: anywhere; }
+  .title-panel .justwatch-credit {
+    margin-top: 0.15rem;
+    font-size: 0.52rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .title-panel .justwatch-credit a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+  @media (hover: hover) {
+    .title-panel .justwatch-credit a:hover { color: var(--text); }
+  }
   @container (max-width: 520px) {
     .title-panel .tp-head { gap: 1.1rem !important; margin-top: 0.5rem !important; }
     .title-panel .tp-poster { width: 108px !important; }
