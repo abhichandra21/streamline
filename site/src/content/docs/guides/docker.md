@@ -64,7 +64,7 @@ Back up `data/streamline.db`; Plex plays and your ratings exist only there.
 ## Notes
 
 - Create `config.local.yaml` before the first `docker compose` command. If it is missing, Docker creates a folder with that name instead, and Settings can't save.
-- Until the first build finishes, `docker compose ps` shows the container as unhealthy. That is expected; it turns healthy once the library is built.
+- Until the first build finishes, `docker compose ps` shows the container as starting for a few minutes and then unhealthy. That is expected; it turns healthy once the library is built.
 - The container runs as user ID 1000. On Linux, if your user has a different ID, run `sudo chown -R 1000:1000 data recommender/cache logs config.local.yaml`.
 - Set `STREAMLINE_PASSWORD` in `.env` if anyone else can reach the server. See [Running as a service](/guides/running-as-a-service/).
 - To build the image yourself instead of pulling it, run `docker compose build`.

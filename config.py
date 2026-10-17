@@ -186,6 +186,8 @@ STREAMING_PLATFORMS: list[str] = _cfg.get("streaming_platforms", [])
 
 # ── Data paths ──
 _paths = _cfg.get("platform_paths", {})
+# Platforms with a path set in a config file, rather than the built-in default.
+CONFIGURED_PLATFORMS = frozenset(_paths)
 
 
 def _resolve_platform_paths(platform: str, default: str | None) -> list[str]:

@@ -4104,8 +4104,10 @@ class TestSetupFromSettings:
         assert resp.status_code == 400
         start.assert_not_called()
 
-    def test_checklist_reports_missing_keys(self, monkeypatch):
+    def test_checklist_reports_missing_keys(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(web.config, "KEYS_PATH", tmp_path / "keys.env")
         monkeypatch.setattr(web.config, "TMDB_API_KEY", "")
+        monkeypatch.delenv("TMDB_API_KEY", raising=False)
         monkeypatch.setattr(web.config, "LLM_PROVIDER", "anthropic")
         monkeypatch.setattr(web.config, "ANTHROPIC_API_KEY", "")
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -4116,16 +4118,38 @@ class TestSetupFromSettings:
         assert checklist["llm_key"] is False
         assert checklist["llm_key_name"] == "ANTHROPIC_API_KEY"
 
+    def test_checklist_sees_a_saved_key_before_config_reloads(self, monkeypatch, tmp_path):
+        keys = tmp_path / "keys.env"
+        keys.write_text("TMDB_API_KEY=saved-1234\n")
+        monkeypatch.setattr(web.config, "KEYS_PATH", keys)
+        monkeypatch.setattr(web.config, "TMDB_API_KEY", "")  # reload held off by a background job
+        monkeypatch.delenv("TMDB_API_KEY", raising=False)
+        monkeypatch.setattr(web, "_settings_exports", lambda: [])
+
+        assert web._first_run_checklist()["tmdb_key"] is True
+
+    def test_status_poll_reloads_the_page_when_the_watched_run_ends(self, client):
+        idle = {"running": False, "state": "done", "status": {"action": "check_exports"}, "log_tail": []}
+        with patch("recommender.web.setup_runs.current", return_value=idle):
+            assert client.get("/setup/status?watching=1").headers.get("HX-Refresh") == "true"
+            assert "HX-Refresh" not in client.get("/setup/status").headers
+        busy = {**idle, "running": True, "state": "running"}
+        with patch("recommender.web.setup_runs.current", return_value=busy):
+            assert "HX-Refresh" not in client.get("/setup/status?watching=1").headers
+
     def test_checklist_names_a_set_export_whose_file_is_missing(self, monkeypatch):
         monkeypatch.setattr(web, "_settings_exports", lambda: [
-            {"label": "Netflix", "paths": ["data/netflix/export.zip"], "missing": ["data/netflix/export.zip"]},
-            {"label": "Max", "paths": ["data/Max"], "missing": []},
+            {"provider": "netflix", "label": "Netflix", "paths": ["data/netflix/x.zip"], "missing": ["data/netflix/x.zip"]},
+            {"provider": "prime", "label": "Prime Video", "paths": ["data/p.zip"], "missing": ["data/p.zip"]},
+            {"provider": "hbo", "label": "Max", "paths": ["data/Max"], "missing": []},
         ])
+        # Prime is only the built-in default, so its missing file is not worth flagging.
+        monkeypatch.setattr(web.config, "CONFIGURED_PLATFORMS", frozenset({"netflix", "hbo"}))
         monkeypatch.setenv("STREAMLINE_PASSWORD", "")
 
         checklist = web._first_run_checklist()
         assert checklist["exports_found"] == ["Max"]
-        assert checklist["exports_missing"] == [{"label": "Netflix", "paths": ["data/netflix/export.zip"]}]
+        assert checklist["exports_missing"] == [{"label": "Netflix", "paths": ["data/netflix/x.zip"]}]
         assert checklist["password_set"] is False
 
 

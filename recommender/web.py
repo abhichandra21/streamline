@@ -3291,17 +3291,24 @@ def _first_run_checklist() -> dict:
     """What a fresh install still needs before its first build."""
     provider = config.LLM_PROVIDER
     llm_key_name = config.get_llm_api_key_env(provider)
-    llm_key_set = provider == "local" or bool(getattr(config, llm_key_name, "") or os.environ.get(llm_key_name))
+    # Read saved keys directly: a background job can hold off applying them to config.
+    saved_keys = config.read_keys_file(config.KEYS_PATH)
+
+    def key_set(name: str) -> bool:
+        return bool(saved_keys.get(name) or getattr(config, name, "") or os.environ.get(name))
+
     exports = _settings_exports()
     manual = [path for path in (config.MANUAL_TV_PATH, config.MANUAL_MOVIES_PATH) if path and Path(path).exists()]
     return {
-        "tmdb_key": bool(config.TMDB_API_KEY),
+        "tmdb_key": key_set("TMDB_API_KEY"),
         "provider": provider,
         "llm_key_name": llm_key_name,
-        "llm_key": llm_key_set,
+        "llm_key": provider == "local" or key_set(llm_key_name),
         "exports_found": [row["label"] for row in exports if row["paths"] and not row["missing"]],
+        # Only paths someone set: a built-in default that isn't there is just unused.
         "exports_missing": [
-            {"label": row["label"], "paths": row["missing"]} for row in exports if row["missing"]
+            {"label": row["label"], "paths": row["missing"]}
+            for row in exports if row["missing"] and row["provider"] in config.CONFIGURED_PLATFORMS
         ],
         "manual_lists": len(manual),
         "password_set": bool(os.environ.get("STREAMLINE_PASSWORD", "").strip()),
@@ -3609,9 +3616,14 @@ def setup_run() -> Response | str:
 
 
 @app.route("/setup/status")
-def setup_status() -> str:
+def setup_status() -> Response | str:
     """The current or last run, for Settings to poll while one is going."""
-    return render_template("_setup_status.html", setup_run=setup_runs.current(), is_set_up=_is_set_up())
+    run = setup_runs.current()
+    html = render_template("_setup_status.html", setup_run=run, is_set_up=_is_set_up())
+    if request.args.get("watching") and not run["running"]:
+        # The run the page was watching ended; reload so the buttons and checklist catch up.
+        return Response(html, headers={"HX-Refresh": "true"})
+    return html
 
 
 # ── Read-only API ─────────────────────────────────────────────────────────────

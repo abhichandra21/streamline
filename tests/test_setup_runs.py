@@ -49,9 +49,13 @@ def test_states_from_status_and_lock():
 
 
 def test_start_runs_setup_with_the_actions_flags_and_a_log(tmp_path):
-    with patch("recommender.setup_runs.subprocess.Popen") as popen:
+    with patch("recommender.setup_runs.subprocess.Popen") as popen, \
+            patch("recommender.setup_runs.threading.Thread") as thread:
         popen.return_value.poll.return_value = 1  # exited at once: no waiting
         assert setup_runs.start("refresh_profile")
+
+    # Reaped when it ends, so finished runs don't pile up as zombies.
+    assert thread.call_args.kwargs["target"] == popen.return_value.wait
 
     cmd = popen.call_args.args[0]
     assert cmd[-3:] == ["-m", "recommender.setup", "--refresh-profile"]

@@ -14,6 +14,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -128,6 +129,8 @@ def start(action: str) -> bool:
             env={**os.environ, LOG_ENV: str(log_path), "LOG_LEVEL": "INFO"},
             start_new_session=True,
         )
+    # Collect its exit status when it ends, so no finished run is left as a zombie.
+    threading.Thread(target=process.wait, daemon=True).start()
     # Wait until it holds the lock, so the page it returns to shows this run.
     deadline = time.time() + START_WAIT_SECONDS
     while time.time() < deadline and process.poll() is None and not is_running():

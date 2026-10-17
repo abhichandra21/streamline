@@ -223,6 +223,7 @@
                 {% elif not k.secret and k.shown %}<span class="mono key-tail key-url">{{ k.shown }}</span>{% endif %}
               {% endif %}
             </div>
+            {% if k.secret %}<div class="key-input-wrap">{% endif %}
             <input
               id="key_{{ k.name }}"
               type="{{ 'password' if k.secret else 'url' }}"
@@ -233,6 +234,10 @@
               spellcheck="false"
               placeholder="{% if k.secret %}{{ 'Paste a new key, or leave blank to keep it' if k.source else 'Paste a key' }}{% else %}{{ 'New URL, or leave blank to keep it' if k.source else 'http://192.168.1.10:32400' }}{% endif %}"
             >
+            {% if k.secret %}
+              <button type="button" class="mono key-reveal" data-reveal="key_{{ k.name }}" aria-pressed="false" aria-controls="key_{{ k.name }}" aria-label="Show {{ k.label }} as you type">Show</button>
+            </div>
+            {% endif %}
             {% if k.name == 'PLEX_WEBHOOK_TOKEN' %}
             <span class="form-hint key-warn">Changing this stops Plex plays from being recorded until you update the webhook address in Plex (Settings, Webhooks) to end in <span class="mono">/plex/webhook?token=</span> followed by the new token. Plex does not resend missed plays.</span>
             {% endif %}
@@ -449,7 +454,7 @@
        separate run forms after this form (see the form attribute). -->
   <fieldset id="rebuild" class="settings-section" style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
     <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Rebuild</legend>
-    <p class="section-intro">Run setup steps from here. One runs at a time, wherever it was started. The terminal commands still work the same, and the Sunday timer runs Refresh data every week on its own.</p>
+    <p class="section-intro">Run setup steps from here. One runs at a time, wherever it was started. The terminal commands still work the same. If you set up the weekly timer, it runs Refresh data every Sunday on its own.</p>
 
     {% with embedded = true %}{% include "_setup_status.html" %}{% endwith %}
 
@@ -848,6 +853,33 @@
   .key-tail { font-size: 0.68rem; color: var(--muted); min-width: 0; }
   .key-url { overflow-wrap: anywhere; color: var(--text); }
   .key-field .form-input { max-width: 440px; }
+  /* Show/Hide sits inside the right edge of a secret field. It needs script,
+     so it stays hidden without it and the field is a plain password box. */
+  .key-input-wrap { position: relative; max-width: 440px; }
+  .key-reveal { display: none; }
+  .js .key-input-wrap .form-input { padding-right: 4.2rem; }
+  .js .key-reveal {
+    display: inline-flex;
+    align-items: center;
+    position: absolute;
+    top: 50%; right: 0.3rem;
+    transform: translateY(-50%);
+    min-width: 3.3rem;
+    justify-content: center;
+    padding: 0.2rem 0.5rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--muted);
+    font-size: 0.58rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .key-reveal:hover { color: var(--text); border-color: var(--muted); }
+  .key-reveal:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .key-reveal[aria-pressed="true"] { color: var(--accent2); border-color: rgba(240,160,64,0.45); }
   .key-clear { display: flex; gap: 0.45rem; align-items: flex-start; font-size: 0.74rem; color: var(--body); cursor: pointer; }
   .key-clear input { margin-top: 0.15rem; flex-shrink: 0; }
   .key-clear .form-hint { display: block; }
@@ -1087,6 +1119,20 @@
       syncManualTimestampInput();
     }
   })();
+
+  // Show/Hide flips a secret field between hidden and plain text. It only
+  // reveals what is typed in the box; saved keys never reach the page.
+  document.querySelectorAll('.key-reveal').forEach(function(btn) {
+    var input = document.getElementById(btn.getAttribute('data-reveal'));
+    if (!input) return;
+    btn.addEventListener('click', function() {
+      var show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      btn.textContent = show ? 'Hide' : 'Show';
+      // The label stays fixed; aria-pressed carries the on/off state.
+      btn.setAttribute('aria-pressed', show ? 'true' : 'false');
+    });
+  });
 
   (function() {
     var advanced = document.getElementById('advanced');
