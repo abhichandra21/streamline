@@ -1136,25 +1136,26 @@ def history() -> str:
     if platform_filter:
         entries = [e for e in entries if platform_filter in (e.get("platforms") or [])]
 
+    # Real watch dates only: downloads-list, Max and Seen It titles carry the
+    # time setup ran, so without a real play they show no date and sort last.
+    played = event_store.last_played(config.EVENT_DB_PATH)
+
+    # Plex's index date may be a pre-cutoff test scrobble; its real plays come from last_played.
+    undated = LIST_PLATFORMS | event_store.UNDATED_PROVIDERS | {"plex"}
+
+    def _watched_on(e: dict) -> str:
+        ct = e.get("content_type", "tv")
+        other = "movie" if ct == "tv" else "tv"
+        # Real plays, plus the date a watch was marked in the app ("" for Seen It).
+        real = max(played.get((e["title"], ct)) or played.get((e["title"], other)) or "",
+                   e.get("archive_watched_at") or "")
+        platforms = e.get("index_platforms", e.get("platforms") or [])
+        # With only dated sources, the index date is real and covers merged aliases.
+        if platforms and not any(p in undated for p in platforms):
+            return max(real, e.get("index_last_watched", e.get("last_watched")) or "")
+        return real
+
     if sort == "recent":
-        # Most recently watched first, by real plays only: downloads-list and Seen It
-        # titles carry the time setup ran, so without a real play they sort last.
-        played = event_store.last_played(config.EVENT_DB_PATH)
-
-        # Plex's index date may be a pre-cutoff test scrobble; its real plays come from last_played.
-        undated = LIST_PLATFORMS | event_store.UNDATED_PROVIDERS | {"plex"}
-
-        def _watched_on(e: dict) -> str:
-            ct = e.get("content_type", "tv")
-            other = "movie" if ct == "tv" else "tv"
-            # Real plays, plus the date a watch was marked in the app ("" for Seen It).
-            real = max(played.get((e["title"], ct)) or played.get((e["title"], other)) or "",
-                       e.get("archive_watched_at") or "")
-            platforms = e.get("index_platforms", e.get("platforms") or [])
-            # With only dated sources, the index date is real and covers merged aliases.
-            if platforms and not any(p in undated for p in platforms):
-                return max(real, e.get("index_last_watched", e.get("last_watched")) or "")
-            return real
         entries.sort(key=_watched_on, reverse=True)
     elif sort == "za":
         entries.sort(key=lambda e: e["title"].lower(), reverse=True)
@@ -1188,7 +1189,7 @@ def history() -> str:
                       if e.get("tmdb_id") else None,
             "rating": us.get_rating(m),
             "platforms": e.get("platforms") or [],
-            "last_watched": e.get("last_watched") or "",
+            "last_watched": _watched_on(e),
         })
 
     # A followed show counts as loved, as on Rate It, unless it has a rating of its own.

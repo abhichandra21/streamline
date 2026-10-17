@@ -244,6 +244,58 @@ def test_ask_trim_reserves_llm_suggestions(monkeypatch):
     assert "Niche Pick" in captured["titles"]   # reserved despite low popularity
 
 
+def test_a_suggestion_matching_a_show_and_a_movie_keeps_the_better_known_one(monkeypatch):
+    """"Happy Valley" also matches a small documentary; only the crime series should be offered."""
+    import recommender.query_engine as qe
+
+    series = make_meta("Happy Valley", tmdb_id=61244, content_type="tv")
+    series.vote_count = 374
+    documentary = make_meta("Happy Valley", tmdb_id=250745, content_type="movie",
+                            genres=["Documentary"])
+    documentary.vote_count = 34
+
+    captured = {}
+
+    def fake_rank(query, profile, candidates, *a, **k):
+        captured["pool"] = [(c.content_type, c.tmdb_id) for c in candidates]
+        return []
+    monkeypatch.setattr(qe, "enrich_batch", lambda *a, **k: {})
+    monkeypatch.setattr(qe, "rank_candidates", fake_rank)
+
+    class FakeIndex:
+        def is_watched(self, c):
+            return False
+
+    class FakeTmdb:
+        def search_by_filters(self, **k):
+            return []
+        def get_metadata(self, title, ct):
+            return series if ct == "tv" else documentary
+
+    class FakeLLM:
+        provider = "fake"
+        def generate(self, *a, **k):
+            return '["Happy Valley"]'
+
+    ctx = qe.RecommendContext(
+        taste_profile="P", watch_index=FakeIndex(), tmdb_client=FakeTmdb(),
+        llm=FakeLLM(), cache_dir="", events=[],
+    )
+    intent = qe.QueryIntent(
+        genres=["crime"], origin_countries=[], languages=[], mood_descriptors=[],
+        similar_to=[], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent=None, content_type="both",
+        top_n=5, platforms=[],
+    )
+    qe.ask("british crime", ctx, intent_override=intent)
+    assert captured["pool"] == [("tv", 61244)]
+
+    # "Fargo": the film and the series are both well known, so both stay.
+    documentary.vote_count = 200
+    qe.ask("british crime", ctx, intent_override=intent)
+    assert sorted(captured["pool"]) == [("movie", 250745), ("tv", 61244)]
+
+
 def test_rank_candidates_returns_recommendations():
     candidates = [make_meta("Broadchurch", tmdb_id=1), make_meta("Hinterland", tmdb_id=2)]
     enrichments = {"tv/1": "Dark coastal crime.", "tv/2": "Welsh noir."}

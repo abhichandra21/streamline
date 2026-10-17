@@ -918,6 +918,14 @@ def _audit_cache_mismatches(
         log.debug("%d entries with no TMDB cache at all", len(missing))
 
 
+def _date_range(platform: str, events: list) -> str:
+    # An undated export's events carry the import time, which is not a watch date.
+    if platform in event_store.UNDATED_PROVIDERS:
+        return "no watch dates in this export"
+    dates = [e.timestamp for e in events]
+    return f"{min(dates):%Y-%m-%d} to {max(dates):%Y-%m-%d}"
+
+
 def _load_platform_events_by_provider(
     fail_on_error: bool = True,
     emit_console: bool = True,
@@ -972,18 +980,16 @@ def _load_platform_events_by_provider(
             if not deduped_events and not multi_file:
                 console.print(f"  {platform}: [green]ok[/green] 0 events (no qualifying watch activity)")
             elif not multi_file:
-                dates = [e.timestamp for e in deduped_events]
                 console.print(f"  {platform}: [green]ok[/green] {len(deduped_events)} events "
-                              f"({min(dates):%Y-%m-%d} to {max(dates):%Y-%m-%d})")
+                              f"({_date_range(platform, deduped_events)})")
             else:
                 # Multi-file: show per-file breakdown
                 console.print(f"  {platform}: {len(paths)} files")
                 for path, file_events in per_file_events:
                     fname = Path(path).name
                     if file_events:
-                        dates = [e.timestamp for e in file_events]
                         console.print(f"    {fname}: {len(file_events):,} events "
-                                      f"({min(dates):%Y-%m-%d} to {max(dates):%Y-%m-%d})")
+                                      f"({_date_range(platform, file_events)})")
                     else:
                         console.print(f"    {fname}: 0 events")
                 if dup_count:

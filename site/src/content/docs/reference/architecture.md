@@ -165,7 +165,7 @@ The online pipeline:
   - TMDB Discover (structured metadata filter)
   - Claude suggestions (semantic, taste-aware — always runs, not just as fallback)
   
-  Both TV and movie versions are kept for suggested titles (ranker decides). Results are deduplicated by TMDB ID.
+  When a suggested name matches both a show and a movie, both are kept unless one has under a fifth of the other's TMDB votes (so "Happy Valley" stays the series, not a small documentary). Results are deduplicated by TMDB ID.
 
 **3. Watch filter** — Content-type-aware exclusion via watch index.
 
