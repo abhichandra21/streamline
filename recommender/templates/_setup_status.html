@@ -15,7 +15,8 @@
 <div id="setup-status"
      class="run-status run-status-{{ 'running' if run.running else (run.state or 'none') }}"
      aria-live="polite"
-     {% if run.running %}hx-get="/setup/status?watching=1" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+     {% if run.running %}hx-get="/setup/status?watching=1" hx-trigger="every 3s" hx-swap="outerHTML"
+     {%- else %}hx-get="/setup/status?since={{ st.started_at or 0 }}" hx-trigger="every 15s" hx-swap="outerHTML"{% endif %}>
   {% if run.running and run.state != 'running' %}
     <div class="run-status-head">
       <span class="run-status-dot"></span>

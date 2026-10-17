@@ -3617,8 +3617,19 @@ def setup_run() -> Response | str:
 
 @app.route("/setup/status")
 def setup_status() -> Response | str:
-    """The current or last run, for Settings to poll while one is going."""
+    """The current or last run, for Settings to poll.
+
+    A page with a run going polls with watching=1. An idle page polls slowly with
+    since=<its last run's start> and only hears back once a new run has started,
+    from here or a terminal.
+    """
     run = setup_runs.current()
+    since = request.args.get("since")
+    if since is not None:
+        started = str((run["status"] or {}).get("started_at") or 0)
+        if run["running"] or started != since:
+            return Response("", headers={"HX-Refresh": "true"})
+        return Response(status=204)  # nothing new; htmx leaves the page alone
     html = render_template("_setup_status.html", setup_run=run, is_set_up=_is_set_up())
     if request.args.get("watching") and not run["running"]:
         # The run the page was watching ended; reload so the buttons and checklist catch up.

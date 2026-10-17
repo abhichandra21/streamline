@@ -4137,6 +4137,18 @@ class TestSetupFromSettings:
         with patch("recommender.web.setup_runs.current", return_value=busy):
             assert "HX-Refresh" not in client.get("/setup/status?watching=1").headers
 
+    def test_an_idle_page_reloads_only_when_a_new_run_has_started(self, client):
+        last = {"running": False, "state": "done", "status": {"started_at": 100.5}, "log_tail": []}
+        with patch("recommender.web.setup_runs.current", return_value=last):
+            assert client.get("/setup/status?since=100.5").status_code == 204
+            # A terminal run started and ended between two polls.
+            assert client.get("/setup/status?since=50.0").headers.get("HX-Refresh") == "true"
+        with patch("recommender.web.setup_runs.current", return_value={**last, "running": True}):
+            assert client.get("/setup/status?since=100.5").headers.get("HX-Refresh") == "true"
+        never = {"running": False, "state": None, "status": None, "log_tail": []}
+        with patch("recommender.web.setup_runs.current", return_value=never):
+            assert client.get("/setup/status?since=0").status_code == 204
+
     def test_checklist_names_a_set_export_whose_file_is_missing(self, monkeypatch):
         monkeypatch.setattr(web, "_settings_exports", lambda: [
             {"provider": "netflix", "label": "Netflix", "paths": ["data/netflix/x.zip"], "missing": ["data/netflix/x.zip"]},
