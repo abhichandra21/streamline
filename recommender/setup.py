@@ -1537,9 +1537,13 @@ def run_setup(refresh_profile: bool = False, refresh_data: bool = False, provide
                 sys.exit(1)
             structured_profile = None
             structured_profile_skipped = False
-            if not using_custom_path:
+            loves = {t: s for t, s in scores.items() if s >= STRONG_WEIGHT}
+            if not using_custom_path and not loves:
+                # A fresh install has no Loved titles yet; the theme call would get nothing to group.
+                console.print("  Taste rows: none yet. Mark titles Loved in Archive > Rate It, "
+                              "then rebuild the taste profile.")
+            elif not using_custom_path:
                 try:
-                    loves = {t: s for t, s in scores.items() if s >= STRONG_WEIGHT}
                     structured_profile, warnings = build_tag_profile(
                         loves, enrichments, index.entries, collections, llm,
                         negative_prefs or None, rethink=rethink_themes,

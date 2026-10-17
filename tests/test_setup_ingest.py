@@ -966,3 +966,13 @@ def test_check_exports_fails_on_an_unreadable_export(monkeypatch, tmp_path):
 
     with pytest.raises(SystemExit):
         setup.run_check_exports()
+
+
+def test_no_loved_titles_skips_taste_rows_without_an_ai_call(tmp_path, monkeypatch):
+    """A fresh install has nothing Loved; the theme call would only fail."""
+    tag_profile, console = _run_setup_with_stale_mocks(tmp_path, monkeypatch, scores={})
+
+    tag_profile.assert_not_called()
+    printed = " ".join(str(call.args[0]) for call in console.print.call_args_list if call.args)
+    assert "Taste rows: none yet" in printed
+    assert "skipped" not in printed
