@@ -163,7 +163,7 @@
           </div>
           <div class="run-item">
             <div class="run-item-text">
-              <span class="run-item-name">Build my library <span class="run-tag run-tag-paid mono">Paid</span></span>
+              <span class="run-item-name">Build my library <span class="run-tag run-tag-paid mono">Uses AI</span></span>
               <span class="run-item-desc">Looks up every title and makes an AI call for each one, then writes your taste profile. This costs money and can take a while for a big history.</span>
               {% if not keys_ready %}<span class="run-blocked">Add the {{ 'TMDB key' if not checklist.tmdb_key }}{{ ' and the ' if not checklist.tmdb_key and not checklist.llm_key }}{{ 'AI key' if not checklist.llm_key }} first.</span>{% endif %}
             </div>
@@ -463,7 +463,7 @@
       <div class="run-item">
         <div class="run-item-text">
           <span class="run-item-name">{{ label }}
-            {% if paid %}<span class="run-tag run-tag-paid mono">Paid</span>{% elif action != 'refresh_data' %}<span class="run-tag run-tag-free mono">Free</span>{% endif %}</span>
+            {% if paid %}<span class="run-tag run-tag-paid mono">Uses AI</span>{% elif action != 'refresh_data' %}<span class="run-tag run-tag-free mono">Free</span>{% endif %}</span>
           <span class="run-item-desc">{{ desc }}</span>
         </div>
         {{ run_controls('rebuild-' ~ action, label, paid=paid, form_id='run-' ~ action) }}
@@ -694,17 +694,9 @@
     margin: 0;
     padding: 0 0 0.25rem;
     display: flex;
+    flex-wrap: wrap;
     gap: 0.4rem;
-    overflow-x: auto;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-    /* Fade the right edge so a clipped chip reads as "scroll for more". */
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
-            mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
   }
-  .settings-toc ul::-webkit-scrollbar { display: none; }
-  .settings-toc li { flex-shrink: 0; }
-  .settings-toc li:last-child { padding-right: 1.5rem; }
   .settings-toc a {
     display: block;
     font-family: 'JetBrains Mono', monospace;
@@ -755,10 +747,7 @@
       overflow: visible;
       padding: 0;
       border-left: 1px solid var(--border);
-      -webkit-mask-image: none;
-              mask-image: none;
     }
-    .settings-toc li:last-child { padding-right: 0; }
     .settings-toc a {
       border: none;
       border-radius: 0;
