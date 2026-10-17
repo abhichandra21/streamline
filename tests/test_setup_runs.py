@@ -58,6 +58,7 @@ def test_start_runs_setup_with_the_actions_flags_and_a_log(tmp_path):
     log = popen.call_args.kwargs["env"][setup_runs.LOG_ENV]
     assert log.startswith(str(tmp_path / "logs" / "setup-"))
     assert popen.call_args.kwargs["start_new_session"] is True
+    assert popen.call_args.kwargs["env"]["LOG_LEVEL"] == "INFO"
 
 
 def test_log_tail_reads_the_runs_log(tmp_path):

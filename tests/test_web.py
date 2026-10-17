@@ -1318,6 +1318,24 @@ class TestSettingsExports:
         assert saved["disney_profiles"] == ["Abhishek", "Kids"]
         assert "refresh-data" in resp.headers["Location"]
 
+    def test_a_config_local_folder_shows_how_to_fix_it(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(web, "_CONFIG_PATH", tmp_path / "config.yaml")
+        (tmp_path / "config.local.yaml").mkdir()
+
+        assert client.get("/settings").status_code == 200
+        resp, save = self._post(client, [self.HBO])
+        assert "config.local.yaml is a folder" in resp.data.decode()
+        save.assert_not_called()
+
+    def test_before_the_first_build_saving_exports_asks_for_no_rebuild(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(web, "_REPO_ROOT", tmp_path)
+        monkeypatch.setattr(web.config, "WATCH_INDEX_PATH", str(tmp_path / "watch_index.json"))
+        (tmp_path / "data" / "max-export").mkdir(parents=True)
+        resp, save = self._post(client, [self.HBO], export_hbo="data/max-export\n")
+
+        save.assert_called_once()
+        assert "refresh" not in resp.headers["Location"]
+
     def test_wizard_and_returning_show_fields_are_saved(self, client):
         resp, save = self._post(
             client, [], wizard_max_questions="6", wizard_min_questions="3", wizard_max_tokens="2500",
@@ -4097,6 +4115,18 @@ class TestSetupFromSettings:
         assert checklist["tmdb_key"] is False
         assert checklist["llm_key"] is False
         assert checklist["llm_key_name"] == "ANTHROPIC_API_KEY"
+
+    def test_checklist_names_a_set_export_whose_file_is_missing(self, monkeypatch):
+        monkeypatch.setattr(web, "_settings_exports", lambda: [
+            {"label": "Netflix", "paths": ["data/netflix/export.zip"], "missing": ["data/netflix/export.zip"]},
+            {"label": "Max", "paths": ["data/Max"], "missing": []},
+        ])
+        monkeypatch.setenv("STREAMLINE_PASSWORD", "")
+
+        checklist = web._first_run_checklist()
+        assert checklist["exports_found"] == ["Max"]
+        assert checklist["exports_missing"] == [{"label": "Netflix", "paths": ["data/netflix/export.zip"]}]
+        assert checklist["password_set"] is False
 
 
 def test_run_time_and_length_filters():

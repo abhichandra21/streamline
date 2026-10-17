@@ -12,7 +12,7 @@ The image is published for both x86 and ARM (including Raspberry Pi and Apple si
 git clone https://github.com/abhichandra21/streamline.git
 cd streamline
 mkdir -p data recommender/cache logs
-cp config.local.example.yaml config.local.yaml
+touch config.local.yaml
 ```
 
 1. Copy your export files into `data/`, for example `data/netflix/export.zip`. See [Watch history](/guides/watch-history/).
@@ -63,7 +63,8 @@ Back up `data/streamline.db`; Plex plays and your ratings exist only there.
 
 ## Notes
 
-- Create `config.local.yaml` before the first `docker compose` command. If it is missing, Docker creates a folder with that name instead, and the app can't start.
-- The container runs as user ID 1000. On Linux, if your user has a different ID, run `sudo chown -R 1000:1000 data recommender/cache logs`.
+- Create `config.local.yaml` before the first `docker compose` command. If it is missing, Docker creates a folder with that name instead, and Settings can't save.
+- Until the first build finishes, `docker compose ps` shows the container as unhealthy. That is expected; it turns healthy once the library is built.
+- The container runs as user ID 1000. On Linux, if your user has a different ID, run `sudo chown -R 1000:1000 data recommender/cache logs config.local.yaml`.
 - Set `STREAMLINE_PASSWORD` in `.env` if anyone else can reach the server. See [Running as a service](/guides/running-as-a-service/).
 - To build the image yourself instead of pulling it, run `docker compose build`.

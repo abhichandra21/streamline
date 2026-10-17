@@ -3099,7 +3099,8 @@ _PROFILE_REBUILD_SCORING_KEYS = (
 
 
 def _read_yaml(path: Path) -> dict:
-    if not path.exists():
+    # A folder here is Docker's doing; the save below says how to fix it.
+    if not path.is_file():
         return {}
     with open(path) as f:
         return yaml.safe_load(f) or {}
@@ -3299,7 +3300,11 @@ def _first_run_checklist() -> dict:
         "llm_key_name": llm_key_name,
         "llm_key": llm_key_set,
         "exports_found": [row["label"] for row in exports if row["paths"] and not row["missing"]],
+        "exports_missing": [
+            {"label": row["label"], "paths": row["missing"]} for row in exports if row["missing"]
+        ],
         "manual_lists": len(manual),
+        "password_set": bool(os.environ.get("STREAMLINE_PASSWORD", "").strip()),
     }
 
 
@@ -3455,6 +3460,11 @@ def settings_save() -> str:
     form = request.form
 
     try:
+        if _local_config_path().is_dir():
+            raise ValueError(
+                "config.local.yaml is a folder, so settings can't be saved. Docker makes one when the file "
+                "is missing. Stop the container, delete that folder, run touch config.local.yaml, and start again."
+            )
         llm_values = {
             key: _parse_int_field(form, f"llm_{key}", current_cfg["llm"][key])
             for key in (
@@ -3569,7 +3579,9 @@ def settings_save() -> str:
     reload_applied = _reload_app_config()
 
     rebuild_command = None
-    if refresh_data:
+    if not _is_set_up():
+        pass  # the first build does all of this, and Get started offers it
+    elif refresh_data:
         rebuild_command = "./recommend setup --refresh-data"
     elif refresh_profile:
         rebuild_command = "./recommend setup --refresh-profile"

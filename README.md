@@ -84,10 +84,7 @@ With Docker:
 ```bash
 git clone https://github.com/abhichandra21/streamline.git && cd streamline
 mkdir -p data recommender/cache logs
-cp config.local.example.yaml config.local.yaml      # then point it at your exports in data/
-printf 'TMDB_API_KEY=...\nANTHROPIC_API_KEY=...\n' > .env
-
-docker compose run --rm streamline ./recommend setup
+touch config.local.yaml                             # Settings saves your changes here
 docker compose up -d                                # open http://localhost:5051
 ```
 
@@ -96,12 +93,11 @@ Or with Python 3.10+:
 ```bash
 git clone https://github.com/abhichandra21/streamline.git && cd streamline
 python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
-cp config.local.example.yaml config.local.yaml      # then point it at your exports
-printf 'TMDB_API_KEY=...\nANTHROPIC_API_KEY=...\n' > .env
-
-./recommend setup
 ./recommend-web start                               # open http://localhost:5051
 ```
+
+Then follow **Get started** in the browser: add your keys, point at your exports in `data/`, and build your library.
+Prefer the terminal? Put the keys in `.env`, set export paths in `config.local.yaml`, and run `./recommend setup`.
 
 The [Getting started guide](https://streamline-docs.pages.dev/getting-started/) walks through every step, including where to download each service's history.
 

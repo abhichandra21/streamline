@@ -18,7 +18,8 @@ _LOCAL_CONFIG_PATH = _ROOT / "config.local.yaml"
 
 
 def _load_yaml(path: Path) -> dict:
-    if not path.exists():
+    # Docker makes a folder when a bind-mounted file is missing on the host.
+    if not path.is_file():
         return {}
     with open(path) as f:
         return yaml.safe_load(f) or {}

@@ -117,6 +117,10 @@
             {% if checklist.provider == 'local' %}Using {{ provider_names.local }}, so no AI key is needed.
             {% elif checklist.llm_key %}AI key for {{ provider_names.get(checklist.provider, checklist.provider) }} is set (<span class="mono">{{ checklist.llm_key_name }}</span>).
             {% else %}Add an AI key for {{ provider_names.get(checklist.provider, checklist.provider) }} (<span class="mono">{{ checklist.llm_key_name }}</span>). You can pick a different provider under LLM provider.{% endif %}</li>
+          {% if not checklist.password_set %}
+          <li><span class="key-dot key-dot-off"></span>
+            No password is set, so anyone on your network can open Streamline, including Settings and your keys. Set <span class="mono">STREAMLINE_PASSWORD</span> in <span class="mono">.env</span> to add one.</li>
+          {% endif %}
         </ul>
       </div>
     </li>
@@ -137,6 +141,10 @@
           <li><span class="key-dot key-dot-off"></span>
             Nothing found yet. Copy at least one export (for example a Netflix .zip) into the data folder on the server and set its path, or add a manual list.</li>
           {% endif %}
+          {% for miss in checklist.exports_missing %}
+          <li><span class="key-dot key-dot-off"></span>
+            {{ miss.label }} is set to {% for path in miss.paths %}<span class="mono">{{ path }}</span>{{ ', ' if not loop.last }}{% endfor %}, but {{ 'that file isn\'t' if miss.paths | length == 1 else 'those files aren\'t' }} there. Fix the path under <a href="#watch-history">Watch history exports</a>, or clear it.</li>
+          {% endfor %}
         </ul>
       </div>
     </li>

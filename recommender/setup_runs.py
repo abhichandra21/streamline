@@ -124,7 +124,8 @@ def start(action: str) -> bool:
             [sys.executable, "-u", "-m", "recommender.setup", *ACTIONS[action]],
             cwd=Path(config.__file__).parent,
             stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
-            env={**os.environ, LOG_ENV: str(log_path)},
+            # INFO keeps the progress box readable when the config asks for DEBUG.
+            env={**os.environ, LOG_ENV: str(log_path), "LOG_LEVEL": "INFO"},
             start_new_session=True,
         )
     # Wait until it holds the lock, so the page it returns to shows this run.

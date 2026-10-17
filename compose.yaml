@@ -1,11 +1,12 @@
 # Run from a checkout of the repo:
 #
-#   cp config.local.example.yaml config.local.yaml   # then set your export paths
-#   docker compose run --rm streamline ./recommend setup
-#   docker compose up -d                             # http://localhost:5051
+#   mkdir -p data recommender/cache logs
+#   touch config.local.yaml    # must exist as a file before the first start
+#   docker compose up -d       # then open http://localhost:5051 and follow Get started
 #
-# Keys go in .env (TMDB_API_KEY plus one LLM key). See
-# https://streamline-docs.pages.dev/guides/docker/
+# Keys can also go in .env, and setup also runs from the terminal:
+#   docker compose run --rm streamline ./recommend setup
+# See https://streamline-docs.pages.dev/guides/docker/
 services:
   streamline:
     image: ghcr.io/abhichandra21/streamline:latest
