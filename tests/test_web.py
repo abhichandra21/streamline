@@ -1970,6 +1970,29 @@ def test_recent_sort_uses_real_plays_not_the_downloads_list_date(client, tmp_pat
     assert html.index("Qreal Pick") < html.index("Qboth Pick") < html.index("Qlist Pick")
 
 
+def test_archive_shows_no_date_for_a_max_title(client, tmp_path, monkeypatch):
+    """A Max watch carries the import time, which can read as tomorrow; only real dates show."""
+    from unittest.mock import MagicMock, patch
+    from recommender.user_store import init_db
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+    monkeypatch.setattr("config.FEEDBACK_PATH", str(tmp_path / "feedback.json"))
+    mock_ctx = MagicMock()
+    mock_ctx.watch_index.entries = [
+        {"title": "Qmax Pick", "content_type": "movie", "tmdb_id": None,
+         "platforms": ["hbo"], "last_watched": "2026-10-18T01:03:00"},
+        {"title": "Qreal Pick", "content_type": "movie", "tmdb_id": None,
+         "platforms": ["netflix"], "last_watched": "2026-05-01T00:00:00"},
+    ]
+    with patch("recommender.web._get_context", return_value=mock_ctx), \
+         patch("recommender.web.event_store.last_played", return_value={}):
+        html = client.get("/history").data.decode()
+    assert "2026-05-01" in html
+    assert "2026-10-18" not in html
+
+
 def test_recent_sort_keeps_types_apart_and_trusts_merged_real_dates(client, tmp_path, monkeypatch):
     from unittest.mock import MagicMock, patch
     from recommender.user_store import init_db

@@ -951,6 +951,30 @@ def test_check_exports_reads_the_exports_but_saves_nothing(monkeypatch, tmp_path
     assert not db_path.exists()
 
 
+def test_check_exports_gives_no_dates_for_max(monkeypatch, tmp_path):
+    """Max has no watch dates; its import time read as tomorrow in a UTC container."""
+    from unittest.mock import patch
+    import config
+    import recommender.setup as setup
+
+    monkeypatch.setattr(config, "PLATFORM_PATHS", {"hbo": ["/fake/Max"], "netflix": ["/fake/export.zip"]})
+    monkeypatch.setattr(config, "MANUAL_TV_PATH", None)
+    monkeypatch.setattr(config, "MANUAL_MOVIES_PATH", None)
+    monkeypatch.setattr(config, "EVENT_DB_PATH", str(tmp_path / "streamline.db"))
+    max_event = _make_event(title="The Pitt", timestamp=datetime(2026, 10, 18, 1, 0, 0))
+    netflix_event = _make_event(title="Dark", timestamp=datetime(2026, 1, 1, 20, 0, 0))
+    monkeypatch.setattr(setup, "_PLATFORM_PARSERS", [
+        ("hbo", lambda _path: [max_event]), ("netflix", lambda _path: [netflix_event])])
+
+    with patch.object(setup, "console") as console:
+        setup.run_check_exports()
+
+    printed = " ".join(str(c) for c in console.print.call_args_list)
+    assert "no watch dates" in printed
+    assert "2026-10-18" not in printed
+    assert "2026-01-01 to 2026-01-01" in printed
+
+
 def test_check_exports_fails_on_an_unreadable_export(monkeypatch, tmp_path):
     import config
     import recommender.setup as setup

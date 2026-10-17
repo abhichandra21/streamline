@@ -866,13 +866,23 @@ def ask(
 
         def _resolve(task):
             title, ct = task
-            return ct, ctx.tmdb_client.get_metadata(title, ct)
+            return title, ct, ctx.tmdb_client.get_metadata(title, ct)
 
+        # A name can match a show and a movie ("Happy Valley": the crime series and a
+        # documentary); the LLM meant one title, so keep the one with more votes.
+        best_by_title: dict[str, TmdbMetadata] = {}
         for resolved in _parallel_fetch(_resolve, suggestion_tasks):
             if not resolved:
                 continue
-            ct, meta = resolved
-            if meta and meta.content_type == ct and _append_candidate(
+            title, ct, meta = resolved
+            if not meta or meta.content_type != ct:
+                continue
+            kept = best_by_title.get(title)
+            if kept is None or meta.vote_count > kept.vote_count:
+                best_by_title[title] = meta
+
+        for meta in best_by_title.values():
+            if _append_candidate(
                     candidates, seen_ids, meta, ctx, extra_excludes, intent):
                 suggestion_count += 1
                 if meta.tmdb_id is not None:
