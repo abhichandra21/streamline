@@ -19,5 +19,9 @@
   },
   "devDependencies": {
     "playwright": "^1.64.0"
+  },
+  "overrides": {
+    "katex": "^0.18.10",
+    "postcss-selector-parser": "^7.1.6"
   }
 }

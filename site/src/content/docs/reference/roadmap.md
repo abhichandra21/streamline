@@ -57,7 +57,6 @@ These items should be finished before calling the app a solid homeserver release
 ### Operations
 
 - Add last import time and last failure to `/status`
-- Expose version/build information in the UI
 
 ## Phase 2: Strong v1.0 Features
 

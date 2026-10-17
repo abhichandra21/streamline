@@ -33,6 +33,16 @@ def test_build_returns_profile_text():
     assert "British" in result
 
 
+def test_small_library_prompt_asks_for_cluster_sections_only():
+    """A one-batch profile once came back with "Count check" sections that Home showed as tastes."""
+    events = [make_event("Vera")]
+    client = make_mock_llm("Your profile.")
+    build(events, {"Vera": 1.0}, {"Vera": "Northern crime."}, client)
+    prompt = client.generate.call_args[0][0]
+    assert "one section (## heading) per cluster" in prompt
+    assert "no cluster overview, summary or count check" in prompt
+
+
 def test_build_includes_top_titles_in_prompt():
     events = [make_event("Show A"), make_event("Show B")]
     scores = {"Show A": 0.9, "Show B": 0.5}

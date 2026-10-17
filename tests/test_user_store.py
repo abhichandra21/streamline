@@ -757,3 +757,38 @@ def test_load_ratings_includes_updated_at(tmp_path):
 
     (rating,) = load_ratings(db)
     assert rating["updated_at"]
+
+
+def test_a_save_remembers_its_search_and_keeps_it_when_saved_again_without_one(tmp_path):
+    from recommender.user_store import init_db, list_saved_titles, save_title
+
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    save_title(db, "Happy Valley", "tv", tmdb_id=61244, source_query="northern crime")
+    save_title(db, "Happy Valley", "tv", tmdb_id=61244)
+    save_title(db, "Vera", "tv", source_query="  ")
+
+    rows = {row["title"]: row for row in list_saved_titles(db, status="watchlist")}
+    assert rows["Happy Valley"]["source_query"] == "northern crime"
+    assert rows["Vera"]["source_query"] is None
+
+
+def test_an_older_store_gets_the_search_column(tmp_path):
+    from recommender.user_store import init_db, list_saved_titles
+
+    db = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE saved_titles (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+        "normalized_title TEXT NOT NULL, content_type TEXT NOT NULL, tmdb_id INTEGER, "
+        "status TEXT NOT NULL, saved_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    conn.execute("INSERT INTO saved_titles VALUES (1, 'Vera', 'vera', 'tv', 5, 'watchlist', 'a', 'a')")
+    conn.commit()
+    conn.close()
+
+    assert list_saved_titles(db)[0]["source_query"] is None   # readable before the migration
+    init_db(db)
+    init_db(db)
+
+    rows = list_saved_titles(db)
+    assert [(r["title"], r["source_query"]) for r in rows] == [("Vera", None)]

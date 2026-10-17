@@ -15,6 +15,19 @@
     </div>
   </div>
 
+  {% if export_ages %}
+  {% set level_colors = {'fresh': 'var(--muted)', 'aging': 'var(--accent2)', 'stale': 'var(--accent)'} %}
+  <p class="mono" style="font-size:0.58rem; letter-spacing:0.06em; color:var(--muted); line-height:1.7; margin:-0.5rem 0 1rem;">
+    <span>Newest watch in your exports:</span>
+    {% for e in export_ages -%}
+    <span title="Newest watch {{ e.newest }}" style="white-space:nowrap; color:{{ level_colors.get(e.level, 'var(--muted)') }};">{{ e.label }} {% if e.days_old == 0 %}today{% elif e.days_old == 1 %}1 day ago{% else %}{{ e.days_old }} days ago{% endif %}</span>{% if not loop.last %}<span style="color:var(--border);">,</span>{% endif %}
+    {% endfor %}
+    {% if export_ages | selectattr('level', 'equalto', 'stale') | list %}
+    <br><span style="color:var(--body);">Download a fresh export from the service, then <a href="/settings" style="color:var(--accent); text-decoration:underline; text-underline-offset:2px;">Refresh data in Settings</a>.</span>
+    {% endif %}
+  </p>
+  {% endif %}
+
   <!-- Filter row -->
   <form method="get" action="/history" id="filter-form" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
     <input type="hidden" name="per_page" value="{{ per_page }}">

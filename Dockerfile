@@ -7,10 +7,14 @@
 # plain checkout, so the same paths and commands work with or without Docker.
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+# Shown in the page footer and /healthz; the release workflow passes the tag or commit.
+ARG STREAMLINE_VERSION=dev
+ENV STREAMLINE_VERSION=$STREAMLINE_VERSION \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     STREAMLINE_HOST=0.0.0.0 \
-    STREAMLINE_PORT=5051
+    STREAMLINE_PORT=5051 \
+    HOME=/tmp
 
 # sqlite3 is for inspecting or fixing data/streamline.db by hand.
 RUN apt-get update \
@@ -22,6 +26,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+# compose.yaml may run the container as another user ID (PUID/PGID); the app only writes to the mounts.
 RUN useradd --uid 1000 --create-home streamline \
     && mkdir -p data recommender/cache logs \
     && chown -R streamline:streamline /app

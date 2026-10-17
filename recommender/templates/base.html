@@ -995,6 +995,12 @@
       profile built {{ footer_profile_built_at[:10] }}
     </span>
     {% endif %}
+    {% if footer_version %}
+    <span style="color:var(--border);">·</span>
+    <span class="mono" style="font-size:0.58rem; letter-spacing:0.08em; color:var(--muted);">
+      version {{ footer_version }}
+    </span>
+    {% endif %}
     <span style="color:var(--border);">·</span>
     <a href="/status" class="mono" style="font-size:0.58rem; letter-spacing:0.08em; color:var(--muted); text-decoration:none;">status</a>
     <span style="color:var(--border);">·</span>

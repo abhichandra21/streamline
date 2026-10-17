@@ -11,6 +11,8 @@ services:
   streamline:
     image: ghcr.io/abhichandra21/streamline:latest
     build: .
+    # Run as your own user so the bind mounts stay writable: set PUID/PGID in .env (see `id`).
+    user: "${PUID:-1000}:${PGID:-1000}"
     env_file:
       - path: .env
         required: false
