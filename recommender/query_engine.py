@@ -582,6 +582,10 @@ _MORE_LIKE_N = re.compile(r'^more like #?(\d+)', re.IGNORECASE)
 _CANDIDATE_FETCH_CONCURRENCY = 8
 
 
+# A suggested name's show or movie match with under a fifth of the other's votes is dropped.
+_LESSER_MATCH_RATIO = 5
+
+
 def _parallel_fetch(fn, items: list):
     """Map ``fn`` over ``items`` in a thread pool, preserving input order.
 
@@ -869,19 +873,22 @@ def ask(
             return title, ct, ctx.tmdb_client.get_metadata(title, ct)
 
         # A name can match a show and a movie ("Happy Valley": the crime series and a
-        # documentary); the LLM meant one title, so keep the one with more votes.
-        best_by_title: dict[str, TmdbMetadata] = {}
+        # small documentary). Drop a match far less known than the other one; keep
+        # both when both are well known ("Fargo").
+        matches_by_title: dict[str, list[TmdbMetadata]] = {}
         for resolved in _parallel_fetch(_resolve, suggestion_tasks):
             if not resolved:
                 continue
             title, ct, meta = resolved
-            if not meta or meta.content_type != ct:
-                continue
-            kept = best_by_title.get(title)
-            if kept is None or meta.vote_count > kept.vote_count:
-                best_by_title[title] = meta
+            if meta and meta.content_type == ct:
+                matches_by_title.setdefault(title, []).append(meta)
 
-        for meta in best_by_title.values():
+        kept_matches = []
+        for matches in matches_by_title.values():
+            top_votes = max(m.vote_count for m in matches)
+            kept_matches += [m for m in matches if m.vote_count * _LESSER_MATCH_RATIO >= top_votes]
+
+        for meta in kept_matches:
             if _append_candidate(
                     candidates, seen_ids, meta, ctx, extra_excludes, intent):
                 suggestion_count += 1

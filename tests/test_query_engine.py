@@ -290,6 +290,11 @@ def test_a_suggestion_matching_a_show_and_a_movie_keeps_the_better_known_one(mon
     qe.ask("british crime", ctx, intent_override=intent)
     assert captured["pool"] == [("tv", 61244)]
 
+    # "Fargo": the film and the series are both well known, so both stay.
+    documentary.vote_count = 200
+    qe.ask("british crime", ctx, intent_override=intent)
+    assert sorted(captured["pool"]) == [("movie", 250745), ("tv", 61244)]
+
 
 def test_rank_candidates_returns_recommendations():
     candidates = [make_meta("Broadchurch", tmdb_id=1), make_meta("Hinterland", tmdb_id=2)]
