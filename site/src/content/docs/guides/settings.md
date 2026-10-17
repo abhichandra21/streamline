@@ -46,7 +46,7 @@ A provider with saved watch events can't be turned off here, because the next re
 
 - **Logs** shows the app log in the browser.
 - `/status` returns JSON with the provider, models, cache counts, when the profile was built, when IMDb ratings were refreshed, and any running background jobs.
-- `/healthz` returns `ok`, `busy`, or `not ready`, for monitoring.
+- `/healthz` returns `ok`, `busy`, or `not ready`, and the running version, for monitoring.
 
 ## Password
 

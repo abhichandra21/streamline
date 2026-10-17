@@ -729,3 +729,20 @@ def test_import_info_is_empty_for_a_database_with_no_imports_table(tmp_path):
     sqlite3.connect(db).execute("CREATE TABLE saved_titles (id INTEGER)").connection.close()
 
     assert get_import_info(str(db)) == {}
+
+
+def test_newest_watch_by_provider_dates_each_export(tmp_path):
+    from recommender.event_store import newest_watch_by_provider
+
+    db_path = str(tmp_path / "events.db")
+    init_db(db_path)
+    replace_provider_events(db_path, "netflix", [
+        _make_event(title="Dark S1E1", timestamp=datetime(2026, 3, 1, 20, 0)),
+        _make_event(title="Dark S1E2", timestamp=datetime(2026, 3, 16, 20, 0)),
+    ], _MANIFEST, _SNAP_SHA)
+    replace_provider_events(db_path, "hbo", [_make_event(platform="hbo")], _MANIFEST, _SNAP_SHA)
+
+    newest = newest_watch_by_provider(db_path, ["netflix", "prime"])
+
+    assert list(newest) == ["netflix"]
+    assert newest["netflix"].startswith("2026-03-16")

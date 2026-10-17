@@ -393,6 +393,27 @@ def last_played(db_path: str) -> dict[tuple[str, str], str]:
     return {(key, ct): ts for key, ct, ts in rows}
 
 
+def newest_watch_by_provider(db_path: str, providers: list[str]) -> dict[str, str]:
+    """The newest watch time in each provider's saved events, which dates its export."""
+    if not providers or not Path(db_path).exists():
+        return {}
+    conn = _connect(db_path)
+    try:
+        if not conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='watch_events'"
+        ).fetchone():
+            return {}
+        marks = ",".join("?" for _ in providers)
+        rows = conn.execute(
+            f"SELECT provider, MAX(timestamp_iso) FROM watch_events WHERE provider IN ({marks}) "
+            "GROUP BY provider",
+            providers,
+        ).fetchall()
+    finally:
+        conn.close()
+    return {provider: newest for provider, newest in rows if newest}
+
+
 def get_import_info(db_path: str) -> dict[str, dict]:
     """Return per-provider import metadata with event counts."""
     if not Path(db_path).exists():

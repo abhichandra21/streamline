@@ -14,7 +14,7 @@ It never calls an LLM, so polling it costs nothing.
 | `GET /api/on-deck` | `ready_now` and `coming_soon` lists of cards, plus `shows_checked_at` and `shows_refreshing` |
 | `GET /api/watchlist` | `watchlist`: saved titles with `title`, `content_type`, `tmdb_id`, `saved_at`, `poster_url` |
 | `GET /api/coming-soon.ics` | An iCal feed of upcoming episodes as all-day events |
-| `GET /healthz` | `status`: `ok`, `busy`, or `not ready` |
+| `GET /healthz` | `status`: `ok`, `busy`, or `not ready`; `version` |
 
 A card has `tmdb_id`, `title`, `season_number`, `latest_aired_episode`, `available_episode_count`, `next_season_number`, `next_episode_number`, `next_air_date`, and `poster_url`.
 Any field can be `null`.

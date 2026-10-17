@@ -1,6 +1,7 @@
 """Flask web UI for Streamline — taste profile dashboard, watch history, and recommendation search."""
 
 import csv
+import functools
 import hmac
 import importlib
 import io
@@ -10,12 +11,13 @@ import os
 import re
 import secrets
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
 from copy import copy, deepcopy
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -775,6 +777,22 @@ def _inject_csrf() -> dict:
     return {"csrf_token": _get_csrf_token()}
 
 
+@functools.cache
+def _app_version() -> str:
+    """The running version: set by the Docker build, else from git, else "unknown"."""
+    version = os.environ.get("STREAMLINE_VERSION", "").strip()
+    if not version:
+        try:
+            version = subprocess.run(
+                ["git", "describe", "--tags", "--always"], cwd=_REPO_ROOT,
+                capture_output=True, text=True, timeout=5, check=True,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            version = ""
+    # The Docker build passes the full commit; seven characters are enough to tell builds apart.
+    return re.sub(r"\b([0-9a-f]{7})[0-9a-f]{33}\b", r"\1", version) or "unknown"
+
+
 @app.context_processor
 def _inject_footer() -> dict:
     provider = config.LLM_PROVIDER
@@ -784,6 +802,7 @@ def _inject_footer() -> dict:
         "footer_provider": provider,
         "footer_model": reason_model,
         "footer_profile_built_at": _profile_built_at(),
+        "footer_version": _app_version(),
     }
 
 
@@ -957,6 +976,10 @@ def _cluster_posters(titles: list[str], by_title: dict[str, dict], limit: int) -
     return posters
 
 
+_PROFILE_NOTE_HEADING = re.compile(
+    r"^(?:clusters?|cluster overview|count check|summary|overview)\s*(?:\(.*\))?\s*:?$", re.IGNORECASE)
+
+
 def _dashboard_clusters(taste_profile: str, structured_profile: dict | None,
                         entries: list[dict] | None = None, poster_limit: int = 5) -> list[dict]:
     """Home page clusters: the structured profile search uses, in its computed order.
@@ -999,7 +1022,8 @@ def _dashboard_clusters(taste_profile: str, structured_profile: dict | None,
                 clusters.append(current_cluster)
             heading = line[3:].strip()
             heading = re.sub(r'^CLUSTER\s+[A-Z0-9]+:\s*', '', heading)
-            current_cluster = {"heading": heading, "body": ""}
+            # The AI's working notes ("Count check", "Clusters (largest first)") are not tastes.
+            current_cluster = None if _PROFILE_NOTE_HEADING.match(heading) else {"heading": heading, "body": ""}
         elif current_cluster is not None:
             stripped = line.strip()
             if stripped == '---' or stripped.startswith('**Strength:'):
@@ -1050,6 +1074,28 @@ def dashboard() -> str:
         posters=posters,
         recent_queries=recent_queries,
     )
+
+
+# Exports whose watches carry real dates; Max has none, so its age can't be told.
+_DATED_EXPORTS = ("netflix", "prime", "apple_tv", "disney")
+EXPORT_AGING_DAYS = 14
+EXPORT_STALE_DAYS = 60
+
+
+def _export_ages(today: date | None = None) -> list[dict]:
+    """How old each dated export is, judged by the newest watch in it, oldest first."""
+    today = today or date.today()
+    newest = event_store.newest_watch_by_provider(config.EVENT_DB_PATH, list(_DATED_EXPORTS))
+    ages = []
+    for provider, stamp in newest.items():
+        newest_date = date.fromisoformat(stamp[:10])
+        days_old = max((today - newest_date).days, 0)
+        level = ("stale" if days_old > EXPORT_STALE_DAYS
+                 else "aging" if days_old >= EXPORT_AGING_DAYS else "fresh")
+        ages.append({"provider": provider, "label": PLATFORM_LABELS.get(provider, provider),
+                     "newest": newest_date.isoformat(), "days_old": days_old, "level": level})
+    ages.sort(key=lambda age: -age["days_old"])
+    return ages
 
 
 @app.route("/history")
@@ -1242,6 +1288,7 @@ def history() -> str:
         page=page,
         total_pages=total_pages,
         per_page=per_page,
+        export_ages=_export_ages(),
     )
 
 
@@ -2439,7 +2486,8 @@ def _title_state(title: str, content_type: str, us: "UserStateIndex",
     }
 
 
-def _watchlist_saved_fragment(title: str, ct: str, tmdb_id: int | None, target_id: str) -> str:
+def _watchlist_saved_fragment(title: str, ct: str, tmdb_id: int | None, target_id: str,
+                              source_query: str = "") -> str:
     """HTML fragment: 'Saved ×' toggle, used when saving from searches history."""
     csrf = _get_csrf_token()
     t = escape(title)
@@ -2454,12 +2502,14 @@ def _watchlist_saved_fragment(title: str, ct: str, tmdb_id: int | None, target_i
         f'<input type="hidden" name="content_type" value="{escape(ct)}">'
         f'<input type="hidden" name="tmdb_id" value="{tmdb_val}">'
         f'<input type="hidden" name="target_id" value="{tid}">'
+        f'<input type="hidden" name="source_query" value="{escape(source_query)}">'
         f'<button type="submit" class="mono" style="font-size:0.55rem; background:none; border:none; cursor:pointer; color:var(--muted); padding:0 2px;" title="Remove from watchlist">&times;</button>'
         f'</form></span>'
     )
 
 
-def _watchlist_save_fragment(title: str, ct: str, tmdb_id: int | None, target_id: str) -> str:
+def _watchlist_save_fragment(title: str, ct: str, tmdb_id: int | None, target_id: str,
+                             source_query: str = "") -> str:
     """HTML fragment: '+ Save' toggle, returned after unsaving from searches history."""
     csrf = _get_csrf_token()
     t = escape(title)
@@ -2474,6 +2524,7 @@ def _watchlist_save_fragment(title: str, ct: str, tmdb_id: int | None, target_id
         f'<input type="hidden" name="tmdb_id" value="{tmdb_val}">'
         f'<input type="hidden" name="mode" value="toggle">'
         f'<input type="hidden" name="target_id" value="{tid}">'
+        f'<input type="hidden" name="source_query" value="{escape(source_query)}">'
         f'<button type="submit" class="mono result-link" style="background:none; border:none; cursor:pointer; padding:0;">+ Save</button>'
         f'</form></span>'
     )
@@ -2682,12 +2733,14 @@ def watchlist_save():
     if not title:
         return "Missing title", 400
     _ensure_user_store_once()
-    user_store.save_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id)
+    # The search the title came from, kept to remind you why you saved it (#73).
+    source_query = (request.form.get("source_query") or "").strip()[:300]
+    user_store.save_title(config.EVENT_DB_PATH, title, ct, tmdb_id=tmdb_id, source_query=source_query)
     back = _local_redirect_target()
     if back:
         return redirect(back)
     if mode == "toggle" and target_id:
-        return _watchlist_saved_fragment(title, ct, tmdb_id, target_id)
+        return _watchlist_saved_fragment(title, ct, tmdb_id, target_id, source_query)
     return '<span class="mono" style="font-size:0.58rem; color:var(--yours);">Saved</span>'
 
 
@@ -2704,7 +2757,9 @@ def watchlist_unsave():
     back = _local_redirect_target()
     if back:
         return redirect(back)
-    return _watchlist_save_fragment(title, ct, tmdb_id, target_id)
+    # Carried through so saving again from the same search keeps it.
+    source_query = (request.form.get("source_query") or "").strip()[:300]
+    return _watchlist_save_fragment(title, ct, tmdb_id, target_id, source_query)
 
 
 @app.route("/watchlist/dismiss", methods=["POST"])
@@ -2933,11 +2988,11 @@ def healthz():
     index_path = Path(config.WATCH_INDEX_PATH)
     profile_path = Path(config.TASTE_PROFILE_PATH)
     if not index_path.exists() or not profile_path.exists():
-        return jsonify({"status": "not ready", "reason": "setup not run"}), 503
+        return jsonify({"status": "not ready", "reason": "setup not run", "version": _app_version()}), 503
     running = job_registry.running_jobs()
     if running:
-        return jsonify({"status": "busy", "running_jobs": len(running)}), 200
-    return jsonify({"status": "ok"}), 200
+        return jsonify({"status": "busy", "running_jobs": len(running), "version": _app_version()}), 200
+    return jsonify({"status": "ok", "version": _app_version()}), 200
 
 
 def _resolve_log_path(log_name: str | None) -> tuple[str, Path]:

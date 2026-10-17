@@ -16,7 +16,7 @@ export default defineConfig({
 			editLink: { baseUrl: 'https://github.com/abhichandra21/streamline/edit/master/site/' },
 			lastUpdated: true,
 			sidebar: [
-				{ label: 'Start here', items: ['getting-started'] },
+				{ label: 'Start here', items: ['getting-started', 'guides/troubleshooting'] },
 				{
 					label: 'Using Streamline',
 					items: [

@@ -1271,7 +1271,10 @@ class TestSettingsExports:
     HBO = {"provider": "hbo", "label": "Max (HBO)", "paths": ["data/Max"], "missing": [], "event_count": 412}
 
     def _post(self, client, rows, **fields):
+        # The saved paths, not the owner's config.local.yaml, so a fresh checkout behaves the same.
+        saved = {row["provider"]: [str(web._REPO_ROOT / path) for path in row["paths"]] for row in rows}
         with patch("recommender.web._settings_exports", return_value=rows), \
+                patch("config.PLATFORM_PATHS", saved), \
                 patch("recommender.web._load_config_yaml", return_value={}), \
                 patch("recommender.web._save_config_yaml") as save, \
                 patch("recommender.web._reload_app_config", return_value=True):
@@ -3814,6 +3817,74 @@ def test_dashboard_clusters_show_the_description_when_there_is_one():
          "representative_titles": ["Vera"]}]})
     assert "You love slow-burn detectives." in clusters[0]["body_html"]
     assert "Vera" in clusters[0]["body_html"]
+
+
+def test_version_comes_from_the_build_and_shortens_the_commit(monkeypatch):
+    web._app_version.cache_clear()
+    monkeypatch.setenv("STREAMLINE_VERSION", "master-" + "a1b2c3d" + "4" * 33)
+    try:
+        assert web._app_version() == "master-a1b2c3d"
+    finally:
+        web._app_version.cache_clear()
+
+
+def test_healthz_reports_the_version(client, monkeypatch):
+    monkeypatch.setattr(web, "_app_version", lambda: "v9.9.9")
+    assert client.get("/healthz").get_json()["version"] == "v9.9.9"
+
+
+def test_export_ages_flag_old_exports(monkeypatch):
+    from datetime import date
+    monkeypatch.setattr(web.event_store, "newest_watch_by_provider", lambda db, providers: {
+        "netflix": "2026-10-10T20:00:00", "prime": "2026-09-17T20:00:00", "disney": "2026-03-01T20:00:00"})
+
+    ages = web._export_ages(today=date(2026, 10, 17))
+
+    assert [(a["label"], a["days_old"], a["level"]) for a in ages] == [
+        ("Disney+", 230, "stale"), ("Prime Video", 30, "aging"), ("Netflix", 7, "fresh")]
+
+
+def test_saving_from_a_search_records_the_search(client, tmp_path, monkeypatch):
+    from recommender.user_store import init_db, list_saved_titles
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+
+    client.post("/watchlist/save", data=_csrf_form(
+        title="Happy Valley", content_type="tv", tmdb_id="61244", source_query="northern crime"))
+
+    assert list_saved_titles(db)[0]["source_query"] == "northern crime"
+
+
+def test_saving_again_after_removing_keeps_the_search(client, tmp_path, monkeypatch):
+    """Searches page: Save, remove, Save again, each through the form the last step returned."""
+    import re
+    from recommender.user_store import init_db, list_saved_titles
+    db = str(tmp_path / "test.db")
+    init_db(db)
+    monkeypatch.setattr("config.EVENT_DB_PATH", db)
+
+    def hidden(html):
+        return dict(re.findall(r'name="(\w+)" value="([^"]*)"', html))
+
+    base = {"title": "Vera", "content_type": "tv", "tmdb_id": "5", "target_id": "s1"}
+    saved = client.post("/watchlist/save", data=_csrf_form(
+        **base, mode="toggle", source_query="northern crime")).data.decode()
+    removed = client.post("/watchlist/unsave", data=_csrf_form(**{
+        k: v for k, v in hidden(saved).items() if k != "_csrf_token"})).data.decode()
+    client.post("/watchlist/save", data=_csrf_form(**{
+        k: v for k, v in hidden(removed).items() if k != "_csrf_token"}))
+
+    assert list_saved_titles(db)[0]["source_query"] == "northern crime"
+
+
+def test_dashboard_skips_the_profiles_working_notes():
+    from recommender.web import _dashboard_clusters
+    prose = ("## Clusters (largest first)\n1. Crime\n## Northern crime\nYou love Vera.\n"
+             "## Count check\n21 titles in total.\n## Gentle comedy\nYou like Ted Lasso.")
+    clusters = _dashboard_clusters(prose, None)
+    assert [c["heading"] for c in clusters] == ["Northern crime", "Gentle comedy"]
+    assert "21 titles" not in clusters[0]["body_html"]
 
 
 def test_dashboard_clusters_fall_back_to_prose():

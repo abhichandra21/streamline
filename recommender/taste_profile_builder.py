@@ -389,6 +389,8 @@ def build(
             + ("what they consistently finish, and notable patterns.\n" if config.USE_VIEWING_SIGNALS
                else "what they keep coming back to, and notable patterns.\n")
             + f"{_CLUSTER_COUNT_NOTE}"
+            "Write one section (## heading) per cluster, largest first, with the cluster's name as "
+            "the heading. No other sections: no cluster overview, summary or count check.\n"
             "Write in second person (\"You gravitate toward...\")."
             f"{negative_section}\n\n"
             f"{'' if config.USE_VIEWING_SIGNALS else _EQUAL_WEIGHT_NOTE + chr(10)}"

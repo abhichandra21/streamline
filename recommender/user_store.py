@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS saved_titles (
     tmdb_id          INTEGER,
     status           TEXT NOT NULL CHECK (status IN ('watchlist', 'dismissed')),
     saved_at         TEXT NOT NULL,
-    updated_at       TEXT NOT NULL
+    updated_at       TEXT NOT NULL,
+    source_query     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS title_ratings (
@@ -217,14 +218,28 @@ def init_db(db_path: str) -> None:
         conn.executescript(_SCHEMA)
         conn.executescript(_INDEXES)
         _migrate_rating_vocabulary(conn)
+        _add_saved_source_query(conn)
     finally:
         conn.close()
 
 
+def _add_saved_source_query(conn) -> None:
+    """Stores made before saves recorded their search get the empty column."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(saved_titles)")}
+    if "source_query" not in columns:
+        conn.execute("ALTER TABLE saved_titles ADD COLUMN source_query TEXT")
+        conn.commit()
+
+
 def save_title(db_path: str, title: str, content_type: str,
-               tmdb_id: int | None = None, status: str = "watchlist") -> None:
-    """Upsert a title into saved_titles. If dismissed, re-saving sets status to watchlist."""
+               tmdb_id: int | None = None, status: str = "watchlist",
+               source_query: str | None = None) -> None:
+    """Upsert a title into saved_titles. If dismissed, re-saving sets status to watchlist.
+
+    source_query is the search the title was saved from; a save without one keeps the old one.
+    """
     now = _now_iso()
+    source_query = (source_query or "").strip() or None
     norm = _normalize(title)
     conn = _connect(db_path)
     try:
@@ -233,22 +248,24 @@ def save_title(db_path: str, title: str, content_type: str,
             if tmdb_id is not None:
                 conn.execute(
                     "INSERT INTO saved_titles "
-                    "(title, normalized_title, content_type, tmdb_id, status, saved_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                    "(title, normalized_title, content_type, tmdb_id, status, saved_at, updated_at, "
+                    "source_query) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT (content_type, tmdb_id) WHERE tmdb_id IS NOT NULL "
                     "DO UPDATE SET title=excluded.title, normalized_title=excluded.normalized_title, "
-                    "status=excluded.status, updated_at=excluded.updated_at",
-                    (title, norm, content_type, tmdb_id, status, now, now),
+                    "status=excluded.status, updated_at=excluded.updated_at, "
+                    "source_query=COALESCE(excluded.source_query, saved_titles.source_query)",
+                    (title, norm, content_type, tmdb_id, status, now, now, source_query),
                 )
             else:
                 conn.execute(
                     "INSERT INTO saved_titles "
-                    "(title, normalized_title, content_type, tmdb_id, status, saved_at, updated_at) "
-                    "VALUES (?, ?, ?, NULL, ?, ?, ?) "
+                    "(title, normalized_title, content_type, tmdb_id, status, saved_at, updated_at, "
+                    "source_query) VALUES (?, ?, ?, NULL, ?, ?, ?, ?) "
                     "ON CONFLICT (content_type, normalized_title) WHERE tmdb_id IS NULL "
                     "DO UPDATE SET title=excluded.title, status=excluded.status, "
-                    "updated_at=excluded.updated_at",
-                    (title, norm, content_type, status, now, now),
+                    "updated_at=excluded.updated_at, "
+                    "source_query=COALESCE(excluded.source_query, saved_titles.source_query)",
+                    (title, norm, content_type, status, now, now, source_query),
                 )
     finally:
         conn.close()
@@ -292,20 +309,20 @@ def list_saved_titles(db_path: str, status: str | None = None) -> list[dict]:
     try:
         if status:
             rows = conn.execute(
-                "SELECT title, normalized_title, content_type, tmdb_id, status, saved_at, updated_at "
-                "FROM saved_titles WHERE status = ? ORDER BY saved_at DESC",
+                # * so a store not yet migrated (no source_query column) still reads.
+                "SELECT * FROM saved_titles WHERE status = ? ORDER BY saved_at DESC",
                 (status,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT title, normalized_title, content_type, tmdb_id, status, saved_at, updated_at "
-                "FROM saved_titles ORDER BY saved_at DESC",
+                "SELECT * FROM saved_titles ORDER BY saved_at DESC",
             ).fetchall()
         return [
             {
                 "title": r["title"], "normalized_title": r["normalized_title"],
                 "content_type": r["content_type"], "tmdb_id": r["tmdb_id"],
                 "status": r["status"], "saved_at": r["saved_at"], "updated_at": r["updated_at"],
+                "source_query": dict(r).get("source_query"),
             }
             for r in rows
         ]
