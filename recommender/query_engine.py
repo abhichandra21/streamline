@@ -73,7 +73,7 @@ class QueryIntent:
     year_from: int | None
     year_to: int | None
     unwatched_only: bool
-    special_intent: str | None  # "abandoned", "watchlist", "family", or None
+    special_intent: str | None  # "title_verdict", "watchlist", "family", or None
     content_type: str           # "tv", "movie", or "both"
     top_n: int                  # default 3; 1 for "the single best", higher for "many options"
     platforms: list[str]        # e.g. ["Netflix"] from "spy thriller on Netflix"
@@ -240,7 +240,11 @@ def parse_intent(
         '- year_from: integer or null\n'
         '- year_to: integer or null\n'
         '- unwatched_only: boolean (default true)\n'
-        '- special_intent: one of "abandoned", "watchlist", "family" or null\n'
+        '- special_intent: one of "title_verdict", "watchlist", "family" or null. '
+        'Use "title_verdict" when the query asks for a verdict on one named title, however it '
+        'is worded: would I like X, should I watch X, is X for me, is X worth it, what do you '
+        'think of X, should I finish X, should I go back to X. Put that title alone in '
+        'similar_to.\n'
         '- content_type: "tv", "movie", or "both"\n'
         f'- top_n: integer — default is {config.DEFAULT_TOP_N}; use 1 only if user asks for '
         '"the single best" or "one recommendation"; use 5-10 for "a lot" or "many options"\n'
@@ -395,45 +399,133 @@ def rank_candidates(
     return results[:top_n]
 
 
-def _handle_abandoned(query: str, intent: QueryIntent, ctx: RecommendContext) -> list[Recommendation]:
-    """Handle 'I started X and stopped — worth finishing?' queries."""
-    target = intent.similar_to[0] if intent.similar_to else query
-    log.debug("Handling abandoned query for target: %r", target)
+# Sources whose exports record how long each play lasted. Manual lists, Seen it,
+# Max and Disney+ get a made-up duration per title, so their time means nothing.
+REAL_DURATION_PLATFORMS = frozenset({"netflix", "prime", "apple_tv", "plex"})
 
+_MARKDOWN = re.compile(r"(\*+|__|`|^#+\s*)", re.MULTILINE)
+
+
+def _norm_title(title: str) -> str:
+    return re.sub(r"\s*\([^)]*\)", "", title.lower()).strip()
+
+
+def _verdict_lookup(target: str, content_type: str, ctx: RecommendContext) -> TmdbMetadata | None:
+    """The TMDB title a one-title question is about; an exact title match wins."""
+    types = ["tv", "movie"] if content_type == "both" else [content_type]
+    found = [m for m in (ctx.tmdb_client.get_metadata(target, ct) for ct in types) if m]
+    if not found:
+        return None
+    exact = [m for m in found if _norm_title(m.title) == _norm_title(target)]
+    return max(exact or found, key=lambda m: m.vote_count)
+
+
+def _verdict_watch_facts(meta: TmdbMetadata, ctx: RecommendContext) -> str:
+    # Exports often spell a title differently from TMDB ("Veep:"), so also take
+    # the export spellings the watch index matched to this TMDB ID.
+    names = {_norm_title(meta.title)} | {
+        _norm_title(entry["title"]) for entry in ctx.watch_index.entries
+        if entry.get("tmdb_id") == meta.tmdb_id and entry.get("content_type") == meta.content_type
+    }
     matching = [
         e for e in ctx.events
-        if (target.lower() in e.title.lower() or target.lower() in e.series_name.lower())
-        and (intent.content_type == 'both' or e.content_type == intent.content_type)
+        if _norm_title(e.series_name if e.content_type == "tv" else e.title) in names
     ]
-    if not matching:
-        log.debug("No matching events found for abandoned target")
-        return []
+    seen_it = bool(ctx.user_state and ctx.user_state.is_manually_watched(meta))
+    marked = seen_it or ctx.watch_index.is_watched(meta)
+    lines = []
+    real = [e for e in matching if e.platform in REAL_DURATION_PLATFORMS]
+    if seen_it:
+        # Seen it is the owner saying they finished it, wherever the plays stop.
+        lines.append("You marked it Seen it, so you have finished it.")
+    elif real:
+        hours = sum(e.watched_duration.total_seconds() for e in real) / 3600
+        last = max(real, key=lambda e: e.timestamp)
+        lines.append(f"You have watched {hours:.1f} hours of it, last on {last.timestamp:%B %d, %Y}.")
+        if meta.content_type == "tv":
+            episodes = len({e.title for e in real})
+            lines.append(f'You have played {episodes} episode(s); the last was "{last.title}".')
+    elif matching or marked:
+        lines.append("You have marked it as watched, but there is no record of how much. "
+                     "Do not guess how far you got.")
+    else:
+        lines.append("You have not watched any of it.")
+    rating = ctx.user_state.get_rating(meta) if ctx.user_state else None
+    if rating == user_store.RATING_MORE:
+        lines.append("You marked it Loved.")
+    elif rating == user_store.RATING_LESS:
+        lines.append("You marked it Not for me.")
+    return "\n".join(lines)
 
-    total_hours = sum(e.watched_duration.total_seconds() for e in matching) / 3600
-    ct = matching[0].content_type
-    lookup_title = matching[0].series_name if ct == 'tv' else matching[0].title
-    meta = ctx.tmdb_client.get_metadata(lookup_title, ct)
-    if meta:
-        attach_imdb_ratings([meta], ctx.tmdb_client)
-    desc = enrich(meta, ctx.cache_dir, ctx.llm) if meta else target
+
+def _verdict_title_facts(meta: TmdbMetadata, ctx: RecommendContext) -> str:
+    lines = []
+    if meta.rating:
+        source = "IMDb" if meta.rating_source == "imdb" else "TMDB"
+        lines.append(f"{source} rating: {meta.rating:.1f}/10.")
+    if meta.content_type == "tv":
+        try:
+            details = ctx.tmdb_client.fetch_tv_series_details(meta.tmdb_id)
+        except Exception as exc:
+            log.warning("Could not fetch show details for %r: %s", meta.title, exc)
+            details = {}
+        if details.get("number_of_seasons"):
+            lines.append(f'{details["number_of_seasons"]} season(s), '
+                         f'{details.get("number_of_episodes") or "?"} episodes.')
+        if details.get("status"):
+            lines.append(f'Status: {details["status"]}.')
+    elif meta.runtime_minutes:
+        lines.append(f"Runtime: {meta.runtime_minutes} minutes.")
+    if meta.release_year:
+        lines.append(f"First released: {meta.release_year}.")
+    return "\n".join(lines)
+
+
+def _handle_title_verdict(query: str, intent: QueryIntent, ctx: RecommendContext) -> list[Recommendation]:
+    """Answer one-title questions: would I like X, should I watch or finish X."""
+    target = intent.similar_to[0] if intent.similar_to else query
+    log.debug("Handling title verdict for target: %r", target)
+
+    meta = _verdict_lookup(target, intent.content_type, ctx)
+    if not meta:
+        return [Recommendation(
+            title=target,
+            content_type=intent.content_type if intent.content_type != "both" else "tv",
+            score=0.0, vote_average=0.0, genres=[],
+            explanation=f'I couldn\'t find "{target}" on TMDB. Check the spelling or try the full title.',
+        )]
+    attach_imdb_ratings([meta], ctx.tmdb_client)
+    desc = enrich(meta, ctx.cache_dir, ctx.llm)
 
     prompt = (
-        f'A user has watched {total_hours:.1f} hours of "{target}".\n\n'
-        f'About "{target}": {desc}\n\n'
+        f'The person you are talking to asked: "{query}"\n\n'
+        f'About "{meta.title}": {desc}\n\n'
+        f'Facts about it:\n{_verdict_title_facts(meta, ctx)}\n\n'
+        f'Their history with it:\n{_verdict_watch_facts(meta, ctx)}\n\n'
         f'Their taste profile:\n{whole_profile(ctx)}\n\n'
-        'Should they continue watching? Give a direct yes/no with 1-2 sentences of reasoning.'
+        'Answer them directly, speaking to them as "you". Start with a clear yes, no or '
+        'probably, then give one or two concrete reasons in one or two short plain sentences. '
+        'Use the facts above when they matter, such as how many seasons there are or '
+        'whether the show has ended. Do not quote or paraphrase the taste profile\'s wording, '
+        'and do not mention watch time unless it is given above. Plain text only, no markdown.'
     )
     response_text = ctx.llm.generate(prompt, role="reason", max_tokens=config.TOKENS_ABANDONED,
                                       timeout=config.TIMEOUT_REASON)
 
+    providers = []
+    if ctx.providers_cache_dir:
+        providers = ctx.tmdb_client.get_watch_providers(
+            meta.tmdb_id, meta.content_type, ctx.watch_region, ctx.providers_cache_dir,
+        )
     return [Recommendation(
-        title=target,
-        content_type=ct,
+        title=meta.title,
+        content_type=meta.content_type,
         score=0.5,
-        vote_average=meta.rating if meta else 0.0,
-        genres=meta.genres if meta else [],
-        explanation=response_text.strip(),
-        rating_source=meta.rating_source if meta else "tmdb",
+        vote_average=meta.rating,
+        genres=meta.genres,
+        explanation=_MARKDOWN.sub("", response_text).strip(),
+        streaming_providers=providers,
+        rating_source=meta.rating_source,
     )]
 
 
@@ -781,8 +873,8 @@ def ask(
     if exclude_titles:
         extra_excludes = set(extra_excludes) | set(exclude_titles)
 
-    if intent.special_intent == 'abandoned':
-        return _handle_abandoned(query, intent, ctx)
+    if intent.special_intent in ('title_verdict', 'abandoned'):
+        return _handle_title_verdict(query, intent, ctx)
 
     profile_for_prompt = _profile_for_prompt(ctx, intent)
     feedback_block = build_feedback_block()

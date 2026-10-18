@@ -18,7 +18,7 @@ Type what you want into the search box on the home page, or pass it to `./recomm
 Two special questions:
 
 - **Why not?** "why not Slow Horses?" explains why a title was left out or never came up.
-- **Should I keep going?** "I started Severance and stopped. Should I keep going?" checks how much you watched and gives an opinion.
+- **One title.** "Would I like Severance?", "Is Slow Horses worth it?" or "I started Severance and stopped. Should I keep going?" gives a short yes or no about that title, using what you have watched of it, how many seasons there are, and where to watch it.
 
 ## How a search works
 
