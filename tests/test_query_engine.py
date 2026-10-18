@@ -1367,8 +1367,22 @@ def test_title_verdict_counts_seen_it_as_watched(monkeypatch, tmp_path):
 
     qe._handle_title_verdict("Should I finish Mirzapur", _verdict_intent(), ctx)
 
-    assert "marked it as watched" in prompts[0]
+    assert "you have finished it" in prompts[0]
     assert "not watched any" not in prompts[0]
+
+
+def test_title_verdict_seen_it_wins_over_partial_plays(monkeypatch, tmp_path):
+    """Two Prime episodes plus Seen it means finished, not "stopped after two" (#149)."""
+    import recommender.query_engine as qe
+    from recommender.user_state import UserStateIndex
+    ctx, prompts = _verdict_ctx(qe, tmp_path, monkeypatch, events=[_verdict_event("prime")])
+    ctx.user_state = UserStateIndex()
+    ctx.user_state._archive_tmdb_keys.add(("tv", 9))
+
+    qe._handle_title_verdict("Should I finish Mirzapur", _verdict_intent(), ctx)
+
+    assert "you have finished it" in prompts[0]
+    assert "hours" not in prompts[0]
 
 
 def test_title_verdict_answers_with_no_watch_history(monkeypatch, tmp_path):

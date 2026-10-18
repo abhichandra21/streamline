@@ -431,11 +431,14 @@ def _verdict_watch_facts(meta: TmdbMetadata, ctx: RecommendContext) -> str:
         e for e in ctx.events
         if _norm_title(e.series_name if e.content_type == "tv" else e.title) in names
     ]
-    marked = ctx.watch_index.is_watched(meta) or bool(
-        ctx.user_state and ctx.user_state.is_manually_watched(meta))
+    seen_it = bool(ctx.user_state and ctx.user_state.is_manually_watched(meta))
+    marked = seen_it or ctx.watch_index.is_watched(meta)
     lines = []
     real = [e for e in matching if e.platform in REAL_DURATION_PLATFORMS]
-    if real:
+    if seen_it:
+        # Seen it is the owner saying they finished it, wherever the plays stop.
+        lines.append("You marked it Seen it, so you have finished it.")
+    elif real:
         hours = sum(e.watched_duration.total_seconds() for e in real) / 3600
         last = max(real, key=lambda e: e.timestamp)
         lines.append(f"You have watched {hours:.1f} hours of it, last on {last.timestamp:%B %d, %Y}.")
