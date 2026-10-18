@@ -179,7 +179,7 @@ Every search also reads the current ratings (up to 30 More like this and 10 Less
 
 **Special modes:**
 - `"why not X?"` — traces a title through the pipeline and explains exactly where it was filtered
-- `"abandoned"` queries — checks watch history for partial viewing and advises whether to continue
+- `"title_verdict"` queries ("would I like X", "should I finish X") — one short answer about one title, from its watch history, season count, status, rating and where to watch it
 
 ### Mood Match Wizard (`recommender/wizard.py`, `recommender/wizard_flow.py`)
 

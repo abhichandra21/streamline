@@ -60,13 +60,13 @@ def test_parse_intent_handles_markdown_wrapped_json():
     assert intent.genres == ["crime", "drama"]
 
 
-def test_parse_intent_abandoned_special():
-    abandoned_intent = {**BRITISH_CRIME_INTENT, "special_intent": "abandoned",
+def test_parse_intent_title_verdict_special():
+    abandoned_intent = {**BRITISH_CRIME_INTENT, "special_intent": "title_verdict",
                         "genres": [], "origin_countries": [],
                         "similar_to": ["Tandav"], "content_type": "tv", "top_n": 1}
     client = make_mock_llm(json.dumps(abandoned_intent))
     intent = parse_intent("I started Tandav and stopped", client)
-    assert intent.special_intent == "abandoned"
+    assert intent.special_intent == "title_verdict"
     assert "Tandav" in intent.similar_to
 
 
@@ -1237,6 +1237,8 @@ def _rated_lookup_ctx(qe, meta, tmp_path, monkeypatch, events=()):
     meta.imdb_id = "tt0000009"
 
     class FakeIndex:
+        entries = []
+
         def is_watched(self, c):
             return False
 
@@ -1281,26 +1283,136 @@ def test_why_not_early_exit_reports_imdb_rating(monkeypatch, tmp_path):
     assert (rec.vote_average, rec.rating_source) == (5.0, "imdb")
 
 
-def test_abandoned_result_reports_imdb_rating(monkeypatch, tmp_path):
-    from datetime import datetime, timedelta
+def _verdict_intent(target="Mirzapur", content_type="tv"):
     import recommender.query_engine as qe
-    from recommender.ingestion.base import WatchEvent
-    monkeypatch.setattr(qe, "enrich", lambda *a, **k: "desc")
-    meta = make_meta("Mirzapur", tmdb_id=9, content_type="tv", vote_avg=7.9)
-    event = WatchEvent(platform="prime", title="Mirzapur: S1E1", content_type="tv",
-                       series_name="Mirzapur", watched_duration=timedelta(hours=1),
-                       total_duration=None, timestamp=datetime(2026, 1, 1), profile="me")
-    ctx = _rated_lookup_ctx(qe, meta, tmp_path, monkeypatch, events=[event])
-    intent = qe.QueryIntent(
+    return qe.QueryIntent(
         genres=[], origin_countries=[], languages=[], mood_descriptors=[],
-        similar_to=["Mirzapur"], max_runtime_minutes=None, year_from=None, year_to=None,
-        unwatched_only=True, special_intent="abandoned", content_type="tv",
+        similar_to=[target], max_runtime_minutes=None, year_from=None, year_to=None,
+        unwatched_only=True, special_intent="title_verdict", content_type=content_type,
         top_n=1, platforms=[],
     )
 
-    [rec] = qe._handle_abandoned("q", intent, ctx)
+
+def _verdict_event(platform, seconds=3600, title="Mirzapur: S1E1", series_name="Mirzapur"):
+    from datetime import datetime, timedelta
+    from recommender.ingestion.base import WatchEvent
+    return WatchEvent(platform=platform, title=title, content_type="tv",
+                      series_name=series_name, watched_duration=timedelta(seconds=seconds),
+                      total_duration=None, timestamp=datetime(2026, 1, 1), profile="me")
+
+
+def _verdict_ctx(qe, tmp_path, monkeypatch, events=(), reply="Yes, keep going."):
+    monkeypatch.setattr(qe, "enrich", lambda *a, **k: "desc")
+    meta = make_meta("Mirzapur", tmdb_id=9, content_type="tv", vote_avg=7.9)
+    ctx = _rated_lookup_ctx(qe, meta, tmp_path, monkeypatch, events=events)
+    prompts = []
+
+    def generate(prompt, **k):
+        prompts.append(prompt)
+        return reply
+    ctx.llm.generate = generate
+    return ctx, prompts
+
+
+def test_title_verdict_reports_imdb_rating(monkeypatch, tmp_path):
+    import recommender.query_engine as qe
+    ctx, _ = _verdict_ctx(qe, tmp_path, monkeypatch, events=[_verdict_event("prime")])
+
+    [rec] = qe._handle_title_verdict("q", _verdict_intent(), ctx)
 
     assert (rec.vote_average, rec.rating_source) == (5.0, "imdb")
+
+
+def test_title_verdict_never_reports_made_up_watch_time(monkeypatch, tmp_path):
+    """A manual-list entry's 45 minutes is a placeholder, not viewing (#149)."""
+    import recommender.query_engine as qe
+    ctx, prompts = _verdict_ctx(qe, tmp_path, monkeypatch,
+                                events=[_verdict_event("manual", seconds=2700)])
+
+    qe._handle_title_verdict("Should I finish Mirzapur", _verdict_intent(), ctx)
+
+    assert "hours" not in prompts[0]
+    assert "marked it as watched" in prompts[0]
+
+
+def test_title_verdict_reports_real_watch_time(monkeypatch, tmp_path):
+    import recommender.query_engine as qe
+    ctx, prompts = _verdict_ctx(qe, tmp_path, monkeypatch,
+                                events=[_verdict_event("netflix", seconds=5400),
+                                        _verdict_event("manual", seconds=2700)])
+
+    qe._handle_title_verdict("Should I finish Mirzapur", _verdict_intent(), ctx)
+
+    assert "You have watched 1.5 hours" in prompts[0]
+
+
+def test_title_verdict_finds_plays_under_the_export_spelling(monkeypatch, tmp_path):
+    """Prime calls it "Mirzapur:"; the watch index maps that spelling to the TMDB ID."""
+    import recommender.query_engine as qe
+    ctx, prompts = _verdict_ctx(qe, tmp_path, monkeypatch,
+                                events=[_verdict_event("prime", 7200, series_name="Mirzapur:")])
+    ctx.watch_index.entries = [{"tmdb_id": 9, "title": "Mirzapur:", "content_type": "tv"}]
+
+    qe._handle_title_verdict("Should I finish Mirzapur", _verdict_intent(), ctx)
+
+    assert "You have watched 2.0 hours" in prompts[0]
+
+
+def test_title_verdict_counts_seen_it_as_watched(monkeypatch, tmp_path):
+    import recommender.query_engine as qe
+    from recommender.user_state import UserStateIndex
+    ctx, prompts = _verdict_ctx(qe, tmp_path, monkeypatch)
+    ctx.user_state = UserStateIndex()
+    ctx.user_state._archive_tmdb_keys.add(("tv", 9))
+
+    qe._handle_title_verdict("Should I finish Mirzapur", _verdict_intent(), ctx)
+
+    assert "marked it as watched" in prompts[0]
+    assert "not watched any" not in prompts[0]
+
+
+def test_title_verdict_answers_with_no_watch_history(monkeypatch, tmp_path):
+    """'Would I like X' with no plays still gets an answer, not nothing (#149)."""
+    import recommender.query_engine as qe
+    ctx, prompts = _verdict_ctx(qe, tmp_path, monkeypatch, reply="Probably, yes.")
+
+    [rec] = qe._handle_title_verdict("Would I like Mirzapur", _verdict_intent(), ctx)
+
+    assert "You have not watched any of it." in prompts[0]
+    assert rec.title == "Mirzapur"
+    assert rec.explanation == "Probably, yes."
+
+
+def test_title_verdict_speaks_to_you_and_strips_markdown(monkeypatch, tmp_path):
+    import recommender.query_engine as qe
+    ctx, prompts = _verdict_ctx(qe, tmp_path, monkeypatch, reply="**Yes, keep going.** *Mirzapur* ends well.")
+
+    [rec] = qe._handle_title_verdict("q", _verdict_intent(), ctx)
+
+    assert 'as "you"' in prompts[0]
+    assert "Should they" not in prompts[0]
+    assert rec.explanation == "Yes, keep going. Mirzapur ends well."
+
+
+def test_title_verdict_says_so_when_title_not_found(monkeypatch, tmp_path):
+    import recommender.query_engine as qe
+    ctx, prompts = _verdict_ctx(qe, tmp_path, monkeypatch)
+    ctx.tmdb_client.get_metadata = lambda title, ct: None
+
+    [rec] = qe._handle_title_verdict("q", _verdict_intent("No Such Show", "both"), ctx)
+
+    assert prompts == []
+    assert "couldn't find" in rec.explanation
+
+
+def test_ask_routes_title_verdict_to_one_title_answer(monkeypatch, tmp_path):
+    import recommender.query_engine as qe
+    ctx, _ = _verdict_ctx(qe, tmp_path, monkeypatch)
+
+    [rec] = qe.ask("Would I like Mirzapur", ctx, intent_override=_verdict_intent())
+
+    assert rec.title == "Mirzapur"
+    assert rec.explanation == "Yes, keep going."
 
 
 # ── Refill, request limits, and fresher picks (#118) ────────────────────────

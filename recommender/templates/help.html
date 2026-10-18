@@ -42,7 +42,7 @@
       <p><strong>Special query modes</strong></p>
       <ul>
         <li><strong>Why not?</strong> — "why not Slow Horses?" explains why a title was filtered out or never surfaced.</li>
-        <li><strong>Abandoned-watch advice</strong> — "I started Severance and stopped. Should I keep going?" or "I dropped The Boys after a few episodes. Worth finishing?"</li>
+        <li><strong>One-title questions</strong> — "Would I like Severance?", "Is Slow Horses worth it?" or "I dropped The Boys after a few episodes. Worth finishing?"</li>
       </ul>
       <p><strong>Interactive refinements</strong> in <code>./recommend</code></p>
       <ul>
@@ -55,7 +55,7 @@
         <li><code>+more Title</code>, <code>+fine Title</code>, <code>+less Title</code>, <code>+add Title tv|movie</code> work inside interactive mode.</li>
         <li><code>./recommend --more "Title"</code>, <code>--fine</code>, <code>--less</code>, <code>--add</code>, and <code>--history</code> are CLI commands.</li>
       </ul>
-      <p><strong>Runtime note</strong> — ordinary recommendations run from the cached watch index and taste profile after setup. Abandoned-watch queries depend on raw watch events, so they are less useful if your provider zips are no longer available at runtime.</p>
+      <p><strong>Runtime note</strong> — ordinary recommendations run from the cached watch index and taste profile after setup. One-title questions use your saved watch events; watch time only comes from Netflix, Prime Video, Apple TV and Plex, since the other sources do not record it.</p>
       <p>Results show the title, rating (IMDb, or TMDB when IMDb has none), genres, a personalized explanation of why it matches your taste, and where it's streaming.</p>
     </div>
   </details>
