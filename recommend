@@ -21,6 +21,10 @@ case "${1:-}" in
         shift
         exec python3 -m recommender.plex "$@"
         ;;
+    backup)
+        shift
+        exec python3 -m recommender.backup "$@"
+        ;;
     *)
         exec python3 -m recommender.main "$@"
         ;;

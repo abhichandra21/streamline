@@ -23,10 +23,12 @@ from zoneinfo import ZoneInfo
 
 import requests
 import yaml
-from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
+from flask import (Flask, Response, abort, jsonify, redirect, render_template, request,
+                   send_from_directory, session, url_for)
 from markupsafe import Markup, escape
 
 import config
+from recommender import backup
 from recommender import history as query_history
 from recommender import imdb_ratings
 from recommender import language_catalog
@@ -91,6 +93,13 @@ IMDB_REFRESH_CHECK_SECONDS = 3600
 _imdb_job_id: str | None = None
 _imdb_next_check_at = 0.0
 _imdb_job_lock = threading.Lock()
+
+# Daily backups: a background thread checks hourly while the app runs, and the
+# Settings button starts one at once. One backup job at a time.
+BACKUP_CHECK_SECONDS = 3600
+_backup_job_id: str | None = None
+_backup_job_lock = threading.Lock()
+_backup_timer_started = False
 
 # One language-list build at a time, started when Find asks for a language
 # whose saved list is missing or a day old. Same hourly check as IMDb ratings.
@@ -437,6 +446,34 @@ def _ensure_imdb_refresh() -> None:
             imdb_ratings.refresh, config.IMDB_RATINGS_DB_PATH,
             label=imdb_ratings.REFRESH_JOB_LABEL,
         )
+
+
+def _start_backup(force: bool = False) -> str | None:
+    """Start a backup job when one is due (or forced); returns the running job's id."""
+    global _backup_job_id
+    with _backup_job_lock:
+        if _backup_job_id:
+            current = job_registry.get(_backup_job_id)
+            if current and current.status in ("pending", "running"):
+                return _backup_job_id
+        if not force and not backup.is_due():
+            return None
+        _backup_job_id = job_registry.submit(backup.make_backup, label=backup.JOB_LABEL)
+        return _backup_job_id
+
+
+def _backup_timer() -> None:
+    while True:
+        try:
+            _start_backup()
+        except Exception:
+            log.exception("Failed to start the daily backup")
+        time.sleep(BACKUP_CHECK_SECONDS)
+
+
+def _backup_running() -> bool:
+    current = job_registry.get(_backup_job_id) if _backup_job_id else None
+    return bool(current and current.status in ("pending", "running"))
 
 
 def _run_language_build(language: str, job=None) -> int:
@@ -843,6 +880,16 @@ def _plex_webhook_token_valid() -> bool:
     if not token or not supplied:
         return False
     return hmac.compare_digest(supplied.encode(), token.encode())
+
+
+@app.before_request
+def _start_backup_timer() -> None:
+    """Start the daily backup thread with the first request (gunicorn and the dev server alike)."""
+    global _backup_timer_started
+    if _backup_timer_started or app.testing:
+        return
+    _backup_timer_started = True
+    threading.Thread(target=_backup_timer, daemon=True, name="backup-timer").start()
 
 
 @app.before_request
@@ -3379,6 +3426,7 @@ def _render_settings_page(
     rebuild_command: str | None = None,
     reload_deferred: bool = False,
     keys_saved: bool = False,
+    backup_saved: bool = False,
 ) -> str:
     resolved_cfg = _resolve_settings_config(cfg if cfg is not None else _load_config_yaml())
     return render_template(
@@ -3389,6 +3437,11 @@ def _render_settings_page(
         exports=_settings_exports(), disney_profiles=", ".join(config.DISNEY_PROFILES),
         is_set_up=_is_set_up(), checklist=_first_run_checklist(), setup_run=setup_runs.current(),
         rebuild_action=_REBUILD_ACTIONS.get(rebuild_command or ""),
+        backup_saved=backup_saved, backup_running=_backup_running(),
+        backup_status=backup.last_status(), backups=backup.list_backups(),
+        backup_settings={"keep": config.BACKUP_KEEP, "folder": config.BACKUP_FOLDER or "",
+                         "rclone_remote": config.BACKUP_RCLONE_REMOTE or ""},
+        rclone_installed=backup.rclone_installed(),
     )
 
 
@@ -3494,6 +3547,7 @@ def settings_page() -> str:
         saved=saved, rebuild_command=rebuild_command,
         reload_deferred=reload_deferred,
         keys_saved=request.args.get("keys_saved") == "1",
+        backup_saved=request.args.get("backup_saved") == "1",
     )
 
 
@@ -3514,6 +3568,50 @@ def settings_keys_save() -> Response:
         "settings_page", keys_saved="1",
         reload_deferred="0" if reload_applied else "1",
     ) + "#keys")
+
+
+@app.route("/settings/backups", methods=["POST"])
+def settings_backup_now() -> Response:
+    _start_backup(force=True)
+    return redirect(url_for("settings_page") + "#backups")
+
+
+@app.route("/settings/backups/places", methods=["POST"])
+def settings_backup_places() -> Response | str:
+    """Save where backups go. Blank fields turn that place off."""
+    folder = (request.form.get("backup_folder") or "").strip()
+    remote = (request.form.get("backup_rclone_remote") or "").strip()
+    try:
+        keep = _parse_int_field(request.form, "backup_keep", config.BACKUP_KEEP)
+        if not 1 <= keep <= 100:
+            raise ValueError("Keep must be between 1 and 100 backups.")
+        if folder and not (Path(folder).is_absolute() and Path(folder).is_dir()):
+            raise ValueError(f"{folder} is not a folder the server can see. Use its full path, "
+                             "and check the drive is mounted.")
+        if remote and ":" not in remote:
+            raise ValueError("The rclone remote needs its name and a colon, like gdrive:Streamline.")
+        if _local_config_path().is_dir():
+            raise ValueError("config.local.yaml is a folder, so settings can't be saved.")
+    except ValueError as exc:
+        return _render_settings_page(saved=False, error=str(exc))
+    _save_config_yaml({"backup": {"keep": keep, "folder": folder or None, "rclone_remote": remote or None}})
+    _reload_app_config()
+    return redirect(url_for("settings_page", backup_saved="1") + "#backups")
+
+
+@app.route("/settings/backups/status")
+def settings_backup_status() -> Response:
+    """Polled while a backup runs; reloads the page once it has finished."""
+    if _backup_running():
+        return Response(status=204)
+    return Response("", headers={"HX-Refresh": "true"})
+
+
+@app.route("/settings/backups/<name>")
+def settings_backup_download(name: str) -> Response:
+    if not backup.NAME_RE.match(name):
+        abort(404)
+    return send_from_directory(backup.BACKUP_DIR, name, as_attachment=True)
 
 
 @app.route("/settings", methods=["POST"])
@@ -3722,6 +3820,7 @@ def run() -> None:
     except RuntimeError as exc:
         # Still start: Settings is where keys are added on a fresh install.
         print(f"Note: {exc} Open Settings in the web UI.", file=sys.stderr)
+    _start_backup_timer()  # gunicorn starts it with the first request instead
     host = os.environ.get("STREAMLINE_HOST", "127.0.0.1")
     port = int(os.environ.get("STREAMLINE_PORT", "5051"))
     print(f"Starting Streamline web UI at http://{host}:{port}")

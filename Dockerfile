@@ -14,11 +14,13 @@ ENV STREAMLINE_VERSION=$STREAMLINE_VERSION \
     PYTHONUNBUFFERED=1 \
     STREAMLINE_HOST=0.0.0.0 \
     STREAMLINE_PORT=5051 \
-    HOME=/tmp
+    HOME=/tmp \
+    RCLONE_CONFIG=/app/data/rclone.conf
 
-# sqlite3 is for inspecting or fixing data/streamline.db by hand.
+# sqlite3 is for inspecting or fixing data/streamline.db by hand; rclone uploads
+# backups to cloud storage, with its settings kept in the data mount (RCLONE_CONFIG).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends sqlite3 \
+    && apt-get install -y --no-install-recommends sqlite3 rclone ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

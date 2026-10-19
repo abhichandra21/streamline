@@ -53,6 +53,7 @@ python3 -m pytest tests/test_query_engine.py -v
 ./recommend --liked "Title"                    # feedback
 ./recommend --add "Title" --type tv            # add to watch history
 ./recommend plex ratings                       # bring Plex rating changes into Streamline
+./recommend backup                             # back up the database, settings and keys (also daily from the web app)
 
 # Web UI
 ./recommend-web start                          # http://localhost:5051
@@ -105,6 +106,7 @@ Two-phase LLM pipeline. LLM calls use roles ("fast" for enrichment, "reason" for
 - `recommender/taste_profile_builder.py` — Batched prose profile builder (200 titles/batch, rate limit retry, merge pass). No top-N limit. Rebuilt only on request (`--refresh-profile`, `--rethink-themes`, or first install); `--refresh-data` never rebuilds it.
 - `recommender/taste_tags.py`, `taste_themes.py`, `taste_rows.py` — Taste rows built from Loved titles (Rate It, followed shows): 5-8 tags per title, a 10-16 theme map, code placement with saved AI placements for unclear titles, saved row words. All cached, so an unchanged rebuild makes no LLM calls.
 - `recommender/setup_runs.py` — One setup run at a time: every `recommender.setup` run (terminal, timer, web) holds `cache/setup.lock` and writes `cache/setup_status.json` at start and end. Settings starts runs as their own process (`python -u -m recommender.setup <flag>`, output in `logs/setup-<time>.log`) and shows the last one. Before the first build every page except Settings, `/setup/`, `/healthz`, the Plex webhook, `/api/`, logs and help redirects to Settings `#get-started`; the shared context reloads when `watch_index.json` or `taste_profile.txt` changes, so no restart is needed after a rebuild.
+- `recommender/backup.py` — One zip per backup (database via SQLite's backup API, `config.local.yaml`, `.env`, `data/keys.env`, overrides, manual lists, the watch index, TMDB title details `tmdb/movie` and `tmdb/tv`, and the AI-written cache files: taste profile, taste rows, enrichments; about 50 MB) in `data/backups/`, plus optional copies to `backup.folder` and `backup.rclone_remote` (rclone subprocess). Each place keeps the newest `backup.keep`. The web app starts one a day from a background thread checked hourly; Settings > Backups has Back up now, status, downloads and the two places. `fcntl` lock: one backup at a time.
 - `recommender/show_tracker.py` — On Deck: followed shows, release snapshots, ready-now / Coming soon / Worth following sections.
 - `recommender/signals.py` — Scoring. Every watched title scores 1.0 by default (`scoring.use_viewing_signals: false`); when on, completion (50%) + rewatch (30%) + true half-life recency decay (20%).
 - `recommender/query_engine.py` — Full online pipeline. "Why not X?" trace mode, conversational context, platform filtering.

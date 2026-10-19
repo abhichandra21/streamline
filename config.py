@@ -239,6 +239,12 @@ MANUAL_MOVIES_PATH = str(_ROOT / _cfg.get("manual_movies_path", "data/manual/mov
 OVERRIDES_PATH = str(_ROOT / _cfg.get("overrides_path", "data/overrides.json"))
 EVENT_DB_PATH = str(_ROOT / _cfg.get("event_db_path", "data/streamline.db"))
 
+# ── Backups ──
+_backup = _cfg.get("backup", {}) or {}
+BACKUP_KEEP = int(_backup.get("keep") or 7)
+BACKUP_FOLDER = (_backup.get("folder") or "").strip() or None
+BACKUP_RCLONE_REMOTE = (_backup.get("rclone_remote") or "").strip() or None
+
 # ── Cache paths (fixed, not user-configurable) ──
 CACHE_DIR = str(_ROOT / "recommender/cache/tmdb")
 ENRICHMENT_CACHE_DIR = str(_ROOT / "recommender/cache/enrichments")
