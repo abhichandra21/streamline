@@ -97,6 +97,13 @@ All shared settings in `config.yaml`:
 | `watch_region` | US | Region for streaming availability |
 | `streaming_platforms` | [] | Your subscribed platforms |
 
+### Backups
+| Setting | Default | Description |
+|---|---|---|
+| `backup.keep` | 7 | Newest backups kept in each place |
+| `backup.folder` | null | Full path of a second folder for copies, such as a mounted NAS share |
+| `backup.rclone_remote` | null | rclone remote and folder for cloud copies, like `gdrive:Streamline` ([Backups](/guides/backups/)) |
+
 ## Environment variables
 
 | Variable | Purpose |

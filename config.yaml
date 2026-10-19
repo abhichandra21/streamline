@@ -59,6 +59,11 @@ manual:
   timestamp: now
   tv_duration_minutes: 45
   movie_duration_minutes: 120
+# Backups (Settings > Backups, ./recommend backup). One a day while the web app runs.
+backup:
+  keep: 7               # newest backups kept in each place
+  folder: null          # a second folder, e.g. a mounted NAS share
+  rclone_remote: null   # e.g. gdrive:Streamline, after `rclone config`
 watch_region: US
 streaming_platforms: []
 manual_tv_path: data/manual/tv.csv

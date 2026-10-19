@@ -27,6 +27,7 @@ export default defineConfig({
 						'guides/archive',
 						'guides/watchlist-and-searches',
 						'guides/settings',
+						'guides/backups',
 					],
 				},
 				{

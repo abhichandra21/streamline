@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
 import pytest
+import yaml
 
 from recommender import web
 from recommender.jobs import Job, JobRegistry
@@ -4278,3 +4279,88 @@ def test_a_finished_check_on_first_run_offers_a_reload(client, tmp_path, monkeyp
     assert "Reload the page" in body
     assert "/settings#get-started" in body
     assert "Open Streamline" not in body
+
+
+class TestBackups:
+    @pytest.fixture
+    def backup_dir(self, tmp_path, monkeypatch):
+        path = tmp_path / "backups"
+        path.mkdir()
+        monkeypatch.setattr(web.backup, "BACKUP_DIR", path)
+        return path
+
+    def test_download_serves_a_backup(self, client, backup_dir):
+        (backup_dir / "streamline-backup-20261019-030000.zip").write_bytes(b"zip")
+
+        resp = client.get("/settings/backups/streamline-backup-20261019-030000.zip")
+
+        assert resp.status_code == 200
+        assert resp.data == b"zip"
+        assert "attachment" in resp.headers["Content-Disposition"]
+
+    def test_download_refuses_any_other_file(self, client, backup_dir):
+        (backup_dir / "last_backup.json").write_text("{}")
+
+        assert client.get("/settings/backups/last_backup.json").status_code == 404
+        assert client.get("/settings/backups/..%2Fkeys.env").status_code == 404
+
+    def test_backup_now_starts_one_job(self, client, monkeypatch):
+        started = []
+        monkeypatch.setattr(web, "_start_backup", lambda force=False: started.append(force))
+
+        resp = client.post("/settings/backups", data=_csrf_form())
+
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("#backups")
+        assert started == [True]
+
+    @patch("recommender.web._reload_app_config", return_value=True)
+    def test_places_save_only_backup_settings(self, _reload, client, tmp_path, monkeypatch):
+        local = tmp_path / "config.local.yaml"
+        local.write_text("provider: gemini\n")
+        monkeypatch.setattr(web, "_local_config_path", lambda: local)
+        nas = tmp_path / "nas"
+        nas.mkdir()
+
+        resp = client.post("/settings/backups/places", data=_csrf_form(
+            backup_keep="5", backup_folder=str(nas), backup_rclone_remote="gdrive:Streamline"))
+
+        assert resp.status_code == 302
+        saved = yaml.safe_load(local.read_text())
+        assert saved == {"provider": "gemini", "backup": {
+            "keep": 5, "folder": str(nas), "rclone_remote": "gdrive:Streamline"}}
+
+    @pytest.mark.parametrize("form, message", [
+        ({"backup_folder": "/no/such/folder"}, "is not a folder the server can see"),
+        ({"backup_folder": "relative/path"}, "is not a folder the server can see"),
+        ({"backup_rclone_remote": "gdrive"}, "needs its name and a colon"),
+        ({"backup_keep": "0"}, "between 1 and 100"),
+    ])
+    def test_places_explain_a_bad_value(self, client, tmp_path, monkeypatch, form, message):
+        local = tmp_path / "config.local.yaml"
+        monkeypatch.setattr(web, "_local_config_path", lambda: local)
+
+        resp = client.post("/settings/backups/places", data=_csrf_form(**form))
+
+        assert message in resp.get_data(as_text=True)
+        assert not local.exists()
+
+    def test_status_poll_reloads_once_the_backup_is_done(self, client, monkeypatch):
+        monkeypatch.setattr(web, "_backup_running", lambda: True)
+        assert client.get("/settings/backups/status").status_code == 204
+        monkeypatch.setattr(web, "_backup_running", lambda: False)
+        assert client.get("/settings/backups/status").headers["HX-Refresh"] == "true"
+
+    def test_due_check_starts_only_one_job(self, monkeypatch):
+        submitted = []
+
+        class Job:
+            status = "running"
+        monkeypatch.setattr(web, "_backup_job_id", None)
+        monkeypatch.setattr(web.backup, "is_due", lambda: True)
+        monkeypatch.setattr(web.job_registry, "submit", lambda fn, label: submitted.append(label) or "j1")
+        monkeypatch.setattr(web.job_registry, "get", lambda job_id: Job())
+
+        assert web._start_backup() == "j1"
+        assert web._start_backup(force=True) == "j1"
+        assert submitted == ["backup"]

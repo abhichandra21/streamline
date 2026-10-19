@@ -25,6 +25,7 @@ Inside the interactive session: `+more Title`, `+fine Title`, `+less Title`, and
 ./recommend --less "The Long Season"             # not for me / less like this
 ./recommend --add "Shetland" --type tv           # add to watch history
 ./recommend plex ratings                         # bring Plex rating changes over
+./recommend backup                               # back up the database, settings and keys now
 ```
 
 ## Setup

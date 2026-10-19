@@ -5,6 +5,7 @@
 
 {% set settings_sections = ([('get-started', 'Get started')] if not is_set_up else []) + [
   ('keys', 'Keys'),
+  ('backups', 'Backups'),
   ('llm-provider', 'LLM provider'),
   ('recommendations', 'Recommendations'),
   ('streaming', 'Streaming'),
@@ -260,6 +261,147 @@
       </div>
     </fieldset>
   </form>
+</section>
+
+<!-- ═══════ BACKUPS (its own forms) ═══════ -->
+{#- "2026-10-19T03:00:00" -> "Oct 19, 3:00 AM" -#}
+{% macro backup_time(iso) -%}
+  {%- set months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] -%}
+  {%- set hour = iso[11:13] | int -%}
+  {{ months[(iso[5:7] | int) - 1] }} {{ iso[8:10] | int }}, {{ hour % 12 or 12 }}:{{ iso[14:16] }} {{ 'PM' if hour >= 12 else 'AM' }}
+{%- endmacro %}
+{% macro backup_size(n) -%}{{ '%.1f' | format(n / 1048576) }} MB{%- endmacro %}
+{% set bdest = (backup_status.destinations if backup_status and backup_status.destinations else {}) %}
+{% set bfailed = bdest.values() | selectattr('ok', 'false') | list %}
+{% set bfailure = backup_status.failure if backup_status and backup_status.failure else None %}
+{% set bgood = backup_status if backup_status and backup_status.at else None %}
+<section id="backups" class="keys-section settings-section">
+  {% if backup_saved %}
+  <div style="padding:0.75rem 1.25rem; background:rgba(163,207,98,0.1); border:1px solid rgba(163,207,98,0.25); border-radius:6px; margin-bottom:1rem; font-size:0.85rem; color:var(--yours);">
+    Saved.
+  </div>
+  {% endif %}
+
+  <fieldset style="border:1px solid var(--border); border-radius:6px; padding:1.25rem; background:var(--surface);">
+    <legend class="mono" style="font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); padding:0 0.5rem;">Backups</legend>
+    <p class="section-intro">Streamline makes one backup a day on its own while it runs. Each backup holds the database (ratings, follows, watchlist, Seen it and watch history), your settings, your keys (the ones saved on this page and .env), title overrides, manual lists, what the AI wrote (your taste profile, taste rows and notes on each title), and TMDB's details for your titles. The rest of the cache is left out, because Streamline fetches it again on its own. Backups are not encrypted, so anyone who can open the file can read your keys.</p>
+
+    <div class="run-status run-status-{{ 'running' if backup_running else ('failed' if bfailure or bfailed else ('done' if bgood else 'none')) }}">
+      {% if backup_running %}
+      <div class="run-status-head">
+        <span class="run-status-dot"></span>
+        <span class="run-status-title">Backing up...</span>
+      </div>
+      <p class="run-status-meta">This page reloads by itself when it is done.</p>
+      <span hx-get="/settings/backups/status" hx-trigger="every 2s" hx-swap="none" hidden></span>
+      {% elif bfailure %}
+      <div class="run-status-head">
+        <span class="run-status-dot"></span>
+        <span class="run-status-title">Last backup failed {{ backup_time(bfailure.at) if bfailure.at }}</span>
+      </div>
+      {% if bfailure.error %}<p class="backup-error" style="margin:0.35rem 0 0;">{{ bfailure.error }}</p>{% endif %}
+      {% if bgood %}
+      <p class="run-status-meta mono">Last good backup {{ backup_time(bgood.at) }} &middot; {{ backup_size(bgood.size_bytes or 0) }}</p>
+      {% else %}
+      <p class="run-status-meta">No backup has worked yet.</p>
+      {% endif %}
+      {% elif bgood %}
+      <div class="run-status-head">
+        <span class="run-status-dot"></span>
+        <span class="run-status-title">Last backup {{ backup_time(backup_status.at) }}</span>
+      </div>
+      <p class="run-status-meta mono">{{ backup_size(backup_status.size_bytes) }} &middot; saved on the server</p>
+      {% if bdest %}
+      <ul class="backup-dests">
+        {% for kind, label in [('folder', 'Second folder'), ('cloud', 'Cloud')] if bdest.get(kind) %}
+        {% set d = bdest[kind] %}
+        <li>
+          <span class="key-dot {{ 'key-dot-here' if d.ok else 'key-dot-off backup-dot-bad' }}"></span>
+          <span>{{ label }} <span class="mono backup-where">{{ d.where }}</span>: {{ 'copied' if d.ok else 'did not work' }}</span>
+          {% if not d.ok and d.error %}<span class="backup-error">{{ d.error }}</span>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% else %}
+      <p class="run-status-meta">No backup has been made yet.</p>
+      {% endif %}
+    </div>
+
+    <div class="run-list" style="margin-top:1rem;">
+      <div class="run-item">
+        <div class="run-item-text">
+          <span class="run-item-name">Back up now <span class="run-tag run-tag-free mono">Free</span></span>
+          <span class="run-item-desc">Makes a backup right away and copies it to the places set below.</span>
+        </div>
+        <form method="post" action="/settings/backups" class="run-form">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <div class="run-control">
+            <button type="submit" class="btn-ghost run-btn"{{ ' disabled' if backup_running }}>Back up now</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="key-group">
+      <span class="mono key-group-label">Saved on the server</span>
+      {% if backups %}
+      <ul class="backup-list">
+        {% for b in backups %}
+        <li class="backup-row">
+          <span class="backup-when">{{ backup_time(b.at.isoformat()) }}</span>
+          <span class="mono backup-size">{{ backup_size(b.size_bytes) }}</span>
+          <a class="mono backup-get" href="/settings/backups/{{ b.name }}" download>Download</a>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="form-hint" style="margin:0.6rem 0 0;">None yet.</p>
+      {% endif %}
+      <p class="form-hint backup-restore">To restore, stop the app, unzip a backup into the Streamline folder, then start the app. <a href="https://streamline-docs.pages.dev/guides/backups/" target="_blank" rel="noopener">How to restore</a></p>
+    </div>
+
+    <form method="post" action="/settings/backups/places" autocomplete="off" class="key-group" style="margin-top:1.5rem;">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <span class="mono key-group-label">Extra copies</span>
+      <div class="key-row">
+        <div class="key-meta">
+          <label class="form-label" for="backup_folder">Second folder</label>
+          <span class="form-hint">Blank turns it off.</span>
+        </div>
+        <div class="key-field">
+          <input id="backup_folder" type="text" name="backup_folder" value="{{ backup_settings.folder }}" class="form-input" spellcheck="false" placeholder="/mnt/nas/streamline">
+          <span class="form-hint">The full path of a folder the server can see, like a mounted NAS share.</span>
+        </div>
+      </div>
+      <div class="key-row">
+        <div class="key-meta">
+          <label class="form-label" for="backup_rclone_remote">Cloud</label>
+          <span class="form-hint">Blank turns it off.</span>
+        </div>
+        <div class="key-field">
+          <input id="backup_rclone_remote" type="text" name="backup_rclone_remote" value="{{ backup_settings.rclone_remote }}" class="form-input" spellcheck="false" placeholder="gdrive:Streamline">
+          {% if not rclone_installed %}
+          <span class="form-hint key-warn">rclone isn't installed on the server, so cloud copies won't work until it is.</span>
+          {% endif %}
+          <span class="form-hint">Set up the cloud account once in a terminal on the server with <span class="mono">rclone config</span> (for Google Drive, choose "drive"). Then enter the remote name and a folder, like <span class="mono">gdrive:Streamline</span>.</span>
+        </div>
+      </div>
+      <div class="key-row">
+        <div class="key-meta">
+          <label class="form-label" for="backup_keep">Backups to keep</label>
+        </div>
+        <div class="key-field">
+          <input id="backup_keep" type="number" name="backup_keep" value="{{ backup_settings.keep }}" class="form-input" style="width:80px;" min="1" max="100" required>
+          <span class="form-hint">How many backups each place keeps. Older ones are removed.</span>
+        </div>
+      </div>
+      <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap; margin-top:1.25rem;">
+        <button type="submit" class="btn-primary" style="padding:0.6rem 1.6rem;">Save</button>
+        <span class="mono" style="font-size:0.58rem; color:var(--muted);">Saves only where backups go.</span>
+      </div>
+    </form>
+  </fieldset>
 </section>
 
 <form method="post" action="/settings" style="display:flex; flex-direction:column; gap:1.5rem;">
@@ -880,6 +1022,38 @@
     overflow-wrap: anywhere;
   }
   .key-warn .mono { font-size: 0.64rem; }
+
+  /* Backups */
+  .backup-dests { list-style: none; margin: 0.55rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+  .backup-dests li {
+    position: relative; padding-left: 1rem; min-width: 0;
+    font-size: 0.74rem; color: var(--body); line-height: 1.5; overflow-wrap: anywhere;
+  }
+  .backup-dests .key-dot { position: absolute; left: 0; top: 0.45rem; }
+  .backup-dot-bad { border-color: var(--accent); }
+  .backup-where { font-size: 0.66rem; color: var(--muted); }
+  .backup-error { display: block; font-size: 0.7rem; color: #e88; }
+  .backup-list { list-style: none; margin: 0; padding: 0; }
+  .backup-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 0.25rem 1.25rem;
+    align-items: baseline;
+    padding: 0.55rem 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .backup-row > * { min-width: 0; }
+  .backup-when { font-size: 0.8rem; color: var(--text); }
+  .backup-size { font-size: 0.64rem; color: var(--muted); letter-spacing: 0.03em; text-align: right; }
+  .backup-get { font-size: 0.6rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent2); white-space: nowrap; }
+  @media (hover: hover) {
+    .backup-get:hover { color: var(--text); }
+  }
+  .backup-restore { margin: 0.7rem 0 0; display: block; }
+  .backup-restore a { color: var(--accent2); }
+  @media (max-width: 639px) {
+    .backup-row { gap: 0.25rem 0.9rem; }
+  }
 
   /* Watch-history exports */
   .export-list { display: flex; flex-direction: column; }
