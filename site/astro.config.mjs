@@ -35,7 +35,7 @@ export default defineConfig({
 				},
 				{
 					label: 'Reference',
-					items: ['reference/cli', 'reference/configuration', 'reference/architecture', 'reference/roadmap'],
+					items: ['reference/cli', 'reference/configuration', 'reference/architecture', 'reference/roadmap', 'privacy'],
 				},
 			],
 		}),
