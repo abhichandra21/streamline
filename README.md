@@ -122,8 +122,7 @@ Everything else is on the docs site, **[streamline-docs.pages.dev](https://strea
 
 ## Contributing
 
-Issues and pull requests are welcome; please open an issue first for larger changes.
-Run the tests with `python3 -m pytest tests/`, and see the [roadmap](https://streamline-docs.pages.dev/reference/roadmap/) for what's planned.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report bugs, propose changes, and run the tests.
 
 ## License
 
